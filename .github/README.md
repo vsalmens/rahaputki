@@ -1,16 +1,20 @@
 # Rahaputki
 
-Kevyt, pankkiriippumaton kulutusseuranta. Vie verkkopankkiesi CSV-tiedostot
-yhteen kansioon, ja saat kuukausigraafin, budjettivertailun ja selaimessa
-muokattavan erittelyn siitä, mihin rahasi menivät.
+Kevyt, pankkiriippumaton kulutusseuranta. Tapahtumat tulevat suoraan
+pankeistasi (tai verkkopankin CSV-vienneistä, jos niin haluat), ja saat
+kuukausigraafin, budjettivertailun ja selaimessa muokattavan erittelyn siitä,
+mihin rahasi menivät.
+
+**Ei komentoriviä.** Lataat kansion, kaksoisklikkaat käynnistintä, ja ohjattu
+käyttöönotto hoitaa loput — myös puuttuvien kirjastojen asennuksen.
 
 **Kaikki pysyy omalla koneellasi.** Ei tiliä, ei pilvipalvelua, ei tilitietojen
 luovutusta kolmannelle. Kirjanpitosi on yksi tekstitiedosto omassa kansiossasi.
 
 **Ei vakiopäivää, ei pakkoa, aina voi palata.** Putki on idempotentti: saman
-tiliotteen voi tuoda vaikka kolmesti, päällekkäiset rivit ohitetaan. Jos pidät
-kolmen kuukauden tauon, viet kolmen kuukauden otteet ja jatkat siitä mihin jäit.
-Mikään ei mene rikki tauosta.
+tapahtuman voi tuoda vaikka kolmesti, päällekkäiset rivit ohitetaan. Jos pidät
+kolmen kuukauden tauon, haet kolmen kuukauden tapahtumat ja jatkat siitä mihin
+jäit. Mikään ei mene rikki tauosta.
 
 ## Aloitus
 
@@ -25,14 +29,28 @@ Mikään ei mene rikki tauosta.
    Kansion voi siirtää tai nimetä uudelleen myöhemminkin, milloin tahansa:
    siirrä vain koko kansio kerralla, niin kaikki pysyy tallessa. Mitään
    polkuja ei ole tallennettu minnekään.
-3. **Kaksoisklikkaa** käynnistintä:
-   - macOS: `Aloita.command`
-   - Windows: `Aloita.bat`
+3. **Kaksoisklikkaa `Pankkihaku`-käynnistintä** (`Pankkihaku.command`
+   macOS:llä, `Pankkihaku.bat` Windowsissa). Se avaa ohjatun käyttöönoton:
+   noin 15 minuutissa tapahtumat alkavat tulla suoraan pankeistasi, eikä
+   tiliotteita tarvitse viedä käsin koskaan. Velho hoitaa kaiken teknisen ja
+   kertoo joka vaiheessa mitä tehdä — sinä vain kirjaudut pankkiisi.
+4. **Jatkossa kaksoisklikkaa jompaakumpaa:**
+   - `Pankkihaku` — hakee tuoreet tapahtumat pankista, luokittelee ne ja
+     avaa raportin
+   - `Aloita` — sama ilman hakua: lukee `inbox/`-kansion ja avaa raportin
 
-Ensimmäinen käynnistys luo kansiot ja mallitiedostot puolestasi ja kertoo mitä
-tehdä seuraavaksi. Vie sitten verkkopankeistasi tiliotteet CSV-muodossa
-kansioon `inbox/` ja kaksoisklikkaa käynnistintä uudelleen — raportti aukeaa
-selaimeen, ja voit luokitella tapahtumat suoraan siinä.
+Ensimmäinen käynnistys luo kansiot ja mallitiedostot puolestasi. Raportti
+aukeaa selaimeen, ja voit luokitella tapahtumat suoraan siinä.
+
+**Et tarvitse komentoriviä missään vaiheessa.** Kaikki toimii
+kaksoisklikkauksella; komennot ovat olemassa niitä varten, jotka haluavat
+niitä käyttää.
+
+**Jos haluat mieluummin aloittaa CSV-vienneillä** — tai pankkisi ei ole
+mukana — kaksoisklikkaa `Aloita`-käynnistintä, vie verkkopankeistasi
+tiliotteet CSV-muodossa kansioon `inbox/` ja käynnistä uudelleen. Molemmat
+tavat voi myös yhdistää: vanha historia CSV:nä, jatkuva seuranta
+automaattihaulla.
 
 ### Ensimmäisellä kerralla käyttöjärjestelmä estää käynnistimen
 
@@ -41,17 +59,21 @@ estävät oletuksena kaikki internetistä ladatut ohjelmat, joita ei ole
 allekirjoitettu maksullisella kehittäjätunnuksella. Sallit sen kerran, ja
 jatkossa käynnistin toimii kaksoisklikkauksella.
 
-**macOS** näyttää ilmoituksen *"Apple could not verify 'Aloita.command' is free
-of malware…"*. Vanha kikka (oikea klikkaus → Avaa) **ei enää toimi** macOS
-Sequoiassa (15) ja sitä uudemmissa. Tee näin:
+**macOS** näyttää ilmoituksen *"Apple could not verify 'Pankkihaku.command'
+is free of malware…"* (sama koskee `Aloita.command`:ia). Vanha kikka (oikea
+klikkaus → Avaa) **ei enää toimi** macOS Sequoiassa (15) ja sitä uudemmissa.
+Tee näin:
 
 1. Klikkaa ilmoituksesta **Done** / **Valmis** — älä valitse "Move to Bin"
 2. Avaa **Järjestelmäasetukset** → **Tietosuoja ja turvallisuus**
    (System Settings → Privacy & Security)
-3. Vieritä alas kohtaan **Turvallisuus**. Siellä lukee, että
-   `Aloita.command` estettiin — klikkaa vieressä olevaa **Avaa silti**
-   (Open Anyway) ja vahvista salasanalla tai Touch ID:llä
-4. Kaksoisklikkaa `Aloita.command` uudelleen ja valitse **Avaa**
+3. Vieritä alas kohtaan **Turvallisuus**. Siellä lukee, että käynnistin
+   estettiin — klikkaa vieressä olevaa **Avaa silti** (Open Anyway) ja
+   vahvista salasanalla tai Touch ID:llä
+4. Kaksoisklikkaa käynnistintä uudelleen ja valitse **Avaa**
+
+Molemmat käynnistimet sallitaan erikseen, eli kun otat toisen myöhemmin
+käyttöön, sama kysymys tulee kerran senkin kohdalla.
 
 Jos "Avaa silti" ei jostain syystä näy, sama onnistuu Terminalissa yhdellä
 rivillä. Avaa **Terminal** (Spotlight-haku: `terminal`), kirjoita `xattr -dr
@@ -77,11 +99,11 @@ automaattinen pankkihaku (`pyjwt`, `cryptography`) ja korttilaskujen
 PDF-muunnin (`pdfplumber`). Pankkihaun kirjastot asentaa ohjattu käyttöönotto
 puolestasi, joten niistä ei tarvitse tietää mitään.
 
-## Tapahtumat suoraan pankista (valinnainen)
+## Tapahtumat suoraan pankista
 
-CSV-vientien sijaan tapahtumat voi noutaa suoraan pankeistasi PSD2-rajapinnan
-kautta — myös luottokorteilta, joiden tapahtumia ei saa CSV:nä lainkaan.
-Käyttöönotto on ohjattu ja vie noin 15 minuuttia:
+Tämä on suositeltu tapa: tapahtumat noudetaan suoraan pankeistasi
+PSD2-rajapinnan kautta — myös luottokorteilta, joiden tapahtumia ei saa
+CSV:nä lainkaan. Käyttöönotto on ohjattu ja vie noin 15 minuuttia:
 
 - macOS: kaksoisklikkaa `Pankkihaku.command`
 - Windows: kaksoisklikkaa `Pankkihaku.bat`
@@ -106,9 +128,10 @@ vaiheista on [koodi/OHJE.md](koodi/OHJE.md).
 
 ## Rituaali jatkossa (~15–30 min, milloin huvittaa)
 
-1. Vie tuoreet tiliotteet kansioon `inbox/`
-2. Kaksoisklikkaa käynnistintä
-3. Luokittele avoimet rivit selaimessa — toistuvasta kauppiaasta tee sääntö,
+1. Kaksoisklikkaa `Pankkihaku`-käynnistintä — se noutaa tuoreet tapahtumat ja
+   avaa raportin. (Ilman automaattihakua: vie tiliotteet kansioon `inbox/` ja
+   kaksoisklikkaa `Aloita`.)
+2. Luokittele avoimet rivit selaimessa — toistuvasta kauppiaasta tee sääntö,
    niin se hoituu jatkossa itsestään
 
 Ensimmäinen kierros on työläin (vuoden datalle ehkä 30–60 min). Sen jälkeen
@@ -120,24 +143,25 @@ Juuressa on vain käynnistimet ja neljä kansiota. Jokaisella on yksi tehtävä:
 
 ```
 Rahaputki/
-  Aloita.command  Aloita.bat        kaksoisklikkaa nailla
-  Pankkihaku.command  .bat          sama, mutta hakee tapahtumat pankista
-  inbox/          ← TÄNNE pankkien CSV-tiedostot
+  Pankkihaku.command  .bat          hae pankista + raportti  (tavallisin)
+  Aloita.command  Aloita.bat        lue inbox/ + raportti
+  inbox/          tanne CSV-tiedostot, jos et kayta automaattihakua
   koodi/          ohjelma — päivitys korvaa vain tämän
   asetukset/      config.json, saannot.csv, budjetti.csv, pankkihaku.env
   data/           kirjanpitosi (tapahtumat.csv) ja varmuuskopiot
   raportit/       raportti.html — syntyy uudelleen joka ajolla
 ```
 
-`inbox/` on tarkoituksella juuressa: se on ainoa kansio, johon kosket joka
-kerta. Kaikki muu saa jäädä taustalle.
+Automaattihaulla `inbox/` täyttyy ja tyhjenee itsestään, eikä siihen tarvitse
+koskea. CSV-reitillä se on ainoa kansio, johon kosket joka kerta — siksi se on
+juuressa.
 
 | Kansio | Sinun vai ohjelman | Mitä sisällä |
 |---|---|---|
 | `koodi/` | **ohjelman** — korvataan päivityksessä | molemmat skriptit, `OHJE.md`, mallipohjat |
 | `asetukset/` | sinun | kategoriat ja lähteet (`config.json`), kauppiassäännöt (`saannot.csv`), kuukausiraamit (`budjetti.csv`), pankkihaun tunnukset (`pankkihaku.env`) |
 | `data/` | sinun | `tapahtumat.csv` on koko totuus — pelkkää tekstiä. Lisäksi varmuuskopiot ja yhteistalouden tila. |
-| `inbox/` | sinun | pankkien CSV:t; käsitellyt siirtyvät `inbox/arkisto/` |
+| `inbox/` | sinun | pankkien CSV:t (automaattihaku kirjoittaa tänne itse); käsitellyt siirtyvät `inbox/arkisto/` |
 | `raportit/` | syntyy ajossa | raportti, yhteenvedot, `tarkistettavat.csv` |
 
 Varmuuskopiointi on kansion kopioimista. Jos haluat kirjanpitosi useammalle
@@ -160,10 +184,17 @@ korvaaminen kokonaan on turvallista — se on itse asiassa toivottavaa, koska
 näin vanhat tiedostot eivät jää roikkumaan. Kaikki omasi on kansioissa
 `asetukset/`, `data/` ja `inbox/`, eikä päivitys kosketa niitä.
 
+Päivityksen jälkeen jatkat kuten ennenkin: kaksoisklikkaa `Pankkihaku`
+(hakee tapahtumat pankista ja avaa raportin) tai `Aloita` (lukee `inbox/`).
+Pankkitunnuksia, sääntöjä tai kirjanpitoa ei tarvitse tehdä uudelleen —
+ne asuvat kansioissa `asetukset/` ja `data/`.
+
 Juuren käynnistimiä (`Aloita…`, `Pankkihaku…`) ei tarvitse päivittää: ne ovat
 muutaman rivin tynkiä, jotka vain käynnistävät `koodi/`-kansion sisällön.
-Jos päivität vanhasta versiosta, kopioi `Pankkihaku.command` /
-`Pankkihaku.bat` paketista juureen kerran — tai aja pankkihaku komentoriviltä.
+**Poikkeus:** jos päivität niin vanhasta versiosta, ettei kansiossasi ole
+vielä `Pankkihaku.command` / `Pankkihaku.bat` -tiedostoja, kopioi ne
+paketista juureen kerran — sen jälkeen automaattinen pankkihaku on
+kaksoisklikkauksen päässä.
 
 ## Lisenssi ja ehdot
 
