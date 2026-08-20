@@ -134,18 +134,49 @@ rituaalin: nouto → luokittelu → raportti auki.
 
 **Vaihe 1 — Enable Banking -tunnus ja sovellus (~5 min, kerran)**
 
-Velho avaa selaimeen osoitteen `https://enablebanking.com/sign-in/`.
+Ensin tarvitset tunnuksen: velho avaa selaimeen osoitteen
+`https://enablebanking.com/sign-in/`, jossa annat sähköpostiosoitteesi ja
+klikkaat sähköpostiin tulevaa linkkiä. Salasanaa ei ole.
 
-1. Anna sähköpostiosoitteesi. Saat sähköpostiin kirjautumislinkin —
-   salasanaa ei ole. Klikkaa linkkiä.
-2. Valitse ylhäältä **API applications** ja vieritä alas kohtaan
+Sitten sovellus luodaan. Siihen on kaksi tapaa, ja velho tarjoaa
+ensimmäistä.
+
+### Tapa A: automaattinen (suositus)
+
+Portaalin sovellussivun alalaidassa on valmis komento, jolla sovelluksen voi
+luoda rajapinnan kautta. Velho pyytää kopioimaan sen:
+
+1. Sivulla `https://enablebanking.com/cp/applications`, vieritä kohtaan
+   *"You can register your applications via an API or using command line
+   interface"*.
+2. Klikkaa sen alla olevaa laatikkoa (sisältö alkaa sanalla `curl`), valitse
+   kaikki (Cmd-A / Ctrl-A) ja kopioi.
+3. Palaa Rahaputkeen ja paina Enter — velho lukee komennon leikepöydältä.
+
+Loput tapahtuu itsestään: **avainpari luodaan tällä koneella**, ja
+rajapinnalle lähtee vain julkinen varmenne. Nimi, paluuosoite, kuvaus ja
+ehtojen URLit täyttyvät valmiiksi, ja sovelluksen tunnus tallentuu suoraan
+asetuksiin.
+
+Tämä on myös turvallisin tapa: lomakereitillä yksityisavain syntyy selaimessa
+ja päätyy latauskansioon, tässä se ei käy missään. Komento sisältää
+kertakäyttöisen, **tunnin voimassa olevan** tunnuksen — käsittele sitä kuin
+salasanaa. Jos se ehtii vanheta, lataa portaalin sivu uudelleen ja kopioi
+komento uudestaan.
+
+### Tapa B: lomake
+
+Jos automaattinen tapa ei jostain syystä toimi, sovelluksen voi luoda käsin
+portaalin lomakkeella:
+
+1. Valitse ylhäältä **API applications** ja vieritä alas kohtaan
    **Add a new application**.
-3. **Environment: Production.** (Sandbox on kehittäjien leikkikenttä,
+2. **Environment: Production.** (Sandbox on kehittäjien leikkikenttä,
    siinä ei ole sinun rahojasi.)
-4. Avaimen luonti: jätä **ensimmäinen** vaihtoehto valituksi
+3. Avaimen luonti: jätä **ensimmäinen** vaihtoehto valituksi
    (*Generate in the browser … and export private key*).
-5. **Application name:** `Rahaputki`
-6. **Allowed redirect URLs:** kopioi tämä rivi:
+4. **Application name:** `Rahaputki`
+5. **Allowed redirect URLs:** kopioi tämä rivi:
 
    ```
    https://enablebanking.com/auth_redirect
@@ -155,7 +186,7 @@ Velho avaa selaimeen osoitteen `https://enablebanking.com/sign-in/`.
    Enable Banking hyväksyy vain `https`-osoitteita (`http://localhost/…`
    torjutaan viestillä *"uses unsupported scheme"*), joten paluukoodi
    kopioidaan kerran per pankki — ks. vaihe 3.
-7. Muut kentät ovat vapaaehtoisia, mutta kannattaa täyttää. Valmiit arvot:
+6. Muut kentät ovat vapaaehtoisia, mutta kannattaa täyttää. Valmiit arvot:
 
    | Kenttä | Arvo |
    |---|---|
@@ -168,12 +199,12 @@ Velho avaa selaimeen osoitteen `https://enablebanking.com/sign-in/`.
    poikkeuksellisen: ohjelmalla ei ole palvelinta, eikä sen tekijä näe
    tilitietojasi. Voit halutessasi osoittaa kentät omaan kopioosi.
 
-8. Klikkaa **Register**.
-9. Selain lataa tiedoston, jonka nimi on pitkä tunnus ja pääte `.pem`.
+7. Klikkaa **Register**.
+8. Selain lataa tiedoston, jonka nimi on pitkä tunnus ja pääte `.pem`.
    **Tämä on sovelluksesi salainen avain** — se on lukupääsy tileihisi.
    Älä avaa sitä äläkä lähetä sitä kenellekään.
 
-Palaa Rahaputken ikkunaan ja paina Enter. Velho etsii `.pem`-tiedoston
+Palaa lopuksi Rahaputken ikkunaan ja paina Enter. Velho etsii `.pem`-tiedoston
 Lataukset- ja Työpöytä-kansiosta ja lukee sovelluksesi tunnuksen suoraan
 tiedostonimestä (Enable Banking nimeää avaimen sillä). Tunnukset kirjoitetaan
 tiedostoon `asetukset/pankkihaku.env`.

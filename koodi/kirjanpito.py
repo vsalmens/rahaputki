@@ -830,8 +830,9 @@ EB_PORTAALI = "https://enablebanking.com/cp/applications"
 EB_TESTIPALUU = "https://enablebanking.com/auth_redirect"
 EHDOT = "https://github.com/vsalmens/rahaputki/blob/main/koodi/ehdot"
 EB_KUVAUS = "Rahaputki - personal spending tracker running on the user's own computer"
-UUID_KUVIO = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
-                        r"[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+UUID_HAKU = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+                       r"[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+UUID_KUVIO = re.compile(UUID_HAKU.pattern + "$", re.I)
 
 
 def _komentorivi():
@@ -1082,6 +1083,80 @@ def _talleta_avain(pem):
     return kohde
 
 
+def _talleta_uusi_avain(pem_teksti, app_id):
+    """Itse luotu avain suoraan oikeaan paikkaan — se ei käy latauskansiossa."""
+    kohde, _ = _avaimen_kohde(Path(f"{app_id}.pem"))
+    kohde.parent.mkdir(parents=True, exist_ok=True)
+    kohde.write_text(pem_teksti, encoding="utf-8")
+    try:
+        os.chmod(kohde, 0o600)
+    except OSError:
+        pass
+    return kohde
+
+
+def _velho_rekisterointi():
+    """Sovelluksen luonti hallintarajapinnan kautta: käyttäjä kopioi
+    portaalista valmiin komennon, kaikki muu tapahtuu täällä."""
+    print(f"""
+Portaalissa on valmis komento, jonka avulla Rahaputki voi luoda sovelluksen
+puolestasi. Se on nopein tapa, ja samalla turvallisin: yksityisavain syntyy
+tällä koneella eikä käy selaimen tai Lataukset-kansion kautta.
+
+  1. Selain avautuu sivulle {EB_PORTAALI} (kirjaudu jos kysytään).
+  2. Vieritä alas kohtaan, jossa lukee "You can register your applications
+     via an API or using command line interface".
+  3. Sen alla on laatikko, jonka sisältö alkaa sanalla  curl
+     Klikkaa laatikkoa, valitse kaikki (Cmd-A / Ctrl-A) ja kopioi (Cmd-C / Ctrl-C).
+
+Komento sisältää kertakäyttöisen, tunnin voimassa olevan tunnuksen. Käsittele
+sitä kuin salasanaa: älä lähetä sitä kenellekään.""")
+    _avaa_selain(EB_PORTAALI)
+    token = ""
+    for _ in range(3):
+        vastaus = _kysy("\nPaina Enter kun olet kopioinut (luen leikepöydän), "
+                        "tai liitä komento tähän: ")
+        if not vastaus:
+            leike = _leikepoydalta()
+            if leike is None:
+                print("⚠ leikepöytää ei saada luettua — liitä komento alle")
+                continue
+            vastaus = leike
+        token = _poimi_token(vastaus)
+        if token:
+            break
+        print("⚠ en löytänyt komennosta tunnusta — varmista että kopioit "
+              "koko komennon (se alkaa 'curl' ja sisältää 'Bearer')")
+    if not token:
+        return None
+    print("\nLuodaan avainpari tällä koneella…")
+    pem_teksti, varmenne = _luo_avainpari()
+    try:
+        vastaus = _rekisteroi_sovellus(token, varmenne)
+    except EBVirhe as e:
+        if e.koodi in (401, 403):
+            print("⚠ tunnus ei kelvannut (se vanhenee tunnissa). Lataa "
+                  "portaalin sivu uudelleen ja kopioi komento uudestaan.")
+        else:
+            print(f"⚠ sovelluksen luonti epäonnistui ({e.koodi}): {e.runko}")
+        return None
+    except (OSError, ValueError) as e:
+        print(f"⚠ sovelluksen luonti epäonnistui: {e}")
+        return None
+    app_id = _sovellus_id(vastaus)
+    if not app_id:
+        print("ℹ sovellus luotiin, mutta en tunnistanut sen tunnusta vastauksesta.")
+        app_id = _kysy("Kopioi sovelluksen tunnus (Application ID) portaalista: ")
+        if not UUID_KUVIO.match(app_id):
+            return None
+    polku = _talleta_uusi_avain(pem_teksti, app_id)
+    env = _kirjoita_env({"EB_APP_ID": app_id, "EB_KEY_PATH": _lyhenna_polku(polku)})
+    print(f"✓ sovellus Rahaputki luotu ({app_id})")
+    print(f"✓ yksityisavain: {polku}")
+    print(f"✓ tunnukset tallennettu tiedostoon {env.parent.name}/{env.name}")
+    return app_id
+
+
 def _velho_tunnukset(pakota=False):
     """Vaihe 1: sovellus Enable Bankingiin ja sen avain koneelle."""
     nyt = _eb_asetukset()
@@ -1102,24 +1177,39 @@ rajapinnan kautta pankit luovuttavat sinulle omat tapahtumasi. Teet sinne
 oman kehittäjätunnuksen: silloin tilitietosi kulkevat sinun sovelluksesi
 kautta suoraan koneellesi eikä välissä ole muita palveluita.
 
-Selain avautuu osoitteeseen {EB_KIRJAUTUMINEN}
+Jos sinulla ei vielä ole tunnusta: selain avautuu osoitteeseen
+{EB_KIRJAUTUMINEN} — anna sähköpostiosoitteesi ja klikkaa linkkiä, jonka saat
+sähköpostiisi. Salasanaa ei ole.""")
+    if _kylla("\nOnko sinulla jo Enable Banking -tunnus (olet kirjautunut portaaliin)?",
+              oletus=False):
+        if _velho_rekisterointi():
+            return True
+        print("\nJatketaan lomakkeella.")
+    else:
+        _avaa_selain(EB_KIRJAUTUMINEN)
+        _odota_enter("Paina Enter kun olet kirjautunut portaaliin...")
+        if _kylla("\nLuodaanko sovellus automaattisesti (nopein tapa)?"):
+            if _velho_rekisterointi():
+                return True
+            print("\nJatketaan lomakkeella.")
+    _avaa_selain(EB_PORTAALI)
+    print(f"""
+Sovelluksen luonti lomakkeella (portaalin sivu API applications):
 
-  1. Anna sähköpostiosoitteesi. Saat sähköpostiin kirjautumislinkin —
-     salasanaa ei ole. Klikkaa linkkiä.
-  2. Valitse ylhäältä "API applications" ja vieritä alas kohtaan
+  1. Valitse ylhäältä "API applications" ja vieritä alas kohtaan
      "Add a new application".
-  3. Environment: valitse "Production" (oikea pankki, oikeat tapahtumat).
-  4. Avaimen luonti: jätä ensimmäinen vaihtoehto valituksi
+  2. Environment: valitse "Production" (oikea pankki, oikeat tapahtumat).
+  3. Avaimen luonti: jätä ensimmäinen vaihtoehto valituksi
      ("Generate in the browser ... and export private key").
-  5. Application name: kirjoita  Rahaputki
-  6. Allowed redirect URLs: kopioi tämä rivi sellaisenaan:
+  4. Application name: kirjoita  Rahaputki
+  5. Allowed redirect URLs: kopioi tämä rivi sellaisenaan:
 
         {EB_TESTIPALUU}
 
      Tänne pankki palauttaa sinut tunnistautumisen jälkeen. Sivu näyttää
      tyhjältä lomakkeelta — se on kunnossa: koodi on selaimen
      osoiterivillä, ja Rahaputki kysyy sen sinulta.
-  7. Loput kentät ovat vapaaehtoisia, mutta kannattaa täyttää:
+  6. Loput kentät ovat vapaaehtoisia, mutta kannattaa täyttää:
 
         Application description:
           {EB_KUVAUS}
@@ -1130,7 +1220,7 @@ Selain avautuu osoitteeseen {EB_KIRJAUTUMINEN}
         Terms URL of the application:
           {EHDOT}/kayttoehdot.md
 
-  8. Klikkaa "Register". Selain lataa tiedoston, jonka nimi on pitkä
+  7. Klikkaa "Register". Selain lataa tiedoston, jonka nimi on pitkä
      tunnus ja pääte .pem — se on sovelluksesi salainen avain.
      Älä avaa sitä äläkä lähetä sitä kenellekään.
 """)
@@ -1174,6 +1264,93 @@ Selain avautuu osoitteeseen {EB_KIRJAUTUMINEN}
     env = _kirjoita_env({"EB_APP_ID": app_id, "EB_KEY_PATH": _lyhenna_polku(pem)})
     print(f"✓ tunnukset tallennettu tiedostoon {env.parent.name}/{env.name}")
     return True
+
+
+EB_HALLINTA = "https://enablebanking.com/api/applications"
+
+
+def _luo_avainpari(nimi="Rahaputki"):
+    """RSA-avain ja itse allekirjoitettu varmenne tällä koneella.
+
+    Enable Bankingin selainlomake luo avaimen selaimessa ja pudottaa sen
+    latauskansioon; tässä yksityisavain syntyy koneella eikä käy missään —
+    rajapinnalle lähtee vain julkinen varmenne."""
+    from datetime import timezone
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+    avain = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    nimio = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, nimi)])
+    nyt = datetime.now(timezone.utc)
+    varmenne = (x509.CertificateBuilder()
+                .subject_name(nimio).issuer_name(nimio)
+                .public_key(avain.public_key())
+                .serial_number(x509.random_serial_number())
+                .not_valid_before(nyt - timedelta(days=1))
+                .not_valid_after(nyt + timedelta(days=3650))
+                .sign(avain, hashes.SHA256()))
+    return (avain.private_bytes(serialization.Encoding.PEM,
+                                serialization.PrivateFormat.PKCS8,
+                                serialization.NoEncryption()).decode(),
+            varmenne.public_bytes(serialization.Encoding.PEM).decode())
+
+
+def _poimi_token(teksti):
+    """Portaalin valmis komento sisältää 'Authorization: Bearer <token>'.
+    Hyväksytään myös paljas token, jos käyttäjä kopioi vain sen."""
+    osuma = re.search(r"Bearer\s+([A-Za-z0-9._\-]{100,})", teksti or "")
+    if osuma:
+        return osuma.group(1)
+    ehdokas = siisti(teksti or "")
+    return ehdokas if ehdokas.count(".") == 2 and len(ehdokas) > 100 else ""
+
+
+def _hallintakutsu(token, runko):
+    import urllib.error
+    import urllib.request
+    pyynto = urllib.request.Request(
+        EB_HALLINTA, data=json.dumps(runko).encode(),
+        headers={"Authorization": f"Bearer {token}",
+                 "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(pyynto, timeout=30) as vastaus:
+            return json.loads(vastaus.read().decode() or "{}")
+    except urllib.error.HTTPError as e:
+        try:
+            teksti = e.read().decode()[:400]
+        except OSError:
+            teksti = ""
+        raise EBVirhe(e.code, teksti) from e
+
+
+def _rekisteroi_sovellus(token, varmenne, nimi="Rahaputki"):
+    """Luo tuotantosovellus hallintarajapinnan kautta. Valinnaiset kentät
+    lähetetään ensin; jos rajapinta ei niitä tunne, yritetään ilman."""
+    perus = {"name": nimi, "certificate": varmenne, "environment": "PRODUCTION",
+             "redirect_urls": [EB_TESTIPALUU]}
+    laaja = dict(perus, description=EB_KUVAUS,
+                 privacy_url=f"{EHDOT}/tietosuoja.md",
+                 terms_url=f"{EHDOT}/kayttoehdot.md")
+    try:
+        return _hallintakutsu(token, laaja)
+    except EBVirhe as e:
+        if e.koodi not in (400, 422):
+            raise
+        print("ℹ rajapinta ei ottanut valinnaisia kenttiä vastaan — "
+              "täytä kuvaus ja URLit portaalissa myöhemmin")
+        return _hallintakutsu(token, perus)
+
+
+def _sovellus_id(vastaus):
+    """Sovelluksen tunnus voi tulla eri nimisenä kentässä; etsitään uuid."""
+    if isinstance(vastaus, dict):
+        for avain in ("id", "application_id", "uid", "kid", "app_id", "applicationId"):
+            arvo = siisti(str(vastaus.get(avain, "")))
+            if UUID_KUVIO.match(arvo):
+                return arvo
+    osuma = UUID_HAKU.search(json.dumps(vastaus)) if vastaus else None
+    return osuma.group(0) if osuma else ""
 
 
 def eb_sovellus():
