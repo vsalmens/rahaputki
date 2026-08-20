@@ -772,8 +772,13 @@ def eb_riveiksi(data, kerro=None, varaukset=None):
             valuutta if valuutta.upper() not in ("", "EUR") else "",
             viite and f"viite {viite}"] if x))
         if not saaja:
-            # varasaaja vain viestiosasta - koodit ja viitteet eivät kuulu nimeen
-            saaja = siisti(" ".join(str(x) for x in rem))[:40] or selite[:40]
+            # Varasaaja viestiosasta. Revolut kertoo vastapuolen muodossa
+            # "To <saaja>" / "From <maksaja>" omana viestirivinään — se on
+            # oleellisin tieto, kun creditor/debtor puuttuu kokonaan.
+            osat = [siisti(str(x)) for x in rem if siisti(str(x))]
+            vastapuoli = next((o.split(" ", 1)[1] for o in osat
+                               if o[:3].lower() == "to " or o[:5].lower() == "from "), "")
+            saaja = (vastapuoli or " ".join(osat))[:40] or selite[:40]
         koodi = tx.get("bank_transaction_code")
         laji = siisti(str(koodi.get("code") or "")) if isinstance(koodi, dict) else ""
         rivi = {"pvm": pvm, "summa": summa, "saaja": saaja, "selite": selite,
@@ -1874,22 +1879,7 @@ def kirjoita_pankkicsv(tili, rivit, polku):
     """Kirjoittaa noudetut tapahtumat samassa muodossa kuin pankin oma CSV, jotta
     aja-putki (lähteen tunnistus, dedupe-avaimet, säännöt) toimii identtisesti."""
     with open(polku, "w", encoding="utf-8", newline="") as f:
-        if tili == "Revolut":
-            w = csv.writer(f)
-            w.writerow(["Type", "Product", "Started Date", "Completed Date",
-                        "Description", "Amount", "Fee", "Currency", "State", "Balance"])
-            for r in rivit:
-                # Type kantaa pankin oman tapahtumalajin (CARD_PAYMENT, TOPUP,
-                # ATM, TRANSFER…) — se päätyy selitteeseen, jolloin siitä voi
-                # tehdä säännön. Aiemmin tähän kirjoitettiin itse keksitty
-                # "Merchant"/"Transfer", ja pankin tieto katosi.
-                laji = (r.get("laji") or "").strip() or (
-                    "Merchant" if r["summa"] < 0 else "Transfer")
-                w.writerow([laji,
-                            "Personal Account (EUR)",
-                            f"{r['pvm']} 00:00:00", f"{r['pvm']} 00:00:00",
-                            r["saaja"], f"{r['summa']:.2f}", "0.00", "EUR", "COMPLETED", ""])
-        elif tili == "S-Pankki":
+        if tili == "S-Pankki":
             w = csv.writer(f, delimiter=";")
             w.writerow(["Kirjauspäivä", "Summa", "Saajan nimi", "Maksaja", "Viesti",
                         "Saajan tilinumero"])
@@ -1906,8 +1896,13 @@ def kirjoita_pankkicsv(tili, rivit, polku):
                             f"{r['summa']:.2f}".replace(".", ","),
                             r["saaja"], r["selite"], "", ""])
         else:
-            # Kortit ja muut tilit: kortti_pdf-muoto, jossa Tili-sarake kantaa
-            # tilin nimen sellaisenaan pääkirjaan (sama muoto kuin laskusta_csv).
+            # Kortit, Revolut ja muut tilit: kortti_pdf-muoto, jossa on oma
+            # Selite-sarake ja Tili-sarake kantaa tilin nimen pääkirjaan asti
+            # (sama muoto kuin laskusta_csv kirjoittaa).
+            #
+            # Revolutin oma vientimuoto oli tässä aiemmin, mutta siinä ei ole
+            # viestikenttää lainkaan: pankin remittance_information — usein
+            # ainoa tieto vastapuolesta — katosi kokonaan matkalla pääkirjaan.
             w = csv.writer(f, delimiter=";")
             w.writerow(["Ostopäivä", "Summa", "Ostopaikka", "Selite", "Tili"])
             for r in rivit:
