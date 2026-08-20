@@ -110,10 +110,13 @@ suoraan koneellesi eikä välissä ole muita palveluita eikä kuukausimaksuja.
 
 Omien tilien katselu on maksutonta: tuotantosovellus aktivoidaan
 "rajoitettuna" (restricted) liittämällä siihen omat tilisi, ja vain ne tilit
-ovat sen kautta luettavissa. Vaihtoehto on ostaa sama valmiina palveluna
-(esim. [Syncbank](https://syncbank.app), kuukausi- tai vuosimaksu) — silloin
-et tarvitse tätä lukua lainkaan, mutta tilitietosi kulkevat sen palvelun
-kautta.
+ovat sen kautta luettavissa.
+
+Tämä vaihe ei ole vältettävissä maksamalla. Myös maksulliset valmispalvelut
+(esim. [Syncbank](https://syncbank.app)) ohjeistavat käyttäjän tekemään oman
+Enable Banking -tunnuksensa ja rekisteröimään oman sovelluksensa — niissä
+maksat ohjelmasta ja sen ylläpidosta, et rekisteröinnin ohittamisesta.
+Rahaputkessa sama vaihe on automatisoitu velhoon.
 
 **Kaikki alla oleva on automatisoitu yhteen komentoon.** Velho asentaa
 puuttuvat kirjastot, etsii avaintiedoston Lataukset-kansiosta, lukee

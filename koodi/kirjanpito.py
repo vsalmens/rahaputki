@@ -3263,6 +3263,14 @@ def tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit, ledg
     saantoehdot_js = json.dumps(
         {m: "; ".join((e or "ei ehtoa") + " → " + k for e, k in v)
          for m, v in ehdot_map.items() if any(e for e, _ in v)}, ensure_ascii=False)
+    # Rivin §-merkistä pääsee muokkaamaan juuri sitä sääntöä, joka rivin
+    # luokitteli — siihen tarvitaan mallin lisäksi kategoria ja ehto.
+    saantotiedot = {}
+    for s_ in lue_saannot_raaka():
+        saantotiedot.setdefault(normalisoi(s_["malli"]),
+                                {"malli": s_["malli"], "kategoria": s_.get("kategoria", ""),
+                                 "ehto": s_.get("ehto", "")})
+    saantotiedot_js = json.dumps(saantotiedot, ensure_ascii=False)
 
     # --- ylägraafi: tulot ja menot per kk ---
     maksimi = max([menot[m] for m in kuukaudet] + [tulot[m] for m in kuukaudet] + [1])
@@ -3525,6 +3533,8 @@ const KAT=__KAT__;
 const TARKENTEET=__TARKENTEET__;
 const TARKKAT=__TARKKAT__;
 const SAANTOEHDOT=__SAANTOEHDOT__;
+const SAANTOTIEDOT=__SAANTOTIEDOT__;
+let SF_KORVAA=null;
 // ---- Tutki-graafi: kk × kategoria × tarkenne, koottu DATA.kat-riveistä ----
 const TUTKI={valitut:[], varit:{}, tila:'stacked'};
 const TUTKIVARIT=['#c0532b','#2e7d5b','#3a6ea5','#9a6b2f','#7d4f9c','#b5893a','#4a8a8a',
@@ -3869,12 +3879,70 @@ function perusSymboli(p){
 }
 function perus(p){
   if(!p)return '';
-  let t=p;
+  let t=p, lisa='';
   if(p.indexOf('s\u00e4\u00e4nt\u00f6: ')===0){
     const eh=SAANTOEHDOT[p.slice(8)];
     if(eh){t=p+' \u00b7 '+eh;}
+    if(SAANTOTIEDOT[p.slice(8)]){
+      const st=SAANTOTIEDOT[p.slice(8)];
+      t=p+' \u2192 '+st.kategoria+(st.ehto?' ('+st.ehto+')':'')+
+        String.fromCharCode(10)+'klikkaa: muokkaa t\u00e4t\u00e4 s\u00e4\u00e4nt\u00f6\u00e4';
+      lisa=' saantoperus';
+    }
   }
-  return '<span class="perus" title="'+esc(t)+'">'+perusSymboli(p)+'</span> ';
+  return '<span class="perus'+lisa+'" title="'+esc(t)+'">'+perusSymboli(p)+'</span> ';
+}
+function muokkaaSaantoaLomakkeella(mallinorm){
+  const st=SAANTOTIEDOT[mallinorm];
+  const f=document.getElementById('sf-malli');
+  if(!st||!f){return false;}
+  const osat=String(st.kategoria).split(':');
+  f.value=st.malli;
+  const sel=document.querySelector('.katsel[data-id="__saanto__"]');
+  if(sel){
+    if(!Array.prototype.some.call(sel.options,function(o){return o.value===osat[0];})){
+      const o=document.createElement('option');o.value=osat[0];o.textContent=osat[0];sel.appendChild(o);
+    }
+    sel.value=osat[0];
+  }
+  const tark=document.getElementById('sf-tark');
+  if(tark){tark.value=osat.slice(1).join(':');}
+  const eh=document.getElementById('sf-ehto');
+  if(eh){eh.value=st.ehto||'';}
+  SF_KORVAA={malli:st.malli,kategoria:st.kategoria,ehto:st.ehto||''};
+  paivitaLomakkeenTila();
+  f.scrollIntoView({block:'center'});
+  f.focus();
+  osumalaskuri(f.value,'sf-osuma',0);
+  return true;
+}
+function paivitaLomakkeenTila(){
+  const otsikko=document.getElementById('sf-otsikko');
+  const nappi=document.getElementById('sf-nappi');
+  const peru=document.getElementById('sf-peru');
+  if(!otsikko||!nappi){return;}
+  if(SF_KORVAA){
+    otsikko.textContent='Muokataan s\u00e4\u00e4nt\u00f6\u00e4 '+SF_KORVAA.malli+
+      ' \u2192 '+SF_KORVAA.kategoria+':';
+    nappi.textContent='Tallenna muutos';
+    if(peru){peru.style.display='';}
+  }else{
+    otsikko.textContent='Uusi s\u00e4\u00e4nt\u00f6:';
+    nappi.textContent='Lis\u00e4\u00e4 s\u00e4\u00e4nt\u00f6';
+    if(peru){peru.style.display='none';}
+  }
+}
+function peruSaantomuokkaus(){
+  SF_KORVAA=null;
+  const f=document.getElementById('sf-malli');
+  if(f){f.value='';}
+  const tark=document.getElementById('sf-tark');
+  if(tark){tark.value='';}
+  const eh=document.getElementById('sf-ehto');
+  if(eh){eh.value='';}
+  const os=document.getElementById('sf-osuma');
+  if(os){os.textContent='';}
+  paivitaLomakkeenTila();
 }
 let KUMOA=null;
 function tilannekuva(id){
@@ -3953,13 +4021,14 @@ function riviHtml(t,katR){
     '<td class="tili2">'+esc(t[4])+'</td><td class="num'+etu+'">'+eur(t[1])+'</td></tr>';
 }
 function lomakeJaMassa(katX){
-  return '<div class="sform"><b>Uusi s\u00e4\u00e4nt\u00f6:</b>'+
+  return '<div class="sform"><b id="sf-otsikko">Uusi s\u00e4\u00e4nt\u00f6:</b>'+
     '<input id="sf-malli" placeholder="osamerkkijono, esim. brang" size="22">'+
     '<span>\u2192</span>'+katvalikko('__saanto__',katX)+
     '<input id="sf-tark" class="tarkinp" list="tarklist" placeholder="tarkenne">'+
     '<input id="sf-ehto" placeholder="ehto: min=50 / max=50" size="12" title="summaraja itseisarvosta; tyhj\u00e4 = ei rajaa">'+
     '<span id="sf-osuma" class="pikkuteksti"></span>'+
     '<button id="sf-nappi">Lis\u00e4\u00e4 s\u00e4\u00e4nt\u00f6</button>'+
+    '<a href="#" id="sf-peru" style="display:none">peru muokkaus</a>'+
     '<span class="pikkuteksti">osuu saajaan/selitteeseen, luokittelee my\u00f6s avoimet rivit</span></div>'+
     '<div id="massapalkki"><b><span id="massa-n"></span> rivi\u00e4 valittu:</b>'+
     katvalikko('__massa__','TARKISTA')+
@@ -3969,6 +4038,7 @@ function lomakeJaMassa(katX){
     '<span class="pikkuteksti">\u2318/Ctrl = lis\u00e4\u00e4, Shift = v\u00e4li</span></div>';
 }
 function avaa(kat, kk, tark){
+  SF_KORVAA=null;
   const p=document.getElementById('paneeli');
   const kdata0=DATA.kat[kat]||{};
   let kdata=kdata0;
@@ -4177,6 +4247,8 @@ function tallennaRivi(id){
   }
 }
 function lisaaSaanto(){
+  const korvaa=SF_KORVAA?[{malli:SF_KORVAA.malli,kategoria:SF_KORVAA.kategoria,
+                           ehto:SF_KORVAA.ehto}]:null;
   const malli=document.getElementById('sf-malli').value.trim().toLowerCase();
   const kat=document.querySelector('.katsel[data-id="__saanto__"]').value;
   const tark=document.getElementById('sf-tark').value.trim().toLowerCase();
@@ -4184,6 +4256,32 @@ function lisaaSaanto(){
   if(!malli||kat==='__uusi__'){alert('anna malli ja kategoria');return;}
   const psp=PSP.find(function(x){return malli.indexOf(x)>=0;});
   if(psp&&!confirm('"'+malli+'" on maksunv\u00e4litt\u00e4j\u00e4 ('+psp+') \u2014 s\u00e4\u00e4nt\u00f6 osuisi moniin eri kauppoihin. Tehd\u00e4\u00e4nk\u00f6 silti?')){return;}
+  if(korvaa&&SERVER){
+    // Muokkaus: vanha sääntö korvataan uudella samassa kohdassa listaa.
+    fetch('api/saanto',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({malli:malli,kategoria:kat,tarkenne:tark,ehto:ehto,
+                           esikatselu:true,poistaen:korvaa})})
+      .then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){alert(v.virhe||'virhe');return;}
+        let m='Korvataan  '+korvaa[0].malli+' \u2192 '+korvaa[0].kategoria+
+          '  s\u00e4\u00e4nn\u00f6ll\u00e4  '+malli+' \u2192 '+kat+(tark?':'+tark:'')+
+          (ehto?' ('+ehto+')':'')+'.'+String.fromCharCode(10)+
+          v.muuttuu+' rivi\u00e4 luokittuu uudelleen';
+        if(v.suojattu){m+='; '+v.suojattu+' k\u00e4sin-luokiteltua ei muuteta';}
+        if(v.esimerkit&&v.esimerkit.length){m+='. Esim: '+v.esimerkit.join(' | ');}
+        if(!confirm(m+'. Toteutetaanko?')){return;}
+        SF_KORVAA=null;
+        toteutaSaanto(malli,kat,tark,ehto,korvaa,'s\u00e4\u00e4nt\u00f6 korvattu \u2713',
+                      kysyPakota(v));
+      });
+    return;
+  }
+  if(korvaa&&!SERVER){
+    MUUT.poistot.push({malli:korvaa[0].malli,kategoria:korvaa[0].kategoria});
+    MUUT.saannot.push({malli:malli,kategoria:kat,tarkenne:tark});
+    SF_KORVAA=null;paivitaLomakkeenTila();paivitaPalkki();
+    return;
+  }
   if(SERVER){
     fetch('api/saanto',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({malli:malli,kategoria:kat,tarkenne:tark,ehto:ehto,esikatselu:true})})
@@ -4639,10 +4737,17 @@ document.addEventListener('click',function(ev){
     if(f){f.value=sl.getAttribute('data-saaja').toLowerCase();f.scrollIntoView({block:'center'});f.focus();
       osumalaskuri(f.value,'sf-osuma',0);}
     return;}
+  const spe=ev.target.closest('#sf-peru');
+  if(spe){ev.preventDefault();peruSaantomuokkaus();return;}
   const pr=ev.target.closest('.perus');
   if(pr){
     const pt=pr.getAttribute('title')||'?';
     const ptr=pr.closest('tr');
+    if(pr.classList.contains('saantoperus')){
+      ev.preventDefault();
+      const malli=pt.split(String.fromCharCode(10))[0].split(' \u2192 ')[0].slice(8);
+      if(muokkaaSaantoaLomakkeella(malli)){return;}
+    }
     if(SERVER&&(pt==='k\u00e4sin'||pt==='oletus')&&ptr&&ptr.id&&ptr.id.indexOf('rivi-')===0){
       if(confirm('peruste: '+pt+String.fromCharCode(10)+
         'Vapautetaanko rivi s\u00e4\u00e4nn\u00f6ille? K\u00e4sin-suoja poistuu ja rivi '+
@@ -4750,7 +4855,8 @@ window.addEventListener('DOMContentLoaded',function(){
                .replace("__KAT__", kat_js)
                .replace("__TARKENTEET__", tarkenteet_js)
                .replace("__TARKKAT__", tarkkat_js)
-               .replace("__SAANTOEHDOT__", saantoehdot_js))
+               .replace("__SAANTOEHDOT__", saantoehdot_js)
+               .replace("__SAANTOTIEDOT__", saantotiedot_js))
 
     sivu = f"""<!DOCTYPE html>
 <html lang="fi"><head><meta charset="utf-8">
@@ -4821,6 +4927,9 @@ td.num.klik {{ text-decoration:none }}
 #saantotaulu td:last-child a.saantopoisto,
 #saantotaulu td:last-child a.saantomuokkaus {{ text-decoration:underline }}
 .varaushuomio {{ background:#e6eef5 }}
+.perus.saantoperus {{ cursor:pointer; border-bottom:1px dotted #9a8f7d }}
+.perus.saantoperus:hover {{ color:#1a5fa8; border-bottom-color:#1a5fa8 }}
+#sf-peru {{ margin-left:.4rem; font-size:.8rem }}
 .varausmerkki {{ background:#dbe6f0; color:#2c4a63; font-size:.68rem;
                  padding:.05rem .35rem; border-radius:4px; vertical-align:.08em;
                  letter-spacing:.02em }}

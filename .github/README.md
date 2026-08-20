@@ -93,9 +93,10 @@ mitä kukaan ei voi tehdä puolestasi: luot ilmaisen kehittäjätunnuksen
 Finanssivalvonnan valvoma) ja tunnistaudut pankkiisi.
 
 Tilitietosi kulkevat silloin sinun oman sovelluksesi kautta suoraan
-koneellesi — ei kuukausimaksua eikä välikäsiä. Sama on ostettavissa myös
-valmiina palveluna (esim. [Syncbank](https://syncbank.app)), jos et halua
-tehdä tunnusta itse.
+koneellesi — ei kuukausimaksua eikä välikäsiä. Maksullisetkin vaihtoehdot
+(esim. [Syncbank](https://syncbank.app)) edellyttävät saman Enable
+Banking -tunnuksen ja sovelluksen luomisen; niissä maksat ohjelmasta, et
+siitä että välttyisit rekisteröinniltä.
 
 Jatkossa sama `Pankkihaku`-käynnistin noutaa tuoreet tapahtumat, luokittelee
 ne ja avaa raportin yhdellä kaksoisklikkauksella. Rautalankaohje kaikista
