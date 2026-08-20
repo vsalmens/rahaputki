@@ -906,8 +906,11 @@ def _valikko(otsikko, vaihtoehdot, oletus=1):
     """Numeroitu valinta. Palauttaa valitun avaimen; Enter ottaa oletuksen."""
     print(f"\n{otsikko}")
     for i, (_, teksti) in enumerate(vaihtoehdot, 1):
-        merkki = " (oletus)" if i == oletus else ""
-        print(f"  {i}) {teksti}{merkki}")
+        rivit = str(teksti).split("\n")
+        merkki = "   (oletus)" if i == oletus else ""
+        print(f"  {i}) {rivit[0]}{merkki}")
+        for jatko in rivit[1:]:
+            print(jatko)
     vastaus = _kysy(f"Valitse numero [{oletus}] ", str(oletus))
     if vastaus.isdigit() and 1 <= int(vastaus) <= len(vaihtoehdot):
         return vaihtoehdot[int(vastaus) - 1][0]
@@ -1260,10 +1263,18 @@ sähköpostiisi. Salasanaa ei ole.""")
     # Sovellus on voitu luoda jo aiemmin (toinen kansio, aiempi yritys,
     # portaalin lomake). Silloin ei pidä luoda uutta vaan ottaa se käyttöön.
     loydot = _etsi_avaimet()
+    if loydot:
+        polut = "\n".join(f"        {_lyhenna_polku(pol)}" for pol in loydot[:3])
+        if len(loydot) > 3:
+            polut += f"\n        (ja {len(loydot) - 3} muuta)"
+        olemassa = ("Käytä sovellusta, joka sinulla jo on\n"
+                    "     Avaintiedosto löytyi koneelta:\n" + polut)
+    else:
+        olemassa = ("Minulla on jo sovellus — raahaan sen .pem-avaintiedoston tähän\n"
+                    f"     (kansioista {AVAINKANSIOT_VIHJE} ei löytynyt avainta)")
     vaihtoehdot = [
         ("uusi", "Luo minulle uusi sovellus (nopein — avain syntyy tällä koneella)"),
-        ("olemassa", "Minulla on jo sovellus ja sen .pem-avaintiedosto"
-         + (f" — löysin tiedoston {loydot[0].name}" if loydot else "")),
+        ("olemassa", olemassa),
         ("lomake", "Luon sovelluksen itse portaalin lomakkeella"),
     ]
     valinta = _valikko("Mistä lähdetään liikkeelle?", vaihtoehdot,
