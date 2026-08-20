@@ -124,7 +124,7 @@ siitä että välttyisit rekisteröinniltä.
 
 Jatkossa sama `Pankkihaku`-käynnistin noutaa tuoreet tapahtumat, luokittelee
 ne ja avaa raportin yhdellä kaksoisklikkauksella. Rautalankaohje kaikista
-vaiheista on [koodi/OHJE.md](koodi/OHJE.md).
+vaiheista on [koodi/OHJE.md](https://github.com/vsalmens/rahaputki/blob/main/koodi/OHJE.md).
 
 ## Rituaali jatkossa (~15–30 min, milloin huvittaa)
 
@@ -198,16 +198,16 @@ kaksoisklikkauksen päässä.
 
 ## Lisenssi ja ehdot
 
-MIT-lisenssi ([`LICENSE`](LICENSE)) — käytä, muokkaa ja jaa vapaasti.
-[Tietosuojaseloste](koodi/ehdot/tietosuoja.md) ja
-[käyttöehdot](koodi/ehdot/kayttoehdot.md) kertovat lyhyesti sen, mikä tässä
+MIT-lisenssi ([`LICENSE`](https://github.com/vsalmens/rahaputki/blob/main/LICENSE)) — käytä, muokkaa ja jaa vapaasti.
+[Tietosuojaseloste](https://github.com/vsalmens/rahaputki/blob/main/koodi/ehdot/tietosuoja.md) ja
+[käyttöehdot](https://github.com/vsalmens/rahaputki/blob/main/koodi/ehdot/kayttoehdot.md) kertovat lyhyesti sen, mikä tässä
 on olennaista: ohjelmalla ei ole palvelinta, eikä sen tekijä näe tilitietojasi.
 Samat osoitteet kelpaavat Enable Bankingin rekisteröintilomakkeen
 Privacy- ja Terms-kenttiin.
 
 ## Tarkemmat ohjeet
 
-[**koodi/OHJE.md**](koodi/OHJE.md) kertoo kaiken muun: pankkikohtaiset vientiohjeet,
+[**koodi/OHJE.md**](https://github.com/vsalmens/rahaputki/blob/main/koodi/OHJE.md) kertoo kaiken muun: pankkikohtaiset vientiohjeet,
 korttilaskujen PDF-muunnin, automaattinen pankkihaku PSD2-rajapinnan kautta,
 budjetti, yhteistalouden kulujenjako, sääntöjen hienosäätö ja tunnetut
 sudenkuopat.
