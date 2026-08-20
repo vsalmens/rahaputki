@@ -163,7 +163,7 @@
       }
     },
     "holvi": {
-      "tili": "Holvi (Amethemis)",
+      "tili": "Holvi",
       "tunniste_sarakkeet": [
         "Payment date",
         "Amount"
@@ -192,7 +192,7 @@
       }
     }
   },
-  "alkaen": "2025-01-01",
+  "alkaen": "",
   "pankkihaku": {
     "palvelu": "enablebanking",
     "redirect_url": "https://SOVELLUKSELLESI-REKISTERÖITY-OSOITE",
@@ -200,7 +200,7 @@
       {
         "tili": "OP-tili",
         "account_id": "TILIN-UID-VELHOLTA",
-        "alkaen": "2025-01-01"
+        "alkaen": "YYYY-MM-DD"
       }
     ]
   }

@@ -1973,7 +1973,7 @@ def olympos_osio(ledger, cfg=None):
             f'<input id="ol-palautustark" size="24" value="{e(", ".join(L["palautustarkenteet"]))}" '
             f'title="pilkuin eroteltuna"> ovat jäsenten maksuja pankkiirille, '
             f'muut tarkenteet (netti, sähkö, …) jaetaan tasan. Ruokaboksi tunnistetaan lisäksi '
-            f'nimestä kategoriasta riippumatta. Asetukset: data/olympos.json.</p>'
+            f'nimestä kategoriasta riippumatta. Asetukset: data/yhteistalous.json.</p>'
             f'{vihje}<h3>Saldot</h3>{"".join(st)}'
             f'<h3>Läsnäolo viikoittain</h3><p class="pikkuteksti">Klikkaa solua: ✓ läsnä / – poissa. '
             f'Viikon boksi jaetaan läsnäolijoiden kesken (jos kaikki poissa, jaetaan kaikille).</p>{"".join(lt)}'

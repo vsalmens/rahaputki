@@ -56,10 +56,12 @@ on koko kartta.
      "consolidated statement" käy sellaisenaan: pudota inboxiin, putki
      tunnistaa monilohkoisen rakenteen ja poimii vain Personal Account
      -taulukot (rahastotaskusiirrot luokittuvat Sijoituksiksi, eivät menoiksi).
-   - **Holvi** (valinnainen): henkilökohtaiseen budjettiin riittää yleensä se,
-     mitä firmasta tulee *ulos sinulle* — ja se näkyy jo OP-tilillä saapuvana
-     (palkka/osinko). Holvin voi siis jättää kokonaan firman kirjanpidon
-     puolelle. Tuo Holvi-CSV vain jos haluat silmäillä myös firman rahavirtaa.
+   - **Yritystili, esim. Holvi** (valinnainen, vain jos sinulla on sellainen):
+     henkilökohtaiseen budjettiin riittää yleensä se, mitä yrityksestä tulee
+     *ulos sinulle* — ja se näkyy jo henkilökohtaisella tilillä saapuvana
+     (palkka/osinko). Yritystilin voi siis jättää kokonaan yrityksen oman
+     kirjanpidon puolelle. Tuo sen CSV vain jos haluat silmäillä myös
+     yrityksen rahavirtaa.
 
 2. Aja: `python3 kirjanpito.py aja`
 
@@ -203,6 +205,10 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   säännöt jättivät tahallaan listalle (esim. yli 50 € henkilömaksut).
 - **Omat IBANit** `config.json`:iin → siirrot omille tileille tunnistetaan
   automaattisesti Siirto-kategoriaan.
+- **Alkupäivä**: `config.json` → `alkaen` (muotoa `2025-07-01`) jättää sitä
+  vanhemmat rivit tuomatta, vaikka ne olisivat tiedostossa — kätevä, jos et
+  halua ottaa mukaan koko historiaa. Tuonti kertoo aina montako riviä rajaus
+  pudotti. Tyhjä arvo (oletus) tarkoittaa, ettei mitään rajata pois.
 - **Uusi pankki / muuttunut CSV-muoto**: aja
   `python3 kirjanpito.py kurkista tiedosto.csv` — se näyttää enkoodauksen,
   erottimen ja otsikot. Lisää/korjaa lähde `config.json`:iin niillä
