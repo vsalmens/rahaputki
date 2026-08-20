@@ -1,0 +1,18 @@
+malli;kategoria;ehto
+# Esimerkkisääntöjä — muokkaa omiksesi. Järjestys ratkaisee: ensimmäinen osuma voittaa.
+# Kolmas sarake on valinnainen summaehto: min=50 / max=50 (itseisarvo euroina).
+ruokaboksi;Yhteistalous:ruokaboksi
+re:\bdna\b;Yhteistalous:netti;min=50
+re:\bdna\b;Tilaukset & liittymät;max=49,99
+k-market;Päivittäistavarat
+s-market;Päivittäistavarat
+prisma;Päivittäistavarat
+alepa;Päivittäistavarat
+wolt;Ravintolat & kahvilat
+uber * eats;Ravintolat & kahvilat
+uber;Liikkuminen
+vr-yhtyma;Liikkuminen
+neste;Auto:polttoaine
+parkman;Auto:pysäköinti
+spotify;Tilaukset & liittymät
+apteekki;Terveys

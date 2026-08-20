@@ -7,6 +7,7 @@ config.json.backup
 
 # Kaikki data — ei koskaan repoon
 *.csv
+!saannot.esimerkki.csv
 data/
 inbox/
 raportit/
