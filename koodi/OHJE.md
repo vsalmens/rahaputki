@@ -21,11 +21,12 @@ komentoja. Tässä ohjeessa komennot on kirjoitettu muodossa `python3 …`;
 **Windowsissa käytä sen sijaan `py …`** (esim. `py koodi/kirjanpito.py aja`).
 Polut kirjoitetaan kauttaviivalla myös Windowsissa.
 
-**Kansiorakenne.** Ohjelma asuu `koodi/`-alihakemistossa ja kaikki sinun
-tavarasi (`data/`, `inbox/`, `config.json`, `saannot.csv`, `.env`) sen
-yläpuolella. Siksi päivitys on yhden kansion korvaaminen, eikä sillä voi
-vahingossa hävittää dataa. Komennot ajetaan ylemmästä kansiosta muodossa
-`python3 koodi/kirjanpito.py …`.
+**Kansiorakenne.** Juuressa on vain käynnistimet ja neljä kansiota:
+`koodi/` (ohjelma), `asetukset/` (config, säännöt, budjetti, pankkitunnukset),
+`data/` (kirjanpito ja varmuuskopiot), `inbox/` (tänne tiliotteet) sekä
+`raportit/` (syntyy ajossa). Päivitys korvaa vain `koodi/`-kansion, joten
+sillä ei voi vahingossa hävittää mitään omaasi. Komennot ajetaan juuresta
+muodossa `python3 koodi/kirjanpito.py …`.
 
 **Et tarvitse komentoriviä lainkaan**, jos et halua: kaksoisklikkaa
 `Aloita.command` (macOS) tai `Aloita.bat` (Windows) — se lukee inboxin ja avaa
@@ -82,7 +83,7 @@ on koko kartta.
 
 5. Kun täysiä kuukausia on kertynyt: `python3 koodi/kirjanpito.py budjetti-ehdotus`
    ehdottaa raamit toteuman mediaanista. Kopioi/muokkaa haluamasi rivit
-   tiedostoon `budjetti.csv`, niin raportti alkaa näyttää toteuma vs. raami.
+   tiedostoon `asetukset/budjetti.csv`, niin raportti alkaa näyttää toteuma vs. raami.
 
 ## Rituaali jatkossa (~15–30 min, milloin huvittaa)
 
@@ -108,9 +109,9 @@ Käyttöönotto kerran:
 1. Luo Enable Banking -sovellus (app_id + RS256-yksityisavain `.pem`).
    Säilytä avain pilvisynkan **ulkopuolella** (esim. `~/.avaimet/`,
    `chmod 600`) — se on lukupääsy tileihisi.
-2. `.env`-tiedosto putken kansioon: `EB_APP_ID=…` ja `EB_KEY_PATH=…`.
+2. `asetukset/pankkihaku.env`-tiedosto: `EB_APP_ID=…` ja `EB_KEY_PATH=…`.
    Älä jaa äläkä versioi tätä tiedostoa.
-3. `config.json` → `pankkihaku`: `palvelu`, sovellukselle rekisteröity
+3. `asetukset/config.json` → `pankkihaku`: `palvelu`, sovellukselle rekisteröity
    `redirect_url`, ja `tilit`-lista muotoa
    `{"tili": "OP-tili", "account_id": "<uid>", "alkaen": "YYYY-MM-DD"}`.
    Tilin nimi ohjaa CSV-muodon: `OP-tili` / `S-Pankki` / `Revolut`
@@ -141,8 +142,8 @@ Kaksi tapaa, sama näkymä:
    raportin selaimeen. Jokaisen tapahtuman rivillä on kategoriavalikko ja
    tarkenne-kenttä — muutos **tallentuu pääkirjaan heti**. Rivin
    "sääntö"-linkki esitäyttää sääntölomakkeen (malli → kategoria:tarkenne);
-   sääntö tallentuu saannot.csv:hen ja luokittelee samalla avoimet rivit.
-   Valikon "+ uusi kategoria…" lisää kategorian config.json:iin lennossa.
+   sääntö tallentuu asetukset/saannot.csv:hen ja luokittelee samalla avoimet rivit.
+   Valikon "+ uusi kategoria…" lisää kategorian asetukset/config.json:iin lennossa.
    Taulukot ja käyrät päivittyvät kun lataat sivun uudelleen. Ctrl-C sammuttaa.
 2. **Pelkkä raportti.html avattuna** (ilman palvelinta): samat muokkaukset
    kerätään muistiin ja alapalkin nappi lataa ne muutokset.csv-tiedostona.
@@ -178,25 +179,25 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 |---|---|
 | `inbox/` | tänne pankkien CSV:t; käsitellyt siirtyvät `inbox/arkisto/` |
 | `data/tapahtumat.csv` | pääkirja — koko totuus, pelkkää tekstiä, versioi/varmuuskopioi vapaasti |
-| `saannot.csv` | kauppias → kategoria -säännöt (syntyy ensikäynnistyksessä mallista, karttuu käytössä) |
+| `asetukset/saannot.csv` | kauppias → kategoria -säännöt (syntyy ensikäynnistyksessä mallista, karttuu käytössä) |
 | `koodi/` | **ohjelma** — päivitys korvaa tämän kansion kokonaan, muu jää koskematta |
 | `koodi/laskusta_csv.py` | korttilaskujen PDF → CSV -muunnin (`--nayta` näyttää rivien tulkinnan) |
 | `Aloita.command` / `Aloita.bat` | kaksoisklikattava käynnistin (macOS / Windows) — tynkä, joka käynnistää `koodi/`-kansion logiikan |
-| `config.json` | lähteiden sarakekartat, kategoriat, omat IBANit |
+| `asetukset/config.json` | lähteiden sarakekartat, kategoriat, omat IBANit |
 | `koodi/config.esimerkki.json`, `koodi/saannot.esimerkki.csv` | riisutut aloituspohjat, joista ensikäynnistys tekee omasi juureen |
-| `budjetti.csv` | kk-raamit (täytetään vasta kun toteumaa on) |
+| `asetukset/budjetti.csv` | kk-raamit (täytetään vasta kun toteumaa on) |
 | `raportit/raportti.html` | kuukausigraafi + budjettivertailu + matriisi |
 | `raportit/yhteenveto_kk.csv` | sama matriisi Sheets-liitosta varten |
 | `raportit/yhteistalous_erittely.html` | tulostettava kotitalouserittely (selaimesta PDF) |
 | `data/yhteistalous.json` | yhteistalouden tila: tasauspäivä (mihin asti yhteiskulut on huomioitu), kk-vakiot, läsnäolot, kirjaukset — raportin osio ylläpitää tätä puolestasi |
-| `.env` | pankkihaun avaimet — **ei jaeta, ei versioida** |
+| `asetukset/pankkihaku.env` | pankkihaun avaimet — **ei jaeta, ei versioida** |
 
 ## Kustomointi
 
-- **Kategoriat**: `config.json` → `kategoriat`. Tyypit: `meno`, `tulo`,
+- **Kategoriat**: `asetukset/config.json` → `kategoriat`. Tyypit: `meno`, `tulo`,
   `pois` (siirrot/sijoitukset — eivät näy luvuissa). Lisää, poista, nimeä
   vapaasti; `opi` validoi että käytät olemassa olevia nimiä.
-- **Säännöt**: `saannot.csv`, järjestys ratkaisee (ensimmäinen osuma voittaa).
+- **Säännöt**: `asetukset/saannot.csv`, järjestys ratkaisee (ensimmäinen osuma voittaa).
   Lisäys sijoittaa tarkemman mallin automaattisesti yleisemmän edelle
   (esim. `uber * eats` → Ravintolat asettuu `uber` → Liikkuminen -säännön
   yläpuolelle, jolloin poikkeus voittaa). Raportin Säännöt-osiossa on lisäksi
@@ -210,15 +211,15 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   niputtaa oletuskategoriaan: `python3 koodi/kirjanpito.py opi --oletus Henkilömaksut`.
   Aja tämä vasta viimeisenä — se vie KAIKKI jäljellä olevat, myös ne jotka
   säännöt jättivät tahallaan listalle (esim. yli 50 € henkilömaksut).
-- **Omat IBANit** `config.json`:iin → siirrot omille tileille tunnistetaan
+- **Omat IBANit** `asetukset/config.json`:iin → siirrot omille tileille tunnistetaan
   automaattisesti Siirto-kategoriaan.
-- **Alkupäivä**: `config.json` → `alkaen` (muotoa `2025-07-01`) jättää sitä
+- **Alkupäivä**: `asetukset/config.json` → `alkaen` (muotoa `2025-07-01`) jättää sitä
   vanhemmat rivit tuomatta, vaikka ne olisivat tiedostossa — kätevä, jos et
   halua ottaa mukaan koko historiaa. Tuonti kertoo aina montako riviä rajaus
   pudotti. Tyhjä arvo (oletus) tarkoittaa, ettei mitään rajata pois.
 - **Uusi pankki / muuttunut CSV-muoto**: aja
   `python3 koodi/kirjanpito.py kurkista tiedosto.csv` — se näyttää enkoodauksen,
-  erottimen ja otsikot. Lisää/korjaa lähde `config.json`:iin niillä
+  erottimen ja otsikot. Lisää/korjaa lähde `asetukset/config.json`:iin niillä
   sarakenimillä. Sarakenimet voi antaa listana vaihtoehtoja, ensimmäinen
   löytyvä voittaa. *(Pankit muuttavat vientimuotojaan aika ajoin — tämä on
   putken ainoa liikkuva osa, ja siksi se on konfiguraatiota eikä koodia.)*
@@ -231,7 +232,7 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   lasketaan Revolutin omista riveistä).
 - **Käteisnostot** kannattaa ohjata säännöllä johonkin kategoriaan jo
   nostohetkellä — käteisen jälkikäteisseuranta ei toimi käytännössä
-  kenelläkään. Valitse kategoria oman käytäntösi mukaan `saannot.csv`:ssä.
+  kenelläkään. Valitse kategoria oman käytäntösi mukaan `asetukset/saannot.csv`:ssä.
 - **Sijoitukset ja siirrot** eivät kuulu kulutuslukuihin (muuten "menot"
   pomppaa aina kun siirrät rahaa rahastoon). Ne kuuluvat varallisuuden
   seurantaan, eivät kulutusseurantaan.
@@ -242,7 +243,7 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 
 - OP:n, S-Pankin ja Holvin CSV-sarakenimet on asetettu parhaan tiedon mukaan
   (alkuvuosi 2026); jos vienti ei tunnistu, `kurkista` + yksi rivi
-  config.json:iin korjaa asian. Revolutin muoto on vakain.
+  asetukset/config.json:iin korjaa asian. Revolutin muoto on vakain.
 - Korttilaskujen PDF-pohjat vaihtelevat pankeittain ja vuosittain; muuntimen
   rivikuvio on paras arvaus. `--nayta` paljastaa heti, jos jokin rivityyppi
   jää poimimatta — tulosteen (summat sotkettuina) perusteella kuvio säätyy

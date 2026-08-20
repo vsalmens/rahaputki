@@ -1,13 +1,15 @@
-# Salaisuudet
+# Salaisuudet — pankkitunnukset eivät kuulu versionhallintaan
 .env
+*.env
 
-# Oma konfiguraatio (käytä config.esimerkki.json-pohjaa)
-config.json
-config.json.backup
-
-# Kaikki data — ei koskaan repoon
-*.csv
-!saannot.esimerkki.csv
+# Käyttäjän oma kansio: asetukset, kirjanpito ja aineisto
+asetukset/
 data/
 inbox/
 raportit/
+config.json
+config.json.backup
+
+# Kaikki data — ei koskaan repoon. Mallipohja on ainoa poikkeus.
+*.csv
+!koodi/saannot.esimerkki.csv

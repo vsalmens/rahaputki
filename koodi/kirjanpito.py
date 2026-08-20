@@ -21,6 +21,7 @@ import hashlib
 import html
 import time
 import json
+import os
 import re
 import shutil
 import statistics
@@ -38,10 +39,12 @@ INBOX = JUURI / "inbox"
 ARKISTO = INBOX / "arkisto"
 DATA = JUURI / "data"
 RAPORTIT = JUURI / "raportit"
+ASETUKSET = JUURI / "asetukset"
 LEDGER = DATA / "tapahtumat.csv"
-SAANNOT = JUURI / "saannot.csv"
-CONFIG = JUURI / "config.json"
-BUDJETTI = JUURI / "budjetti.csv"
+SAANNOT = ASETUKSET / "saannot.csv"
+CONFIG = ASETUKSET / "config.json"
+BUDJETTI = ASETUKSET / "budjetti.csv"
+ENV = ASETUKSET / "pankkihaku.env"
 TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 
 VERSIO = "v122"
@@ -53,9 +56,13 @@ ENKOODAUKSET = ["utf-8-sig", "utf-8", "iso-8859-1"]
 MIN_PYTHON = (3, 9)
 
 # Kansiot ja mallitiedostot, jotka ensikäynnistys luo puolestasi.
-ALOITUSKANSIOT = ("inbox", "data", "raportit")
-ALOITUSMALLIT = (("config.json", "config.esimerkki.json"),
-                 ("saannot.csv", "saannot.esimerkki.csv"))
+ALOITUSKANSIOT = ("inbox", "data", "raportit", "asetukset")
+ALOITUSMALLIT = ((CONFIG, "config.esimerkki.json"),
+                 (SAANNOT, "saannot.esimerkki.csv"))
+
+# Aiemmat versiot pitivät nämä juuressa; siirretään kerran asetukset-kansioon.
+VANHAT_ASETUKSET = (("config.json", CONFIG), ("saannot.csv", SAANNOT),
+                    ("budjetti.csv", BUDJETTI), (".env", ENV))
 
 
 # ------------------------------------------------------- ensikäynnistys
@@ -82,18 +89,44 @@ def _siisti_konsoli():
             pass
 
 
+def _env_polku():
+    """Pankkihaun tunnukset. Ensisijaisesti asetukset/pankkihaku.env (näkyvä
+    nimi); vanhat piilotetut paikat luetaan yhä, jos sellainen on jäljellä."""
+    for polku in (ENV, ASETUKSET / ".env", JUURI / ".env"):
+        if polku.is_file():
+            return polku
+    return ENV
+
+
+def _siirra_vanhat_asetukset():
+    """Siirrä juuressa olleet asetustiedostot asetukset/-kansioon. Ajetaan joka
+    kerta, mutta tekee jotain vain kerran: olemassa olevan päälle ei kirjoiteta."""
+    siirretyt = []
+    for vanha_nimi, uusi in VANHAT_ASETUKSET:
+        vanha = JUURI / vanha_nimi
+        if vanha.is_file() and not uusi.exists():
+            uusi.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(vanha, uusi)
+            siirretyt.append(f"  {vanha_nimi} -> asetukset/{uusi.name}")
+    if siirretyt:
+        print("Asetukset siirretty omaan kansioonsa:")
+        print("\n".join(siirretyt))
+
+
 def varmista_aloitus():
     """Luo puuttuvat kansiot ja mallitiedostot. Uusi käyttäjä ei saa törmätä
     traceback-tulosteeseen ennen kuin on edes päässyt alkuun. Olemassa olevaa
     ei kosketa koskaan, joten tämän voi ajaa turvallisesti joka kerta."""
+    _siirra_vanhat_asetukset()
     ensikerta = not CONFIG.exists()
     for nimi in ALOITUSKANSIOT:
         (JUURI / nimi).mkdir(parents=True, exist_ok=True)
-    for kohde_nimi, malli_nimi in ALOITUSMALLIT:
-        kohde, malli = JUURI / kohde_nimi, KOODI / malli_nimi
+    for kohde, malli_nimi in ALOITUSMALLIT:
+        malli = KOODI / malli_nimi
         if not kohde.exists() and malli.exists():
             shutil.copyfile(malli, kohde)
-            print(f"Luotu {kohde_nimi} tiedostosta {malli_nimi} — muokkaa omaksesi kun haluat.")
+            print(f"Luotu {kohde.parent.name}/{kohde.name} tiedostosta {malli_nimi} "
+                  "— muokkaa omaksesi kun haluat.")
     if not CONFIG.exists():
         print(f"config.json puuttuu kansiosta {JUURI}, eikä mallipohjaa "
               f"(config.esimerkki.json) löydy kansiosta {KOODI}.\n"
@@ -101,15 +134,16 @@ def varmista_aloitus():
         sys.exit(1)
     if ensikerta:
         erillinen = KOODI != JUURI
-        koodirivi = ("  koodi/      <- ohjelma; päivitys korvaa vain tämän kansion\n"
+        koodirivi = ("  koodi/      ohjelma; päivitys korvaa vain tämän kansion\n"
                      if erillinen else "")
         ohje = "koodi/OHJE.md" if erillinen else "OHJE.md"
         print(f"""
 Tervetuloa. Kansio {JUURI.name} on nyt valmis:
 
-  inbox/      <- vie pankkiesi CSV-tiedostot tänne
-  data/       <- kirjanpitosi kertyy tänne (tapahtumat.csv on koko totuus)
-  raportit/   <- raportti.html syntyy tänne
+  inbox/      <- VIE PANKKIESI CSV-TIEDOSTOT TÄNNE
+  asetukset/  kategoriat, säännöt ja budjetti — muokkaa kun haluat
+  data/       kirjanpitosi kertyy tänne (tapahtumat.csv on koko totuus)
+  raportit/   raportti.html syntyy tänne
 {koodirivi}
 Seuraava askel: vie tiliotteet verkkopankista CSV-muodossa kansioon inbox/
 ja käynnistä uudelleen. Tarkemmat ohjeet: {ohje}
@@ -574,10 +608,9 @@ GC_API = "https://bankaccountdata.gocardless.com/api/v2"
 
 def _env_salaisuudet():
     """GC_SECRET_ID/GC_SECRET_KEY ympäristöstä tai .env-tiedostosta (avain=arvo-rivit)."""
-    import os
     arvot = {"GC_SECRET_ID": os.environ.get("GC_SECRET_ID", ""),
              "GC_SECRET_KEY": os.environ.get("GC_SECRET_KEY", "")}
-    env = JUURI / ".env"
+    env = _env_polku()
     if env.exists():
         for rv in env.read_text(encoding="utf-8").splitlines():
             if "=" in rv and not rv.lstrip().startswith("#"):
@@ -616,10 +649,9 @@ EB_API = "https://api.enablebanking.com"
 
 def _eb_asetukset():
     """EB_APP_ID ja EB_KEY_PATH (.pem) ympäristöstä tai .env-tiedostosta."""
-    import os
     arvot = {"EB_APP_ID": os.environ.get("EB_APP_ID", ""),
              "EB_KEY_PATH": os.environ.get("EB_KEY_PATH", "")}
-    env = JUURI / ".env"
+    env = _env_polku()
     if env.exists():
         for rv in env.read_text(encoding="utf-8").splitlines():
             if "=" in rv and not rv.lstrip().startswith("#"):
@@ -643,9 +675,14 @@ def eb_jwt(app_id, avain_pem):
 
 def eb_token():
     a = _eb_asetukset()
-    polku = Path(a["EB_KEY_PATH"]).expanduser() if a["EB_KEY_PATH"] else None
-    if not a["EB_APP_ID"] or not polku or not polku.exists():
-        raise ValueError("EB_APP_ID ja EB_KEY_PATH (.pem-polku) puuttuvat .env-tiedostosta")
+    env = _env_polku()
+    if not a["EB_APP_ID"] or not a["EB_KEY_PATH"]:
+        raise ValueError(f"EB_APP_ID ja/tai EB_KEY_PATH puuttuvat — lisää ne tiedostoon {env}")
+    polku = Path(a["EB_KEY_PATH"]).expanduser()
+    if not polku.exists():
+        raise ValueError(f"yksityisavainta ei löydy polusta {polku} — "
+                         f"tarkista EB_KEY_PATH tiedostossa {env} "
+                         "(avain on koneella jolla valtuutus tehtiin)")
     return eb_jwt(a["EB_APP_ID"], polku.read_text(encoding="utf-8"))
 
 
@@ -3780,12 +3817,13 @@ def cmd_budjetti(args):
         ehdotus = round(med / 10) * 10 or 10
         rivit.append((k, ehdotus))
         print(f"  {k:<24} {fmt_eur(ehdotus):>10} €/kk   (mediaani {fmt_eur(med)})")
-    polku = JUURI / "budjetti_ehdotus.csv"
+    polku = ASETUKSET / "budjetti_ehdotus.csv"
     with open(polku, "w", encoding="utf-8", newline="") as f:
         w = csv.writer(f, delimiter=";")
         w.writerow(["kategoria", "kk_raami"])
         w.writerows(rivit)
-    print(f"\nTallennettu: {polku.name} — kopioi haluamasi rivit budjetti.csv:hen (ja muokkaa vapaasti).")
+    print(f"\nTallennettu: asetukset/{polku.name} — kopioi haluamasi rivit "
+          "tiedostoon asetukset/budjetti.csv (ja muokkaa vapaasti).")
 
 
 def cmd_kurkista(args):

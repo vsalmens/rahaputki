@@ -86,32 +86,28 @@ säännöt kattavat tyypillisesti noin 90 % riveistä.
 
 ## Mitä kansiossa on
 
-Kansio jakautuu kahtia, ja jako on koko päivitysmallin perusta:
+Juuressa on vain käynnistimet ja neljä kansiota. Jokaisella on yksi tehtävä:
 
 ```
 Rahaputki/
-  Aloita.command  Aloita.bat   käynnistimet (kaksoisklikkaa)
-  koodi/                       OHJELMA — päivitys korvaa tämän
-  config.json  saannot.csv     SINUN — asetuksesi ja sääntösi
-  budjetti.csv  .env
-  data/  inbox/  raportit/     SINUN — kirjanpitosi ja aineistosi
+  Aloita.command  Aloita.bat    kaksoisklikkaa nailla
+  inbox/          ← TÄNNE pankkien CSV-tiedostot
+  koodi/          ohjelma — päivitys korvaa vain tämän
+  asetukset/      config.json, saannot.csv, budjetti.csv, pankkihaku.env
+  data/           kirjanpitosi (tapahtumat.csv) ja varmuuskopiot
+  raportit/       raportti.html — syntyy uudelleen joka ajolla
 ```
 
-| Sinun — ei ole missään muualla | Mikä |
-|---|---|
-| `data/tapahtumat.csv` | kirjanpitosi — koko totuus, pelkkää tekstiä |
-| `data/` muuten | varmuuskopiot, yhteistalouden tila |
-| `saannot.csv` | kauppias → kategoria -säännöt, karttuu käytössä |
-| `config.json` | kategoriat, lähteiden sarakekartat, omat IBANit |
-| `budjetti.csv` | kuukausiraamit |
-| `inbox/` | pankkien CSV:t; käsitellyt siirtyvät `inbox/arkisto/` |
-| `.env` | pankkihaun tunnukset — **piilotiedosto**, ei näy Finderissa |
-| `raportit/` | syntyy uudelleen joka ajolla; ei tarvitse varjella |
+`inbox/` on tarkoituksella juuressa: se on ainoa kansio, johon kosket joka
+kerta. Kaikki muu saa jäädä taustalle.
 
-| Ohjelma — tulee paketista | Mikä |
-|---|---|
-| `koodi/` | koko ohjelma: molemmat skriptit, ohje ja mallipohjat |
-| `Aloita.command`, `Aloita.bat` | käynnistimet — muutaman rivin tyngät, jotka vain käynnistävät `koodi/`-kansion. Näitä ei tarvitse päivittää. |
+| Kansio | Sinun vai ohjelman | Mitä sisällä |
+|---|---|---|
+| `koodi/` | **ohjelman** — korvataan päivityksessä | molemmat skriptit, `OHJE.md`, mallipohjat |
+| `asetukset/` | sinun | kategoriat ja lähteet (`config.json`), kauppiassäännöt (`saannot.csv`), kuukausiraamit (`budjetti.csv`), pankkihaun tunnukset (`pankkihaku.env`) |
+| `data/` | sinun | `tapahtumat.csv` on koko totuus — pelkkää tekstiä. Lisäksi varmuuskopiot ja yhteistalouden tila. |
+| `inbox/` | sinun | pankkien CSV:t; käsitellyt siirtyvät `inbox/arkisto/` |
+| `raportit/` | syntyy ajossa | raportti, yhteenvedot, `tarkistettavat.csv` |
 
 Varmuuskopiointi on kansion kopioimista. Jos haluat kirjanpitosi useammalle
 koneelle, pidä kansio pilvitallennuksessa (esim. iCloud, OneDrive, Google
@@ -127,8 +123,8 @@ ei tuota ristiriitaisia kopioita.
 
 Siinä kaikki. `koodi/`-kansiossa ei ole yhtään sinun tiedostoasi, joten sen
 korvaaminen kokonaan on turvallista — se on itse asiassa toivottavaa, koska
-näin vanhat tiedostot eivät jää roikkumaan. Kirjanpitosi, sääntösi ja
-asetuksesi ovat kansiossa ylempänä, eikä päivitys kosketa niitä.
+näin vanhat tiedostot eivät jää roikkumaan. Kaikki omasi on kansioissa
+`asetukset/`, `data/` ja `inbox/`, eikä päivitys kosketa niitä.
 
 Käynnistimiä `Aloita.command` ja `Aloita.bat` ei tarvitse päivittää: ne ovat
 muutaman rivin tynkiä, jotka vain käynnistävät `koodi/`-kansion sisällön.
