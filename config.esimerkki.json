@@ -1,0 +1,206 @@
+{
+  "omat_ibanit": [
+    "LISÄÄ TÄHÄN OMAT IBANISI (siirrot tunnistetaan automaattisesti)"
+  ],
+  "kategoriat": {
+    "Päivittäistavarat": "meno",
+    "Ravintolat & kahvilat": "meno",
+    "Asuminen": "meno",
+    "Liikkuminen": "meno",
+    "Auto": "meno",
+    "Lapset": "meno",
+    "Terveys & hyvinvointi": "meno",
+    "Päihteet": "meno",
+    "Tilaukset & liittymät": "meno",
+    "Koti & shoppailu": "meno",
+    "Käteinen": "meno",
+    "Muut menot": "meno",
+    "TARKISTA": "meno",
+    "Palkka": "tulo",
+    "Osinko": "tulo",
+    "Vuokratulo": "tulo",
+    "Muu tulo": "tulo",
+    "Siirto": "pois",
+    "Sijoitukset": "pois",
+    "Henkilömaksut": "meno",
+    "Kehitys": "meno",
+    "Matkailu": "meno",
+    "Ulkonäkö": "meno",
+    "Vaatetus": "meno",
+    "Harrastukset": "meno",
+    "Yhdistysjäsenyydet": "meno",
+    "Kulttuuri": "meno",
+    "Lahjat": "meno",
+    "Lahjoitukset": "meno",
+    "Verot": "meno",
+    "Laina": "pois",
+    "Luoton lyhennys": "pois",
+    "Rahoitustulot": "tulo",
+    "Yritysveloitus": "pois"
+  },
+  "lahteet": {
+    "op_tili": {
+      "tili": "OP-tili",
+      "tunniste_sarakkeet": [
+        "Kirjauspäivä",
+        "Määrä EUROA"
+      ],
+      "pvm_muoto": "%d.%m.%Y",
+      "desimaali": ",",
+      "sarakkeet": {
+        "pvm": [
+          "Kirjauspäivä"
+        ],
+        "summa": [
+          "Määrä EUROA",
+          "Määrä"
+        ],
+        "saaja": [
+          "Saaja/Maksaja"
+        ],
+        "selite": [
+          "Selitys",
+          "Viesti"
+        ],
+        "iban": [
+          "Saajan tilinumero ja pankin BIC",
+          "Saajan tilinumero"
+        ]
+      }
+    },
+    "kortti_pdf": {
+      "tili": "Luottokortti",
+      "tunniste_sarakkeet": [
+        "Ostopäivä",
+        "Ostopaikka",
+        "Tili"
+      ],
+      "pvm_muoto": "%Y-%m-%d",
+      "desimaali": ".",
+      "sarakkeet": {
+        "pvm": [
+          "Ostopäivä"
+        ],
+        "summa": [
+          "Summa"
+        ],
+        "saaja": [
+          "Ostopaikka"
+        ],
+        "selite": [
+          "Selite"
+        ],
+        "tili": [
+          "Tili"
+        ]
+      }
+    },
+    "s_pankki_tili": {
+      "tili": "S-Pankki",
+      "tunniste_sarakkeet": [
+        "Kirjauspäivä",
+        "Summa"
+      ],
+      "pvm_muoto": "%d.%m.%Y",
+      "desimaali": ",",
+      "sarakkeet": {
+        "pvm": [
+          "Kirjauspäivä",
+          "Maksupäivä"
+        ],
+        "summa": [
+          "Summa"
+        ],
+        "saaja": [
+          "Saajan nimi",
+          "Saaja tai maksaja",
+          "Maksajan nimi"
+        ],
+        "selite": [
+          "Maksaja",
+          "Viesti",
+          "Tapahtumalaji"
+        ],
+        "iban": [
+          "Saajan tilinumero",
+          "Tilinumero"
+        ]
+      }
+    },
+    "revolut": {
+      "tili": "Revolut",
+      "tunniste_sarakkeet": [
+        "Completed Date",
+        "Description",
+        "Amount"
+      ],
+      "pvm_muoto": "%Y-%m-%d %H:%M:%S",
+      "desimaali": ".",
+      "suodata": {
+        "State": [
+          "COMPLETED"
+        ]
+      },
+      "sarakkeet": {
+        "pvm": [
+          "Completed Date",
+          "Started Date"
+        ],
+        "summa": [
+          "Amount"
+        ],
+        "kulu": [
+          "Fee"
+        ],
+        "saaja": [
+          "Description"
+        ],
+        "selite": [
+          "Type",
+          "Product"
+        ]
+      }
+    },
+    "holvi": {
+      "tili": "Holvi (Amethemis)",
+      "tunniste_sarakkeet": [
+        "Payment date",
+        "Amount"
+      ],
+      "pvm_muoto": "%Y-%m-%d",
+      "desimaali": ".",
+      "sarakkeet": {
+        "pvm": [
+          "Payment date",
+          "Date",
+          "Value date"
+        ],
+        "summa": [
+          "Amount"
+        ],
+        "saaja": [
+          "Counterparty",
+          "Payer/Receiver",
+          "Recipient"
+        ],
+        "selite": [
+          "Message",
+          "Description",
+          "Reference"
+        ]
+      }
+    }
+  },
+  "alkaen": "2025-01-01",
+  "pankkihaku": {
+    "palvelu": "enablebanking",
+    "redirect_url": "https://SOVELLUKSELLESI-REKISTERÖITY-OSOITE",
+    "tilit": [
+      {
+        "tili": "OP-tili",
+        "account_id": "TILIN-UID-VELHOLTA",
+        "alkaen": "2025-01-01"
+      }
+    ]
+  }
+}

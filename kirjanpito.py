@@ -1,0 +1,4204 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+kirjanpito.py — kevyt, pankkiriippumaton henkilökohtainen rahaputki.
+
+Ei riippuvuuksia (pelkkä Pythonin standardikirjasto). Idempotentti:
+saman tiliotteen voi tuoda montaa kertaa, päällekkäisyydet ohitetaan.
+
+Komennot:
+  python3 kirjanpito.py aja                # lue inbox/, luokittele, raportoi
+  python3 kirjanpito.py opi               # lue täytetty tarkistettavat.csv takaisin
+  python3 kirjanpito.py raportti [--kk N] # rakenna raportit uudelleen
+  python3 kirjanpito.py budjetti-ehdotus  # ehdota raamit toteuman mediaanista
+  python3 kirjanpito.py kurkista TIEDOSTO # näytä miten tiedosto tulkittaisiin
+"""
+
+import argparse
+import calendar
+import csv
+import hashlib
+import html
+import time
+import json
+import re
+import shutil
+import statistics
+import sys
+from collections import Counter, defaultdict
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+JUURI = Path(__file__).resolve().parent
+INBOX = JUURI / "inbox"
+ARKISTO = INBOX / "arkisto"
+DATA = JUURI / "data"
+RAPORTIT = JUURI / "raportit"
+LEDGER = DATA / "tapahtumat.csv"
+SAANNOT = JUURI / "saannot.csv"
+CONFIG = JUURI / "config.json"
+BUDJETTI = JUURI / "budjetti.csv"
+TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
+
+VERSIO = "v122"
+
+LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria", "tarkenne", "peruste", "lahde"]
+PVM_MUODOT = ["%d.%m.%Y", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y", "%d.%m.%y"]
+ENKOODAUKSET = ["utf-8-sig", "utf-8", "iso-8859-1"]
+
+
+# ---------------------------------------------------------------- apurit
+
+def lue_config():
+    with open(CONFIG, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def lue_teksti(polku: Path):
+    """Lue tiedosto kokeillen yleisimmät enkoodaukset. UTF-8 ensin; jos ei kelpaa,
+    valitaan 8-bittisistä (cp1252 / Mac Roman / latin-1) se, joka tuottaa eniten
+    suomea ja vähiten roskamerkkejä — Excel Macilla tallentaa usein Mac Romania."""
+    import threading
+    vahti = threading.Timer(4.0, lambda: print(
+        f"⏳ {polku.name}: luku kestää — pilvisynkka (esim. Google Drive) lataa "
+        f"tiedostoa? Harkitse kansion merkitsemistä 'Available offline'."))
+    vahti.daemon = True
+    vahti.start()
+    try:
+        data = polku.read_bytes()
+    finally:
+        vahti.cancel()
+    for enc in ("utf-8-sig", "utf-8"):
+        try:
+            return data.decode(enc), enc
+        except UnicodeDecodeError:
+            continue
+    paras, paras_enc, paras_p = None, "?", -10**9
+    for enc in ("windows-1252", "mac_roman", "iso-8859-1"):
+        try:
+            t = data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+        p = sum(t.count(c) for c in "äöåÄÖÅéü€") - sum(t.count(c) for c in "ŠŽšž‰†°¤ƒ√∫")
+        if p > paras_p:
+            paras, paras_enc, paras_p = t, enc, p
+    return paras, paras_enc
+
+
+def siisti(s):
+    return re.sub(r"\s+", " ", (s or "").strip())
+
+
+def normalisoi(s):
+    return siisti(s).lower()
+
+
+def parsi_summa(raaka, desimaali=","):
+    """'−1 975,80 €' -> -1975.80  (kestää €-merkit, välit, unicode-miinuksen)."""
+    s = (raaka or "").replace("\u2212", "-").replace("\u00a0", " ").replace("€", "")
+    s = s.replace("EUR", "").strip().replace(" ", "")
+    if not s:
+        raise ValueError("tyhjä summa")
+    if desimaali == ",":
+        s = s.replace(".", "").replace(",", ".")
+    else:
+        s = s.replace(",", "")
+    return round(float(s), 2)
+
+
+def parsi_pvm(raaka, ensisijainen=None):
+    s = siisti(raaka)
+    muodot = ([ensisijainen] if ensisijainen else []) + PVM_MUODOT
+    for m in muodot:
+        try:
+            return datetime.strptime(s, m).date()
+        except (ValueError, TypeError):
+            continue
+    raise ValueError(f"päivämäärää ei tunnistettu: {raaka!r}")
+
+
+def fmt_eur(x):
+    """1234.5 -> '1 234,50' (suomalainen muotoilu)."""
+    s = f"{x:,.2f}".replace(",", " ").replace(".", ",")
+    return s
+
+
+# ---------------------------------------------------------------- säännöt
+
+def _saanto_fyysiset(teksti):
+    """Sääntötiedoston loogiset rivit: [(fyysinen_rivi_indeksi, osat)].
+    Yksi fyysinen rivi = aina yksi tietue, kommentit ja otsikkorivit ohitetaan.
+    Sama laskuri kaikille (näyttö, siirto, moottori), jotta #-numerointi täsmää."""
+    ulos = []
+    for i, rv in enumerate(teksti.splitlines()):
+        if not rv.strip() or rv.lstrip().startswith("#"):
+            continue
+        osat = next(csv.reader([rv], delimiter=";"), [])
+        if not osat or not siisti(osat[0]) or normalisoi(osat[0]) == "malli":
+            continue
+        ulos.append((i, osat))
+    return ulos
+
+
+def lue_saannot():
+    """saannot.csv: malli;kategoria. Järjestys ratkaisee (ensimmäinen osuma voittaa).
+    Malli on osamerkkijono (kirjainkoosta riippumaton) tai 're:'-alkuinen regex."""
+    saannot = []
+    if not SAANNOT.exists():
+        return saannot
+    teksti, _ = lue_teksti(SAANNOT)
+    for _, rivi in _saanto_fyysiset(teksti):
+        malli = normalisoi(rivi[0])
+        kategoria = siisti(rivi[1]) if len(rivi) > 1 else ""
+        ehto = siisti(rivi[2]) if len(rivi) > 2 else ""
+        if malli.startswith("re:"):
+            saannot.append(("re", re.compile(malli[3:], re.IGNORECASE), kategoria, ehto, malli))
+        else:
+            saannot.append(("osa", malli, kategoria, ehto, malli))
+    return saannot
+
+
+def _ehto_ok(ehto, summa):
+    """Summaehto: 'max=50' -> |summa| <= 50, 'min=50' -> |summa| >= 50."""
+    if not ehto:
+        return True
+    try:
+        op, raja = ehto.split("=")
+        raja = float(raja.replace(",", "."))
+    except ValueError:
+        return True
+    a = abs(float(summa))
+    return a <= raja + 1e-9 if op.strip() == "max" else (a >= raja - 1e-9 if op.strip() == "min" else True)
+
+
+def lue_saannot_raaka():
+    """Säännöt näyttömuodossa: [{malli, kategoria, ehto}], kommentit ohitetaan."""
+    ulos = []
+    if not SAANNOT.exists():
+        return ulos
+    teksti, _ = lue_teksti(SAANNOT)
+    for _, rivi in _saanto_fyysiset(teksti):
+        ulos.append({"malli": siisti(rivi[0]), "kategoria": siisti(rivi[1]) if len(rivi) > 1 else "",
+                     "ehto": siisti(rivi[2]) if len(rivi) > 2 else ""})
+    return ulos
+
+
+def poista_saanto(malli, kategoria="", ehto=""):
+    """Poista sääntö(t), joiden malli (+ kategoria/ehto jos annettu) täsmää. Palauttaa määrän."""
+    if not SAANNOT.exists():
+        return 0
+    teksti, _ = lue_teksti(SAANNOT)
+    m_n, k_n, e_n = normalisoi(malli), siisti(kategoria).lower(), siisti(ehto).lower()
+    jaa, poistettu = [], 0
+    for rivi in teksti.splitlines():
+        osat = next(csv.reader([rivi], delimiter=";"), [])
+        if (osat and not rivi.startswith("#") and normalisoi(osat[0]) == m_n
+                and (not k_n or (len(osat) > 1 and siisti(osat[1]).lower() == k_n))
+                and (not e_n or (len(osat) > 2 and siisti(osat[2]).lower() == e_n))):
+            poistettu += 1
+            continue
+        jaa.append(rivi)
+    if poistettu:
+        SAANNOT.write_text("\n".join(jaa) + "\n", encoding="utf-8")
+    return poistettu
+
+
+def _riisu(malli):
+    """Mallin ydin vertailua varten: re:-etuliite ja \\b-merkit pois."""
+    m = normalisoi(malli)
+    if m.startswith("re:"):
+        m = m[3:]
+    return m.replace("\\b", "").replace("\\", "")
+
+
+def _sijoituskohta(mallit, uusi_malli):
+    """Indeksi, jonka EDELLE tarkempi sääntö kuuluu (None = loppuun).
+    Tarkempi = uusi malli sisältää olemassa olevan mallin ytimen."""
+    uusi_r = _riisu(uusi_malli)
+    for i, m in enumerate(mallit):
+        vanha_r = _riisu(m)
+        if vanha_r and vanha_r != uusi_r and vanha_r in uusi_r:
+            return i
+    return None
+
+
+def lisaa_saanto(malli, kategoria, ehto=""):
+    """Lisää sääntö: yleissääntöä tarkempi malli sijoitetaan automaattisesti
+    sen edelle (poikkeus voittaa), muuten loppuun."""
+    rivi_uusi = ";".join([malli, kategoria] + ([ehto] if ehto else []))
+    if not SAANNOT.exists():
+        SAANNOT.write_text("malli;kategoria\n" + rivi_uusi + "\n", encoding="utf-8")
+        return
+    teksti, _ = lue_teksti(SAANNOT)
+    rivit = teksti.splitlines()
+    saanto_rivit = []  # (rivinumero, malli)
+    for i, rv in enumerate(rivit):
+        if not rv.strip() or rv.startswith("#"):
+            continue
+        osat = next(csv.reader([rv], delimiter=";"), [])
+        if osat and siisti(osat[0]) and normalisoi(osat[0]) != "malli":
+            saanto_rivit.append((i, osat[0]))
+    kohta = _sijoituskohta([m for _, m in saanto_rivit], malli)
+    if kohta is None:
+        rivit.append(rivi_uusi)
+    else:
+        rivit.insert(saanto_rivit[kohta][0], rivi_uusi)
+    SAANNOT.write_text("\n".join(rivit) + "\n", encoding="utf-8")
+
+
+def siirra_saanto(malli, kategoria="", ehto="", suunta=-1, kohde_sija=None):
+    """Siirrä sääntöä askel ylös/alas (suunta) tai suoraan sijaintiin (kohde_sija, 1-pohjainen)."""
+    if not SAANNOT.exists():
+        return False
+    teksti, _ = lue_teksti(SAANNOT)
+    rivit = teksti.splitlines()
+    m_n, k_n = normalisoi(malli), siisti(kategoria).lower()
+    indeksit = []
+    kohde = None
+    for i, osat in _saanto_fyysiset(teksti):
+        indeksit.append(i)
+        if (kohde is None and normalisoi(osat[0]) == m_n
+                and (not k_n or (len(osat) > 1 and siisti(osat[1]).lower() == k_n))):
+            kohde = len(indeksit) - 1
+    if kohde is None:
+        return False
+    if kohde_sija is not None:
+        t = max(0, min(len(indeksit) - 1, int(kohde_sija) - 1))
+        if t == kohde:
+            return True
+        a = indeksit[kohde]
+        sisalto = rivit[a]
+        del rivit[a]
+        rivit.insert(indeksit[t], sisalto)
+        SAANNOT.write_text("\n".join(rivit) + "\n", encoding="utf-8")
+        return True
+    naapuri = kohde + (1 if suunta > 0 else -1)
+    if naapuri < 0 or naapuri >= len(indeksit):
+        return False
+    a, b = indeksit[kohde], indeksit[naapuri]
+    rivit[a], rivit[b] = rivit[b], rivit[a]
+    SAANNOT.write_text("\n".join(rivit) + "\n", encoding="utf-8")
+    return True
+
+
+def luokittele(rivi, saannot, omat_ibanit):
+    teksti = normalisoi(f"{rivi['saaja']} {rivi['selite']}")
+    summa = rivi.get("summa", 0.0)
+    for tyyppi, malli, kategoria, ehto, raaka in saannot:
+        osuu = malli.search(teksti) if tyyppi == "re" else (malli in teksti)
+        if osuu and _ehto_ok(ehto, summa):
+            return kategoria, f"sääntö: {raaka}"
+    # eksplisiittinen sääntö voittaa; vasta sitten oma-IBAN-heuristiikka
+    kohde = (normalisoi(rivi.get("iban", "")) + " " + teksti).replace(" ", "")
+    for oma in omat_ibanit:
+        oma_n = normalisoi(oma).replace(" ", "")
+        if oma_n and oma_n in kohde:
+            return "Siirto", "oma tili"
+    return "TARKISTA", ""
+
+
+# ---------------------------------------------------------------- lähteiden tulkinta
+
+def hae_sarake(otsikot, ehdokkaat):
+    """Palauta ensimmäinen otsikoista löytyvä ehdokassarake (tai None)."""
+    norm = {normalisoi(o): o for o in otsikot}
+    if isinstance(ehdokkaat, str):
+        ehdokkaat = [ehdokkaat]
+    for e in ehdokkaat:
+        if normalisoi(e) in norm:
+            return norm[normalisoi(e)]
+    return None
+
+
+def tunnista_lahde(otsikot, cfg):
+    """Etsi config.json:sta lähde, jonka tunnistesarakkeet löytyvät otsikkoriviltä."""
+    for nimi, l in cfg["lahteet"].items():
+        if all(hae_sarake(otsikot, t) for t in l["tunniste_sarakkeet"]):
+            return nimi, l
+    return None, None
+
+
+def _rev_eur(s):
+    """'-€0.26', '€1,234.56' tai '£18.00 (€20.85)' -> euromäärä floattina."""
+    s = (s or "").strip()
+    if not s:
+        return None
+    m = re.search(r"\(([^)]*)\)", s)
+    if m:
+        s = m.group(1)  # valuuttariveillä euro-vastine suluissa
+    s = re.sub(r"[^0-9.\-]", "", s)
+    try:
+        return round(float(s), 2)
+    except ValueError:
+        return None
+
+
+def parsi_revolut_v2(teksti):
+    """Revolutin 'consolidated statement v2': monilohkoinen raportti, josta
+    poimitaan vain Personal Account -tilien tapahtumataulukot. Taskusiirrot
+    (To pocket / To investment account) luokittuvat säännöillä Sijoituksiksi."""
+    rivit, varoitukset = [], []
+    otsikko, taulussa = "", False
+    PVM_ENG = re.compile(r"^[A-Z][a-z]{2} \d{1,2}, \d{4}$")
+    for osat in csv.reader(teksti.splitlines()):
+        if not osat:
+            continue
+        eka = (osat[0] or "").strip()
+        if taulussa:
+            if PVM_ENG.match(eka) and len(osat) >= 4:
+                try:
+                    pvm = datetime.strptime(eka, "%b %d, %Y").date()
+                except ValueError:
+                    taulussa = False
+                else:
+                    summa = _rev_eur(osat[3])
+                    if summa is not None:
+                        rivit.append({
+                            "pvm": pvm, "summa": summa,
+                            "saaja": siisti(osat[1]),
+                            "selite": siisti(f"{osat[2]} | {otsikko}"),
+                            "iban": "", "tili": "Revolut",
+                        })
+                    continue
+            else:
+                taulussa = False
+        if eka == "Date":
+            taulussa = otsikko.startswith("Personal Account")
+            continue
+        if (eka and eka not in ("Transaction statement", "---------")
+                and not eka.startswith("Total") and not PVM_ENG.match(eka)):
+            otsikko = eka
+    if not rivit:
+        varoitukset.append("Revolut consolidated: yhtään tapahtumaa ei löytynyt Personal Account -taulukoista")
+    return "revolut_consolidated", rivit, varoitukset
+
+
+def parsi_tiedosto(polku: Path, cfg):
+    """Palauttaa (lahteen_nimi, rivit, varoitukset). Rivi = dict(pvm, summa, saaja, selite, tili, iban)."""
+    teksti, enc = lue_teksti(polku)
+    varoitukset = []
+    ekarivi = teksti.splitlines()[0] if teksti.strip() else ""
+    if "Current Accounts Summaries" in ekarivi or '"Transaction statement"' in teksti:
+        return parsi_revolut_v2(teksti)
+    erotin = ";" if ekarivi.count(";") >= ekarivi.count(",") else ","
+    lukija = csv.DictReader(teksti.splitlines(), delimiter=erotin)
+    otsikot = lukija.fieldnames or []
+    nimi, l = tunnista_lahde(otsikot, cfg)
+    if not nimi:
+        raise ValueError(
+            f"Tuntematon tiedostomuoto: {polku.name}\n"
+            f"  Otsikot: {otsikot}\n"
+            f"  Lisää sopiva lähde config.json:iin (apuna: python3 kirjanpito.py kurkista {polku.name})"
+        )
+    s = l["sarakkeet"]
+    pvm_sar = hae_sarake(otsikot, s["pvm"])
+    summa_sar = hae_sarake(otsikot, s["summa"])
+    saaja_sar = hae_sarake(otsikot, s.get("saaja", []))
+    selite_sar = [hae_sarake(otsikot, e) for e in s.get("selite", [])]
+    selite_sar = [x for x in selite_sar if x]
+    iban_sar = hae_sarake(otsikot, s.get("iban", []))
+    kulu_sar = hae_sarake(otsikot, s.get("kulu", []))
+    tili_sar = hae_sarake(otsikot, s.get("tili", []))
+    suodata = l.get("suodata", {})
+
+    rivit = []
+    for n, raaka in enumerate(lukija, start=2):
+        try:
+            ohita = False
+            for sar, sallittu in suodata.items():
+                oikea = hae_sarake(otsikot, sar)
+                if oikea and siisti(raaka.get(oikea, "")) not in sallittu:
+                    ohita = True
+            if ohita:
+                continue
+            if not siisti(raaka.get(pvm_sar, "")):
+                continue
+            summa = parsi_summa(raaka.get(summa_sar, ""), l.get("desimaali", ","))
+            if kulu_sar and siisti(raaka.get(kulu_sar, "")):
+                summa = round(summa - abs(parsi_summa(raaka.get(kulu_sar), l.get("desimaali", ","))), 2)
+            rivit.append({
+                "pvm": parsi_pvm(raaka.get(pvm_sar, ""), l.get("pvm_muoto")),
+                "summa": summa,
+                "saaja": siisti(raaka.get(saaja_sar, "")) if saaja_sar else "",
+                "selite": siisti(" ".join(raaka.get(x, "") or "" for x in selite_sar)),
+                "iban": siisti(raaka.get(iban_sar, "")) if iban_sar else "",
+                "tili": (siisti(raaka.get(tili_sar, "")) if tili_sar else "") or l["tili"],
+            })
+        except Exception as e:
+            varoitukset.append(f"{polku.name} rivi {n}: {e}")
+    return nimi, rivit, varoitukset
+
+
+# ---------------------------------------------------------------- pääkirja
+
+def lue_ledger():
+    if not LEDGER.exists():
+        return []
+    with open(LEDGER, encoding="utf-8") as f:
+        return list(csv.DictReader(f, delimiter=";"))
+
+
+def _varmuuskopioi_ledger():
+    """Ennen jokaista pääkirjan kirjoitusta: nykyinen versio talteen
+    data/varmuuskopiot/-kansioon; 20 tuoreinta säilytetään."""
+    if not LEDGER.exists():
+        return
+    kansio = DATA / "varmuuskopiot"
+    kohde = kansio / f"tapahtumat_{time.strftime('%Y-%m-%d_%H%M%S')}.csv"
+    viimeisin = None
+    for yritys in range(3):
+        try:
+            kansio.mkdir(parents=True, exist_ok=True)
+            if not kohde.exists():
+                shutil.copy2(LEDGER, kohde)
+            break
+        except OSError as e:
+            # Pilvisynkka (esim. Google Drive) voi hetkellisesti viedä kansion alta.
+            viimeisin = e
+            time.sleep(0.6)
+    else:
+        raise RuntimeError(
+            f"Varmuuskopiota ei saatu kirjoitettua ({viimeisin}) — tallennus keskeytetty "
+            f"turvallisuussyistä. Tarkista että kansio {kansio} on olemassa "
+            f"(pilvisynkka voi piilottaa sen hetkellisesti; kokeile uudelleen).")
+    for ylimaara in sorted(kansio.glob("tapahtumat_*.csv"))[:-20]:
+        try:
+            ylimaara.unlink()
+        except OSError:
+            pass
+
+
+def kirjoita_ledger(rivit):
+    DATA.mkdir(exist_ok=True)
+    _varmuuskopioi_ledger()
+    for r in rivit:
+        r["tarkenne"] = siisti(r.get("tarkenne", "")).lower()
+        r.setdefault("peruste", "")
+    rivit.sort(key=lambda r: (r["pvm"], r["tili"], r["id"]))
+    with open(LEDGER, "w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=LEDGER_KENTAT, delimiter=";")
+        w.writeheader()
+        w.writerows(rivit)
+
+
+def avain(tili, pvm, summa, saaja):
+    return f"{tili}|{pvm}|{summa:.2f}|{normalisoi(saaja)[:40]}"
+
+
+def tee_id(av, jarjestys):
+    return hashlib.sha1(f"{av}#{jarjestys}".encode()).hexdigest()[:10]
+
+
+# ---------------------------------------------------------------- komennot
+
+GC_API = "https://bankaccountdata.gocardless.com/api/v2"
+
+
+def _env_salaisuudet():
+    """GC_SECRET_ID/GC_SECRET_KEY ympäristöstä tai .env-tiedostosta (avain=arvo-rivit)."""
+    import os
+    arvot = {"GC_SECRET_ID": os.environ.get("GC_SECRET_ID", ""),
+             "GC_SECRET_KEY": os.environ.get("GC_SECRET_KEY", "")}
+    env = JUURI / ".env"
+    if env.exists():
+        for rv in env.read_text(encoding="utf-8").splitlines():
+            if "=" in rv and not rv.lstrip().startswith("#"):
+                k, _, v = rv.partition("=")
+                k, v = k.strip(), v.strip()
+                if k in arvot and not arvot[k]:
+                    arvot[k] = v
+    return arvot
+
+
+def gc_nouda(account_id, cfg):
+    """Nouda tilin tapahtumat GoCardless Bank Account Data -rajapinnasta.
+    HUOM: kirjoitettu dokumentaation mukaan, EI testattu livenä (uusien
+    tunnusten luonti oli palvelussa tauolla 7/2026). Mock-adapteri kattaa
+    kaiken tämän jälkeisen putken."""
+    import urllib.request
+    sal = _env_salaisuudet()
+    if not sal["GC_SECRET_ID"] or not sal["GC_SECRET_KEY"]:
+        raise ValueError("GC_SECRET_ID / GC_SECRET_KEY puuttuvat (.env tai ympäristömuuttujat)")
+
+    def _kutsu(polku, runko=None, token=None):
+        data = json.dumps(runko).encode() if runko is not None else None
+        req = urllib.request.Request(GC_API + polku, data=data,
+                                     headers={"Content-Type": "application/json",
+                                              **({"Authorization": f"Bearer {token}"} if token else {})})
+        with urllib.request.urlopen(req, timeout=30) as v:
+            return json.loads(v.read().decode())
+
+    tok = _kutsu("/token/new/", {"secret_id": sal["GC_SECRET_ID"],
+                                 "secret_key": sal["GC_SECRET_KEY"]})["access"]
+    return _kutsu(f"/accounts/{account_id}/transactions/", token=tok)
+
+
+EB_API = "https://api.enablebanking.com"
+
+
+def _eb_asetukset():
+    """EB_APP_ID ja EB_KEY_PATH (.pem) ympäristöstä tai .env-tiedostosta."""
+    import os
+    arvot = {"EB_APP_ID": os.environ.get("EB_APP_ID", ""),
+             "EB_KEY_PATH": os.environ.get("EB_KEY_PATH", "")}
+    env = JUURI / ".env"
+    if env.exists():
+        for rv in env.read_text(encoding="utf-8").splitlines():
+            if "=" in rv and not rv.lstrip().startswith("#"):
+                k, _, v = rv.partition("=")
+                if k.strip() in arvot and not arvot[k.strip()]:
+                    arvot[k.strip()] = v.strip()
+    return arvot
+
+
+def eb_jwt(app_id, avain_pem):
+    """Enable Bankingin vaatima RS256-JWT: kid = sovelluksen id."""
+    try:
+        import jwt
+    except ImportError:
+        raise ValueError("asenna ensin: pip install pyjwt cryptography")
+    nyt = int(time.time())
+    return jwt.encode({"iss": "enablebanking.com", "aud": "api.enablebanking.com",
+                       "iat": nyt, "exp": nyt + 3600},
+                      avain_pem, algorithm="RS256", headers={"kid": app_id})
+
+
+def eb_token():
+    a = _eb_asetukset()
+    polku = Path(a["EB_KEY_PATH"]).expanduser() if a["EB_KEY_PATH"] else None
+    if not a["EB_APP_ID"] or not polku or not polku.exists():
+        raise ValueError("EB_APP_ID ja EB_KEY_PATH (.pem-polku) puuttuvat .env-tiedostosta")
+    return eb_jwt(a["EB_APP_ID"], polku.read_text(encoding="utf-8"))
+
+
+class EBVirhe(ValueError):
+    def __init__(self, koodi, runko):
+        super().__init__(f"EB vastasi {koodi}: {runko}")
+        self.koodi, self.runko = koodi, runko
+
+
+def _eb_kutsu(polku, token, runko=None):
+    import urllib.request
+    import urllib.error
+    data = json.dumps(runko).encode() if runko is not None else None
+    req = urllib.request.Request(EB_API + polku, data=data,
+                                 headers={"Authorization": f"Bearer {token}",
+                                          "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as v:
+            return json.loads(v.read().decode())
+    except urllib.error.HTTPError as e:
+        try:
+            teksti = e.read().decode()[:300]
+        except OSError:
+            teksti = ""
+        raise EBVirhe(e.code, teksti) from e
+
+
+def eb_riveiksi(data):
+    """Enable Bankingin tapahtumamuoto -> {pvm, summa, saaja, selite}."""
+    ulos = []
+    for tx in data.get("transactions", []) or []:
+        try:
+            pvm = date.fromisoformat(str(tx.get("booking_date") or tx.get("value_date")
+                                         or tx.get("transaction_date")))
+            summa = round(float(tx.get("transaction_amount", {}).get("amount")), 2)
+        except (TypeError, ValueError):
+            continue
+        if str(tx.get("credit_debit_indicator", "")).upper() == "DBIT" and summa > 0:
+            summa = -summa
+        osap = (tx.get("creditor") if summa < 0 else tx.get("debtor")) or {}
+        saaja = siisti(osap.get("name") or (tx.get("creditor") or {}).get("name")
+                       or (tx.get("debtor") or {}).get("name") or "")
+        rem = tx.get("remittance_information") or []
+        if isinstance(rem, str):
+            rem = [rem]
+        btc = tx.get("bank_transaction_code")
+        if isinstance(btc, dict):
+            btc = "/".join(str(x) for x in (btc.get("code"), btc.get("sub_code"),
+                                            btc.get("description")) if x)
+        viite = tx.get("entry_reference") or tx.get("reference_number") or ""
+        tilinro = ((tx.get("creditor_account") or {}).get("iban")
+                   or (tx.get("debtor_account") or {}).get("iban") or "")
+        selite = siisti(" ".join(str(x) for x in [*rem, btc, tilinro, tx.get("note"),
+                                                  viite and f"viite {viite}"] if x))
+        if not saaja:
+            # varasaaja vain viestiosasta - koodit ja viitteet eivät kuulu nimeen
+            saaja = siisti(" ".join(str(x) for x in rem))[:40] or selite[:40]
+        ulos.append({"pvm": pvm, "summa": summa, "saaja": saaja, "selite": selite})
+    return ulos
+
+
+def _eb_raja(paivia, cfg_alkaen, tili_alkaen):
+    """Noudon alkupäivä: enintään `paivia` taakse, ei ennen globaalia eikä
+    tilikohtaista alkaen-katkopäivää."""
+    raja = date.today() - timedelta(days=max(1, int(paivia)))
+    for a in (cfg_alkaen, tili_alkaen):
+        a = siisti(str(a or ""))
+        if a and a > raja.isoformat():
+            try:
+                raja = date.fromisoformat(a)
+            except ValueError:
+                pass
+    return raja
+
+
+def eb_nouda(account_uid, cfg, paivia=89, tili_alkaen=""):
+    """Noutaa enintään `paivia` päivän historian. PSD2 sallii yli 90 pv:n
+    historian vain tuoreen tunnistautumisen yhteydessä — pidempi pyyntö on
+    tyypillinen 422-virheen syy (OP, Revolut). Jatkosivun virhe ei kaada
+    noutoa vaan palauttaa siihen asti saadut."""
+    tok = eb_token()
+    raja = _eb_raja(paivia, cfg.get("alkaen", ""), tili_alkaen)
+    kaikki = {"transactions": []}
+    jatko = None
+    while True:
+        polku = (f"/accounts/{account_uid}/transactions?date_from={raja.isoformat()}"
+                 + (f"&continuation_key={jatko}" if jatko else ""))
+        try:
+            data = _eb_kutsu(polku, tok)
+        except EBVirhe as e:
+            if jatko:
+                print(f"⚠ jatkosivu katkesi ({e.koodi}) — {len(kaikki['transactions'])} "
+                      f"tapahtumaa saatiin talteen. {e.runko}")
+                break
+            raise
+        kaikki["transactions"] += data.get("transactions", []) or []
+        jatko = data.get("continuation_key")
+        if not jatko:
+            break
+    return kaikki
+
+
+def _siivoa_koodi(s):
+    """Poimii ?code=-arvon liimauksesta: kelpaa koko URL, code&state-pötkö tai paljas koodi."""
+    s = siisti(s)
+    if "code=" in s:
+        s = s.split("code=", 1)[1]
+    return s.split("&")[0].strip()
+
+
+def eb_istunto(session_id):
+    """Listaa istunnon tilit uid:einesi — valmiit config.jsonin account_id-arvoiksi."""
+    tok = eb_token()
+    data = _eb_kutsu(f"/sessions/{siisti(session_id)}", tok)
+    tilit = data.get("accounts") or []
+    if not tilit:
+        print("istunnossa ei tilejä (tai vastausmuoto yllätti):")
+        print(json.dumps(data, ensure_ascii=False)[:400])
+        return
+    print(f"Istunnon {siisti(session_id)[:8]}… tilit:")
+    for acc in tilit:
+        if isinstance(acc, str):
+            uid = acc
+            try:
+                acc = _eb_kutsu(f"/accounts/{uid}/details", tok)
+            except EBVirhe as e:
+                print(f"  {uid}  (tietoja ei saatu: {e.koodi})")
+                continue
+        else:
+            uid = str(acc.get("uid", "?"))
+        aid = acc.get("account_id") or {}
+        tunniste = aid.get("iban") or (aid.get("other") or {}).get("identification") or ""
+        nimi = acc.get("name") or acc.get("product") or ""
+        print(f"  {uid}  {tunniste}  {nimi}".rstrip())
+    print('Lisää config.jsonin pankkihaku.tilit-listaan: {"tili": "…", "account_id": "<uid>", "alkaen": "…"}')
+
+
+def eb_yhdista(nimi, cfg):
+    """Yhdistämisvelho: etsii pankin, avaa valtuutuslinkin, tallentaa tilit configiin.
+    Sandboxissa pankin nimeksi käy 'mock'."""
+    import uuid
+    tok = eb_token()
+    kaikki = _eb_kutsu("/aspsps?country=FI", tok).get("aspsps", [])
+    osuvat = [a for a in kaikki if normalisoi(nimi) in normalisoi(a.get("name", ""))]
+    if not osuvat:
+        print(f"⚠ pankkia '{nimi}' ei löytynyt; tarjolla mm.: "
+              + ", ".join(a.get("name", "") for a in kaikki[:15]))
+        return
+    a = osuvat[0]
+    redirect = siisti(cfg.get("pankkihaku", {}).get("redirect_url", "")) or \
+        "https://enablebanking.com/auth_redirect"
+    try:
+        vastaus = _eb_kutsu("/auth", tok, {
+            "access": {"valid_until": (datetime.now().astimezone() + timedelta(days=90)).isoformat()},
+            "aspsp": {"name": a["name"], "country": a.get("country", "FI")},
+            "psu_type": "personal",
+            "state": str(uuid.uuid4()),
+            "redirect_url": redirect})
+    except EBVirhe as e:
+        if e.koodi == 400:
+            print(f"⚠ EB hylkäsi valtuutuspyynnön (400): {e.runko}")
+            print(f"  Yritetty redirect_url: {redirect}")
+            print("  Todennäköinen syy: osoite ei ole sovelluksesi rekisteröityjen Redirect URLien")
+            print("  listalla. Katso enablebanking.com-portaalista sovelluksesi asetukset ja joko")
+            print("  1) lisää yllä oleva osoite listaan, tai 2) kopioi listalta jokin olemassa oleva")
+            print('  osoite config.jsoniin: "pankkihaku": {..., "redirect_url": "https://..."}')
+            return
+        raise
+    print("Avaa selaimessa ja tunnistaudu:")
+    print("  " + str(vastaus.get("url", "?")))
+    koodi = _siivoa_koodi(input("Liitä uudelleenohjauksen ?code=-arvo (tai koko osoite) tähän: "))
+    istunto = _eb_kutsu("/sessions", tok, {"code": koodi})
+    ph = cfg.setdefault("pankkihaku", {})
+    ph["palvelu"] = "enablebanking"
+    tilit = ph.setdefault("tilit", [])
+    for acc in istunto.get("accounts", []):
+        uid = str(acc.get("uid", ""))
+        iban = (acc.get("account_id") or {}).get("iban", "")
+        print(f"  tili: {uid}  {iban}")
+        tilit.append({"tili": a["name"], "account_id": uid})
+    with open(CONFIG, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    print("✓ tilit tallennettu config.jsoniin — vaihda 'tili'-nimiksi omat tilinimesi "
+          "(OP-tili / S-Pankki / Revolut), jotta CSV-muoto ja dedupe osuvat")
+
+
+def nouda_tapahtumat(palvelu, account_id, cfg, paivia=89, tili_alkaen=""):
+    if palvelu == "mock":
+        polku = LEDGER.parent / "mock_pankki" / f"{account_id}.json"
+        if polku.exists():
+            with open(polku, encoding="utf-8") as f:
+                return json.load(f)
+        # Sisäänrakennettu demo: päivätty ennen config:n 'alkaen'-rajaa,
+        # joten aja näyttää koko putken kirjaamatta riviäkään pääkirjaan.
+        return {"transactions": {"booked": [
+            {"bookingDate": "2025-07-10", "transactionAmount": {"amount": "-12.34", "currency": "EUR"},
+             "creditorName": "DEMO KAUPPA", "remittanceInformationUnstructured": "kuivaharjoittelu"},
+            {"bookingDate": "2025-07-11", "transactionAmount": {"amount": "-3.21", "currency": "EUR"},
+             "creditorName": "DEMO KAHVILA", "remittanceInformationUnstructured": "kuivaharjoittelu"}]}}
+    if palvelu == "gocardless":
+        return gc_nouda(account_id, cfg)
+    if palvelu == "enablebanking":
+        return eb_nouda(account_id, cfg, paivia, tili_alkaen)
+    raise ValueError(f"tuntematon palvelu '{palvelu}'")
+
+
+def gc_riveiksi(data):
+    """PSD2-muotoiset tapahtumat -> {pvm, summa, saaja, selite} pankin etumerkein."""
+    ulos = []
+    for tx in (data.get("transactions", {}).get("booked", []) or []):
+        try:
+            pvm = date.fromisoformat(str(tx.get("bookingDate") or tx.get("valueDate")))
+            summa = round(float(tx.get("transactionAmount", {}).get("amount")), 2)
+        except (TypeError, ValueError):
+            continue
+        saaja = siisti((tx.get("creditorName") if summa < 0 else tx.get("debtorName")) or
+                       tx.get("creditorName") or tx.get("debtorName") or "")
+        osat = [tx.get("remittanceInformationUnstructured", ""),
+                " ".join(tx.get("remittanceInformationUnstructuredArray", []) or []),
+                tx.get("additionalInformation", ""),
+                tx.get("proprietaryBankTransactionCode", "")]
+        selite = siisti(" ".join(str(x) for x in osat if x))
+        if not saaja:
+            saaja = selite[:40]
+        ulos.append({"pvm": pvm, "summa": summa, "saaja": saaja, "selite": selite})
+    return ulos
+
+
+def kirjoita_pankkicsv(tili, rivit, polku):
+    """Kirjoittaa noudetut tapahtumat samassa muodossa kuin pankin oma CSV, jotta
+    aja-putki (lähteen tunnistus, dedupe-avaimet, säännöt) toimii identtisesti."""
+    with open(polku, "w", encoding="utf-8", newline="") as f:
+        if tili == "Revolut":
+            w = csv.writer(f)
+            w.writerow(["Type", "Product", "Started Date", "Completed Date",
+                        "Description", "Amount", "Fee", "Currency", "State", "Balance"])
+            for r in rivit:
+                w.writerow(["Merchant" if r["summa"] < 0 else "Transfer",
+                            "Personal Account (EUR)",
+                            f"{r['pvm']} 00:00:00", f"{r['pvm']} 00:00:00",
+                            r["saaja"], f"{r['summa']:.2f}", "0.00", "EUR", "COMPLETED", ""])
+        elif tili == "S-Pankki":
+            w = csv.writer(f, delimiter=";")
+            w.writerow(["Kirjauspäivä", "Summa", "Saajan nimi", "Maksaja", "Viesti",
+                        "Saajan tilinumero"])
+            for r in rivit:
+                w.writerow([r["pvm"].strftime("%d.%m.%Y"),
+                            f"{r['summa']:.2f}".replace(".", ","),
+                            r["saaja"], "", r["selite"], ""])
+        elif tili == "OP-tili":
+            w = csv.writer(f, delimiter=";")
+            w.writerow(["Kirjauspäivä", "Määrä EUROA", "Saaja/Maksaja", "Selitys", "Viesti",
+                        "Saajan tilinumero ja pankin BIC"])
+            for r in rivit:
+                w.writerow([r["pvm"].strftime("%d.%m.%Y"),
+                            f"{r['summa']:.2f}".replace(".", ","),
+                            r["saaja"], r["selite"], "", ""])
+        else:
+            # Kortit ja muut tilit: kortti_pdf-muoto, jossa Tili-sarake kantaa
+            # tilin nimen sellaisenaan pääkirjaan (sama muoto kuin laskusta_csv).
+            w = csv.writer(f, delimiter=";")
+            w.writerow(["Ostopäivä", "Summa", "Ostopaikka", "Selite", "Tili"])
+            for r in rivit:
+                w.writerow([r["pvm"].isoformat(), f"{r['summa']:.2f}",
+                            r["saaja"], r["selite"], tili])
+
+
+def cmd_hae(args):
+    cfg = lue_config()
+    ph = cfg.get("pankkihaku") or {}
+    palvelu = getattr(args, "palvelu", None) or ph.get("palvelu", "mock")
+    if getattr(args, "istunto", None):
+        try:
+            eb_istunto(args.istunto)
+        except (OSError, ValueError) as e:
+            print(f"⚠ istunnon luku epäonnistui — {e}")
+        return
+    if getattr(args, "yhdista", None):
+        try:
+            eb_yhdista(args.yhdista, cfg)
+        except (OSError, ValueError) as e:
+            print(f"⚠ yhdistäminen epäonnistui — {e}")
+        return
+    tilit = ph.get("tilit") or [{"tili": "OP-tili", "account_id": "mock-op"},
+                                {"tili": "S-Pankki", "account_id": "mock-s"},
+                                {"tili": "Revolut", "account_id": "mock-rev"}]
+    if "pankkihaku" not in cfg:
+        cfg["pankkihaku"] = {"palvelu": palvelu, "tilit": tilit}
+        with open(CONFIG, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        print("ℹ pankkihaku-asetukset alustettu config.jsoniin")
+    INBOX.mkdir(exist_ok=True)
+    yhteensa = 0
+    for t in tilit:
+        tili, aid = t.get("tili", ""), t.get("account_id", "")
+        try:
+            data = nouda_tapahtumat(palvelu, aid, cfg, getattr(args, "paivia", None) or 89,
+                                    t.get("alkaen", ""))
+        except NotImplementedError as e:
+            print(f"⚠ {tili}: {e}")
+            continue
+        except (OSError, ValueError) as e:
+            print(f"⚠ {tili}: nouto epäonnistui — {e}")
+            continue
+        if getattr(args, "raaka", False):
+            raakakansio = DATA / "raaka"
+            raakakansio.mkdir(parents=True, exist_ok=True)
+            rpolku = raakakansio / f"raaka_{palvelu}_{tili.replace(' ', '_')}_{date.today().isoformat()}.json"
+            with open(rpolku, "w", encoding="utf-8") as rf:
+                json.dump(data, rf, ensure_ascii=False, indent=2)
+            n = len((data or {}).get("transactions", []) or [])
+            print(f"  \u2699 {tili}: raaka \u2192 data/raaka/{rpolku.name} ({n} objektia)")
+        rivit = eb_riveiksi(data) if palvelu == "enablebanking" else gc_riveiksi(data)
+        if not rivit:
+            print(f"· {tili}: ei tapahtumia")
+            continue
+        polku = INBOX / f"hae_{palvelu}_{tili.replace(' ', '_')}_{date.today().isoformat()}.csv"
+        kirjoita_pankkicsv(tili, rivit, polku)
+        print(f"✓ {tili}: {len(rivit)} tapahtumaa → inbox/{polku.name}")
+        yhteensa += len(rivit)
+    if yhteensa:
+        print("\nSeuraavaksi: python3 kirjanpito.py aja   (dedupe ohittaa jo tuodut)")
+
+
+def cmd_aja(args):
+    cfg = lue_config()
+    saannot = lue_saannot()
+    ledger = lue_ledger()
+    olemassa = Counter(avain(r["tili"], r["pvm"], float(r["summa"]), r["saaja"]) for r in ledger)
+
+    INBOX.mkdir(exist_ok=True)
+    ARKISTO.mkdir(exist_ok=True)
+    tiedostot = sorted(p for p in INBOX.iterdir() if p.is_file()
+                       and p.suffix.lower() in (".csv", ".txt") and p.name != "LUE.txt")
+    if not tiedostot:
+        print(f"inbox/ on tyhjä — vie tiliotteet CSV:nä kansioon {INBOX}")
+    alkaen = siisti(cfg.get("alkaen", ""))
+    uudet, tarkistettavia, varoitukset = [], 0, []
+    aiemmat = Counter()  # tässä ajossa AIEMMISTA tiedostoista jo lisätyt
+    for polku in tiedostot:
+        try:
+            nimi, rivit, var = parsi_tiedosto(polku, cfg)
+        except ValueError as e:
+            print(f"⚠ {e}")
+            continue
+        varoitukset += var
+        era = Counter()
+        tasta = Counter()
+        lisatty = rajattu = 0
+        for r in rivit:
+            if alkaen and r["pvm"].isoformat() < alkaen:
+                rajattu += 1
+                continue
+            av = avain(r["tili"], r["pvm"].isoformat(), r["summa"], r["saaja"])
+            era[av] += 1
+            # sama tapahtuma voi esiintyä aidosti monta kertaa samana päivänä:
+            # tuodaan vain se määrä, joka ylittää jo kirjatut
+            if era[av] <= olemassa[av] + aiemmat[av]:
+                continue
+            kategoria, peruste = luokittele(r, saannot, cfg.get("omat_ibanit", []))
+            kategoria, _, tarkenne = kategoria.partition(":")
+            tarkenne = tarkenne.strip().lower()
+            if kategoria == "TARKISTA":
+                tarkistettavia += 1
+            uudet.append({
+                "id": tee_id(av, era[av]),
+                "pvm": r["pvm"].isoformat(),
+                "tili": r["tili"],
+                "summa": f"{r['summa']:.2f}",
+                "saaja": r["saaja"],
+                "selite": r["selite"],
+                "kategoria": kategoria,
+                "tarkenne": tarkenne,
+                "peruste": peruste,
+                "lahde": polku.name,
+            })
+            tasta[av] += 1
+            lisatty += 1
+        aiemmat.update(tasta)
+        raja_info = f" · {rajattu} ennen {alkaen} jätetty pois" if rajattu else ""
+        print(f"✓ {polku.name} [{nimi}]: {lisatty} uutta / {len(rivit)} riviä{raja_info}")
+        shutil.move(str(polku), ARKISTO / f"{date.today().isoformat()}_{polku.name}")
+
+    for v in varoitukset:
+        print(f"⚠ {v}")
+    ledger += uudet
+    if alkaen:
+        vanhoja = [r for r in ledger if r["pvm"] < alkaen]
+        if vanhoja and getattr(args, "siivoa_alkaen", False):
+            ledger[:] = [r for r in ledger if r["pvm"] >= alkaen]
+            print(f"Poistettu pääkirjasta {len(vanhoja)} riviä ennen {alkaen} "
+                  f"(varmuuskopio kansiossa data/varmuuskopiot).")
+        elif vanhoja:
+            print(f"⚠ Pääkirjassa on {len(vanhoja)} riviä ennen alkupäivää {alkaen} — "
+                  f"säilytetty koskematta. Poisto vaatii: python3 kirjanpito.py aja --siivoa-alkaen")
+    n_rev = _korjaa_revolut_selitteet(ledger)
+    if n_rev:
+        m_u, _ = uudelleenluokittele_saantorivit(ledger, cfg)
+        print(f"Korjattu Revolut-selitteet {n_rev} riviltä; {m_u} luokiteltu uudelleen.")
+    n_per = taydenna_perusteet(ledger, cfg)
+    if n_per:
+        print(f"Täydennetty luokitteluperuste {n_per} vanhalle riville.")
+    kirjoita_ledger(ledger)
+    kirjoita_tarkistettavat(ledger)
+    rakenna_raportit(ledger, cfg, kk=13)
+    print(f"\nPääkirjassa {len(ledger)} tapahtumaa, uusia {len(uudet)}.")
+    avoimia = sum(1 for r in ledger if r["kategoria"] == "TARKISTA")
+    if avoimia:
+        print(f"→ {avoimia} riviä odottaa luokittelua: täytä {TARKISTETTAVAT.relative_to(JUURI)} ja aja 'opi'.")
+    print(f"→ Raportti: {(RAPORTIT / 'raportti.html').relative_to(JUURI)}")
+
+
+def kirjoita_tarkistettavat(ledger):
+    RAPORTIT.mkdir(exist_ok=True)
+    rivit = [r for r in ledger if r["kategoria"] == "TARKISTA"]
+    with open(TARKISTETTAVAT, "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria", "saanto"])
+        for r in sorted(rivit, key=lambda x: x["pvm"], reverse=True):
+            w.writerow([r["id"], r["pvm"], r["tili"], r["summa"], r["saaja"], r["selite"], "", ""])
+
+
+def cmd_opi(args):
+    cfg = lue_config()
+    kategoriat = set(cfg["kategoriat"])
+    if not TARKISTETTAVAT.exists():
+        print("Ei tarkistettavat.csv-tiedostoa — aja ensin 'aja'.")
+        return
+    ledger = lue_ledger()
+    idx = {r["id"]: r for r in ledger}
+    paivitetty, uusia_saantoja, virheet = 0, 0, []
+    kat_haku = {k.lower(): k for k in kategoriat}
+    teksti_t, _ = lue_teksti(TARKISTETTAVAT)
+    t_rivit = teksti_t.splitlines()
+    erotin_t = ";" if (t_rivit and t_rivit[0].count(";") >= t_rivit[0].count(",")) else ","
+    taytettyja = 0
+    for rivi in csv.DictReader(t_rivit, delimiter=erotin_t):
+            raaka_kat = siisti(rivi.get("kategoria", ""))
+            if not raaka_kat:
+                continue
+            taytettyja += 1
+            # "Pääkategoria;tarkenne" tai "Pääkategoria:tarkenne" -> kaksi tasoa
+            for erotin in (";", ":"):
+                if erotin in raaka_kat:
+                    paa, tarkenne = (osa.strip() for osa in raaka_kat.split(erotin, 1))
+                    break
+            else:
+                paa, tarkenne = raaka_kat, ""
+            kat = kat_haku.get(paa.lower())
+            if not kat:
+                virheet.append(f"tuntematon kategoria '{paa}' (rivi {rivi['id']}) — lisää config.json:iin tai korjaa")
+                continue
+            if rivi["id"] in idx:
+                idx[rivi["id"]]["kategoria"] = kat
+                idx[rivi["id"]]["tarkenne"] = tarkenne.lower()
+                idx[rivi["id"]]["peruste"] = "käsin"
+                paivitetty += 1
+            malli = normalisoi(rivi.get("saanto", ""))
+            if malli:
+                lisaa_saanto(malli, kat + (f":{tarkenne.lower()}" if tarkenne else ""))
+                uusia_saantoja += 1
+    # uudet säännöt kiinni myös muihin vielä avoimiin riveihin
+    saannot = lue_saannot()
+    for r in ledger:
+        if r["kategoria"] == "TARKISTA":
+            uusi, per = luokittele({"saaja": r["saaja"], "selite": r["selite"], "iban": "",
+                                    "summa": float(r["summa"])},
+                                   saannot, cfg.get("omat_ibanit", []))
+            if uusi != "TARKISTA":
+                r["kategoria"], _, r["tarkenne"] = uusi.partition(":")
+                r["tarkenne"] = r["tarkenne"].strip().lower()
+                r["peruste"] = per
+                paivitetty += 1
+    if getattr(args, "oletus", None):
+        kat = siisti(args.oletus)
+        if kat not in kategoriat:
+            print(f"⚠ tuntematon oletuskategoria '{kat}' — ei niputettu")
+        else:
+            n = sum(1 for r in ledger if r["kategoria"] == "TARKISTA")
+            for r in ledger:
+                if r["kategoria"] == "TARKISTA":
+                    r["kategoria"] = kat
+                    r["peruste"] = "oletus"
+            print(f"Niputettu {n} jäljellä ollutta riviä kategoriaan {kat}.")
+    # raportin tiedostotilassa lataamat muutokset (myös Downloads-kansiosta)
+    kat_haku2 = {k.lower(): k for k in kategoriat}
+    for kansio in (RAPORTIT, JUURI, Path.home() / "Downloads"):
+        try:
+            loydot = sorted(kansio.glob("muutokset*.csv"))
+        except OSError:
+            continue
+        for polku_m in loydot:
+            if ".kasitelty" in polku_m.name:
+                continue
+            teksti_m, _ = lue_teksti(polku_m)
+            n_m, n_s = 0, 0
+            for rivi in csv.DictReader(teksti_m.splitlines(), delimiter=";"):
+                kat = kat_haku2.get(siisti(rivi.get("kategoria", "")).lower())
+                if not kat and siisti(rivi.get("toiminto", "")).lower() != "poista":
+                    continue
+                tarkenne = siisti(rivi.get("tarkenne", ""))
+                malli = normalisoi(rivi.get("malli", ""))
+                rid = siisti(rivi.get("id", ""))
+                toiminto = siisti(rivi.get("toiminto", "")).lower()
+                if toiminto == "poista" and malli:
+                    n_s += poista_saanto(malli, siisti(rivi.get("kategoria", "")))
+                    print(f"  − sääntö poistettu: {malli}")
+                elif rid and rid in idx:
+                    idx[rid]["kategoria"] = kat
+                    idx[rid]["tarkenne"] = tarkenne.lower()
+                    idx[rid]["peruste"] = "käsin"
+                    n_m += 1
+                elif malli:
+                    lisaa_saanto(malli, kat + (f":{tarkenne.lower()}" if tarkenne else ""))
+                    n_s += 1
+            paivitetty += n_m
+            uusia_saantoja += n_s
+            uusi_nimi = polku_m.with_name(polku_m.stem + ".kasitelty.csv")
+            try:
+                polku_m.rename(uusi_nimi)
+            except OSError:
+                pass
+            print(f"✓ {polku_m} luettu: {n_m} riviä, {n_s} sääntöä (→ {uusi_nimi.name})")
+    n_rev = _korjaa_revolut_selitteet(ledger)
+    if uusia_saantoja or n_rev:
+        m_u, m_a = uudelleenluokittele_saantorivit(ledger, cfg)
+        paivitetty += m_u
+        if m_u:
+            print(f"Sääntö-/selitemuutosten myötä {m_u} riviä luokiteltu uudelleen ({m_a} palasi avoimeksi).")
+    taydenna_perusteet(ledger, cfg)
+    kirjoita_ledger(ledger)
+    kirjoita_tarkistettavat(ledger)
+    rakenna_raportit(ledger, cfg, kk=13)
+    for v in virheet:
+        print(f"⚠ {v}")
+    if taytettyja == 0:
+        print("Huom: tarkistettavat.csv:ssä ei ollut yhtään täytettyä kategoria-solua — "
+              "jos juuri täytit sen, varmista että tallensit muutokset (kansioon raportit/).")
+    print(f"Päivitetty {paivitetty} riviä, lisätty {uusia_saantoja} uutta sääntöä.")
+    avoimia = sum(1 for r in ledger if r["kategoria"] == "TARKISTA")
+    print(f"Luokittelematta enää {avoimia} riviä." if avoimia else "Kaikki luokiteltu. ✓")
+
+
+def _liukuva3(arvot):
+    """Jälkijättöinen 3 kk liukuva keskiarvo; kaksi ensimmäistä pistettä None."""
+    return [None if i < 2 else (arvot[i] + arvot[i - 1] + arvot[i - 2]) / 3
+            for i in range(len(arvot))]
+
+
+def _trendi3(arvot):
+    """(viim. 3 kk ka) - (edeltävän 3 kk ka), tai None jos dataa alle 6 kk."""
+    if len(arvot) < 6:
+        return None
+    return sum(arvot[-3:]) / 3 - sum(arvot[-6:-3]) / 3
+
+
+def _spark(arvot):
+    """Pieni inline-käyrä: kk-pylväät + 3 kk liukuvan keskiarvon viiva."""
+    if not arvot or max(abs(a) for a in arvot) == 0:
+        return ""
+    W, H, POHJA = 150, 34, 30
+    lev = W / len(arvot)
+    maksimi = max(abs(a) for a in arvot)
+    osat = []
+    for i, a in enumerate(arvot):
+        h = max(a, 0) / maksimi * (POHJA - 3)
+        osat.append(f'<rect x="{i * lev + lev * 0.15:.1f}" y="{POHJA - h:.1f}" '
+                    f'width="{lev * 0.7:.1f}" height="{h:.1f}" fill="#d8cfc0"/>')
+    pisteet = " ".join(f"{i * lev + lev / 2:.1f},{POHJA - max(v, 0) / maksimi * (POHJA - 3):.1f}"
+                       for i, v in enumerate(_liukuva3(arvot)) if v is not None)
+    if pisteet:
+        osat.append(f'<polyline points="{pisteet}" fill="none" stroke="#26241f" stroke-width="1.6"/>')
+    return f'<svg viewBox="0 0 {W} {H}">' + "".join(osat) + "</svg>"
+
+
+def _korjaa_revolut_selitteet(ledger):
+    """Poista jäsentimen aiemmin lisäämä 'Revolut '-etuliite selitteistä —
+    se sai revolut→Siirto-säännön nielemään kaiken Revolut-kulutuksen."""
+    n = 0
+    for r in ledger:
+        if r.get("tili") == "Revolut" and r.get("selite", "").startswith("Revolut "):
+            r["selite"] = r["selite"][len("Revolut "):]
+            n += 1
+    return n
+
+
+def taydenna_perusteet(ledger, cfg):
+    """Päättele peruste riveille, joilta se puuttuu: jos nykyiset säännöt
+    tuottaisivat saman luokan, merkitään säännöllä tehdyksi; muuten käsin."""
+    saannot = lue_saannot()
+    n = 0
+    for r in ledger:
+        if r.get("peruste") or r["kategoria"] == "TARKISTA":
+            continue
+        u, per = luokittele({"saaja": r["saaja"], "selite": r["selite"], "iban": "",
+                             "summa": float(r["summa"])}, saannot, cfg.get("omat_ibanit", []))
+        paa, _, tark = u.partition(":")
+        if paa == r["kategoria"] and (not tark or tark.strip().lower() == r.get("tarkenne", "")):
+            r["peruste"] = per
+        else:
+            r["peruste"] = "käsin"
+        n += 1
+    return n
+
+
+def sovella_avoimiin(ledger, cfg):
+    """Luokittele TARKISTA-rivit uudelleen nykyisillä säännöillä. Palauttaa määrän."""
+    saannot = lue_saannot()
+    n = 0
+    for r in ledger:
+        if r["kategoria"] == "TARKISTA":
+            u, per = luokittele({"saaja": r["saaja"], "selite": r["selite"], "iban": "",
+                                 "summa": float(r["summa"])}, saannot, cfg.get("omat_ibanit", []))
+            if u != "TARKISTA":
+                r["kategoria"], _, r["tarkenne"] = u.partition(":")
+                r["tarkenne"] = r["tarkenne"].strip().lower()
+                r["peruste"] = per
+                n += 1
+    return n
+
+
+def _saanto_tuple(malli, kategoria, ehto=""):
+    m = normalisoi(malli)
+    if m.startswith("re:"):
+        return ("re", re.compile(m[3:], re.IGNORECASE), kategoria, ehto, m)
+    return ("osa", m, kategoria, ehto, m)
+
+
+def laske_osumat(ledger, malli, ehto=""):
+    """Montako riviä malli matchaa tässä muodossaan (+ enintään 3 esimerkkiä)."""
+    t = _saanto_tuple(malli, "x", ehto)
+    osuu, esim = 0, []
+    for r in ledger:
+        teksti = normalisoi(f"{r['saaja']} {r['selite']}")
+        osuiko = t[1].search(teksti) if t[0] == "re" else (t[1] in teksti)
+        if osuiko and _ehto_ok(t[3], float(r["summa"])):
+            osuu += 1
+            if len(esim) < 3:
+                esim.append((r["saaja"] or r["selite"])[:30])
+    return osuu, esim
+
+
+def saanto_vaikutus(ledger, cfg, malli, kategoria_full, ehto="", poistaen=None):
+    """Esikatselu uudelle säännölle: mihin osuisi, mikä muuttuisi, mitkä vanhat
+    säännöt estävät sen vaikutuksen. poistaen = säännöt, jotka simuloidaan
+    poistetuiksi ennen uuden lisäystä. Ei kirjoita mitään."""
+    poistaen = poistaen or []
+
+    def _pois(t):
+        for p in poistaen:
+            if (normalisoi(p.get("malli", "")) == t[4]
+                    and (not siisti(p.get("kategoria", ""))
+                         or siisti(p.get("kategoria", "")).lower() == t[2].lower())):
+                return True
+        return False
+
+    pohja = [t for t in lue_saannot() if not _pois(t)]
+    t0 = _saanto_tuple(malli, kategoria_full, ehto)
+    testi = (t0[0], t0[1], t0[2], t0[3], "__uusi__")  # tunnistelippu simulaatioon
+    kohta = _sijoituskohta([t[4] for t in pohja], malli)
+    saannot = (pohja + [testi]) if kohta is None else (pohja[:kohta] + [testi] + pohja[kohta:])
+    kat_haku = {t[4]: t[2] for t in reversed(pohja)}
+    osuu = muuttuu = avoimia = suojattu = kasin_voisi = 0
+    esim_laskuri = Counter()
+    kasin_esim = []
+    estajat = Counter()
+    for r in ledger:
+        teksti = normalisoi(f"{r['saaja']} {r['selite']}")
+        osuiko = testi[1].search(teksti) if testi[0] == "re" else (testi[1] in teksti)
+        if osuiko and ehto:
+            try:
+                osuiko = _ehto_ok(ehto, float(r["summa"]))
+            except (TypeError, ValueError):
+                pass
+        if not osuiko:
+            continue
+        osuu += 1
+        per = r.get("peruste", "")
+        u, p2 = luokittele({"saaja": r["saaja"], "selite": r["selite"], "iban": "",
+                            "summa": float(r["summa"])}, saannot, cfg.get("omat_ibanit", []))
+        paa, _, tark = u.partition(":")
+        tark = tark.strip().lower()
+        if per in ("käsin", "oletus", "oma tili"):
+            suojattu += 1
+            if (per != "oma tili" and p2 == "sääntö: __uusi__"
+                    and (paa != r["kategoria"] or tark != r.get("tarkenne", ""))):
+                kasin_voisi += 1
+                if len(kasin_esim) < 3:
+                    kasin_esim.append(f"{(r['saaja'] or r['selite'])[:28]}: {r['kategoria']} → "
+                                      f"{paa}{(':' + tark) if tark else ''}")
+            continue
+        if paa != r["kategoria"] or tark != r.get("tarkenne", ""):
+            muuttuu += 1
+            if r["kategoria"] == "TARKISTA":
+                avoimia += 1
+            if p2.startswith("sääntö: ") and p2 != "sääntö: __uusi__":
+                estajat[p2[len("sääntö: "):]] += 1
+            esim = (f"{(r['saaja'] or r['selite'])[:30]}: {r['kategoria']} → "
+                    f"{paa}{(':' + tark) if tark else ''}")
+            esim_laskuri[esim] += 1
+        elif p2.startswith("sääntö: ") and p2 != "sääntö: __uusi__":
+            estajat[p2[len("sääntö: "):]] += 1
+    est_lista = [{"malli": m, "kategoria": kat_haku.get(m, ""), "rivit": n}
+                 for m, n in estajat.most_common(6)]
+    esimerkit = [(e if n == 1 else f"{e} (×{n})")
+                 for e, n in esim_laskuri.most_common(4)]
+    return {"osuu": osuu, "muuttuu": muuttuu, "avoimia": avoimia,
+            "suojattu": suojattu, "esimerkit": esimerkit, "estajat": est_lista,
+            "kasin_voisi": kasin_voisi, "kasin_esim": kasin_esim}
+
+
+def uudelleenluokittele_saantorivit(ledger, cfg, vain_peruste=None, pakota_saannolle=None):
+    """Aja säännöt uudelleen sääntöperusteisille ja avoimille riveille.
+    Käsin-, oletus- ja oma tili -rivejä ei kosketa. vain_peruste rajaa
+    poistetun säännön riveihin. Palauttaa (muuttui, avoimeksi)."""
+    saannot = lue_saannot()
+    muuttui = avoimeksi = 0
+    for r in ledger:
+        per = r.get("peruste", "")
+        kasin_tila = per in ("käsin", "oletus")
+        if vain_peruste is not None:
+            if per != vain_peruste:
+                continue
+        elif per == "oma tili" or (kasin_tila and not pakota_saannolle):
+            continue
+        u, p2 = luokittele({"saaja": r["saaja"], "selite": r["selite"], "iban": "",
+                            "summa": float(r["summa"])}, saannot, cfg.get("omat_ibanit", []))
+        if kasin_tila and vain_peruste is None and p2 != f"sääntö: {pakota_saannolle}":
+            continue  # käsin siirtyy vain jos JUURI uusi sääntö voittaa
+        paa, _, tark = u.partition(":")
+        tark = tark.strip().lower()
+        if paa == r["kategoria"] and tark == r.get("tarkenne", ""):
+            if u != "TARKISTA":
+                r["peruste"] = p2  # sama luokka, mahdollisesti eri sääntö
+            continue
+        r["kategoria"], r["tarkenne"], r["peruste"] = paa, tark, (p2 if paa != "TARKISTA" else "")
+        muuttui += 1
+        if paa == "TARKISTA":
+            avoimeksi += 1
+    return muuttui, avoimeksi
+
+
+def lue_budjetti():
+    raamit = {}
+    if BUDJETTI.exists():
+        teksti, _ = lue_teksti(BUDJETTI)
+        if True:
+            for rivi in csv.DictReader(teksti.splitlines(), delimiter=";"):
+                arvo = siisti(rivi.get("kk_raami", ""))
+                if arvo:
+                    try:
+                        raamit[siisti(rivi["kategoria"])] = parsi_summa(arvo)
+                    except ValueError:
+                        pass
+    return raamit
+
+
+def koosta(ledger, cfg):
+    """Palauttaa (kuukaudet, taulu[kategoria][kk], tulot[kk], menot[kk])."""
+    tyypit = cfg["kategoriat"]
+    taulu = defaultdict(lambda: defaultdict(float))
+    tulot, menot = defaultdict(float), defaultdict(float)
+    for r in ledger:
+        kk = r["pvm"][:7]
+        kat = r["kategoria"]
+        summa = float(r["summa"])
+        tyyppi = tyypit.get(kat, "meno")
+        if tyyppi == "pois":
+            continue
+        if tyyppi == "tulo":
+            taulu[kat][kk] += summa
+            tulot[kk] += summa
+        else:
+            taulu[kat][kk] += -summa  # menot positiivisina
+            menot[kk] += -summa
+    kuukaudet = sorted(set(list(tulot) + list(menot)))
+    return kuukaudet, taulu, tulot, menot
+
+
+def _oly_polku():
+    uusi = LEDGER.parent / "yhteistalous.json"
+    vanha = LEDGER.parent / "olympos.json"
+    if vanha.exists() and not uusi.exists():
+        try:
+            vanha.rename(uusi)
+        except OSError:
+            return vanha
+    return uusi
+
+
+def lue_olympos():
+    pohja = {"jasenet": [{"nimi": "Jäsen 1", "haku": []},
+                         {"nimi": "Jäsen 2", "haku": []}],
+             "pankkiiri": "Jäsen 1",
+             "kategoria": "Yhteistalous",
+             "viikkojako": ["ruokaboksi"],
+             "palautustarkenteet": ["palautus", "yhteiskulupalautus"],
+             "tasattu": "",
+             "hyvitykset": [], "lasna": {}, "kirjaukset": []}
+    p = _oly_polku()
+    if not p.exists():
+        return pohja
+    try:
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return pohja
+    for k, v in pohja.items():
+        data.setdefault(k, v)
+    return data
+
+
+def kirjoita_olympos(data):
+    with open(_oly_polku(), "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def olympos_laskelma(ledger, oly, tanaan=None, alku_yli=None):
+    """Kotitalouden reskontra: boksi viikoittain läsnäolijoille, netti tasan,
+    palautukset siirtoina jäseneltä pankkiirille, kk-hyvitykset saldosiirtoina."""
+    tanaan = tanaan or date.today()
+    try:
+        alku = date.fromisoformat(str(alku_yli or oly.get("tasattu", "")))
+    except ValueError:
+        alku = date(2000, 1, 1)
+    jasenet = oly.get("jasenet", [])
+    nimet = [j["nimi"] for j in jasenet]
+    n = max(len(nimet), 1)
+    pankkiiri = oly.get("pankkiiri", nimet[0] if nimet else "")
+    lasna = oly.get("lasna", {})
+
+    def vkavain(p):
+        iso = p.isocalendar()
+        return f"{iso[0]}-W{iso[1]:02d}"
+
+    def lasnaolijat(vk):
+        m = lasna.get(vk, {})
+        ulos = [nm for nm in nimet if m.get(nm, 1)]
+        return ulos or list(nimet)
+
+    osuus = {nm: 0.0 for nm in nimet}
+    boksi_osuus = {nm: 0.0 for nm in nimet}
+    maksettu = {nm: 0.0 for nm in nimet}
+    viikot = {}
+    boksi_yht = palautus_yht = 0.0
+    jaetut = {}
+    oly_kat = siisti(str(oly.get("kategoria", "") or ""))
+    viikkotark = {siisti(str(x)).lower() for x in oly.get("viikkojako", ["ruokaboksi"])
+                  if siisti(str(x))}
+    palautustark = {siisti(str(x)).lower() for x in
+                    oly.get("palautustarkenteet", ["palautus", "yhteiskulupalautus"])
+                    if siisti(str(x))}
+
+    poimitut = []
+    poissuljetut_rivit = []
+    poisjoukko = {str(x) for x in oly.get("poissuljetut", [])}
+
+    def _rid(r):
+        return str(r.get("id") or avain(r.get("tili", ""), r.get("pvm", ""),
+                                        float(r.get("summa", 0) or 0), r.get("saaja", "")))
+
+    def viikkojako(p, m, kuvaus="", rid=""):
+        # Ruokaboksi veloittaa 2-5 pv ennen maanantaitoimitusta; kulu kuuluu
+        # toimitusviikolle eli maksua seuraavalle maanantaille.
+        siirto = (8 - p.isoweekday()) % 7 or 7
+        vk = vkavain(p + timedelta(days=siirto))
+        lo = lasnaolijat(vk)
+        for nm in lo:
+            osuus[nm] += m / len(lo)
+            boksi_osuus[nm] += m / len(lo)
+        if pankkiiri in maksettu:
+            maksettu[pankkiiri] += m
+        viikot.setdefault(vk, {"boksi": 0.0})["boksi"] += m
+        poimitut.append({"pvm": p.isoformat(), "kuvaus": kuvaus, "summa": m,
+                         "tyyppi": "boksi", "vk": vk, "rid": rid})
+        return m
+
+    def tasajako(m, tark, pvm="", kuvaus="", rid=""):
+        for nm in nimet:
+            osuus[nm] += m / n
+        if pankkiiri in maksettu:
+            maksettu[pankkiiri] += m
+        jaetut[tark or "(muu)"] = jaetut.get(tark or "(muu)", 0.0) + m
+        poimitut.append({"pvm": pvm, "kuvaus": kuvaus, "summa": m,
+                         "tyyppi": tark or "(muu)", "rid": rid})
+
+    for r in ledger:
+        try:
+            p = date.fromisoformat(r.get("pvm", ""))
+            s = float(r.get("summa", ""))
+        except ValueError:
+            continue
+        if p <= alku or p > tanaan:
+            continue
+        teksti = normalisoi(f"{r.get('saaja', '')} {r.get('selite', '')}")
+        tark = siisti(r.get("tarkenne", "")).lower()
+        omassa = bool(oly_kat) and r.get("kategoria") == oly_kat
+        on_palautus = s > 0 and (tark in palautustark
+                                 or (not omassa and r.get("kategoria") == "Henkil\u00f6maksut"))
+        on_boksi = (not on_palautus) and ((omassa and tark in viikkotark)
+                                          or "ruokaboksi" in teksti or tark == "ruokaboksi")
+        on_tasan = (not on_palautus and not on_boksi) and (omassa or tark == "netti")
+        if not (on_palautus or on_boksi or on_tasan):
+            continue
+        rid = _rid(r)
+        if rid in poisjoukko:
+            poissuljetut_rivit.append({"pvm": p.isoformat(), "kuvaus": r.get("saaja", ""),
+                                       "summa": s,
+                                       "tyyppi": ("palautus" if on_palautus else
+                                                  "boksi" if on_boksi else (tark or "(muu)")),
+                                       "rid": rid})
+            continue
+        if on_palautus:
+            for j in jasenet:
+                if j["nimi"] == pankkiiri:
+                    continue
+                if any(normalisoi(h) in teksti for h in j.get("haku", []) if h):
+                    maksettu[j["nimi"]] += s
+                    if pankkiiri in maksettu:
+                        maksettu[pankkiiri] -= s
+                    palautus_yht += s
+                    poimitut.append({"pvm": p.isoformat(), "kuvaus": r.get("saaja", ""),
+                                     "summa": s, "tyyppi": "palautus", "jasen": j["nimi"], "rid": rid})
+                    break
+            continue
+        if on_boksi:
+            boksi_yht += viikkojako(p, -s, r.get("saaja", ""), rid)
+        elif on_tasan:
+            tasajako(-s, tark, p.isoformat(), r.get("saaja", ""), rid)
+    for k in oly.get("kirjaukset", []):
+        try:
+            p = date.fromisoformat(str(k.get("pvm", "")))
+            s = float(k.get("summa", 0) or 0)
+        except ValueError:
+            continue
+        if p <= alku or p > tanaan or s <= 0:
+            continue
+        osallistujat = [x for x in (k.get("osallistujat") or []) if x in nimet]
+        if osallistujat:
+            lo = osallistujat
+        elif k.get("jako") == "lasna":
+            lo = lasnaolijat(vkavain(p))
+        else:
+            lo = list(nimet)
+        for nm in lo:
+            osuus[nm] += s / max(len(lo), 1)
+        poimitut.append({"pvm": str(k.get("pvm", "")), "kuvaus": k.get("kuvaus", ""),
+                         "summa": s, "tyyppi": "kirjaus",
+                         "jasen": k.get("maksaja", ""), "jako": ", ".join(lo)})
+        mk = k.get("maksaja", "")
+        if mk in maksettu:
+            maksettu[mk] += s
+    velka = {nm: osuus[nm] - maksettu[nm] for nm in nimet}
+    kk_lkm = max(0, (tanaan.year - alku.year) * 12 + tanaan.month - alku.month)
+    for h in oly.get("hyvitykset", []):
+        kk_h = kk_lkm
+        try:
+            mx = int(h.get("kk_max") or 0)
+        except (TypeError, ValueError):
+            mx = 0
+        if mx > 0:
+            kk_h = min(kk_lkm, mx)
+        s = float(h.get("summa_kk", 0) or 0) * kk_h
+        ja = h.get("jasenelta", "")
+        if not s or ja not in velka or n < 2:
+            continue
+        velka[ja] += s
+        for nm in nimet:
+            if nm != ja:
+                velka[nm] -= s / (n - 1)
+    vk_lista = set(viikot)
+    p = alku + timedelta(days=1)
+    p = p - timedelta(days=p.isocalendar()[2] - 1)
+    loppu = tanaan + timedelta(days=21)
+    while p <= loppu:
+        vk_lista.add(vkavain(p))
+        p += timedelta(days=7)
+    return {"alku": alku.isoformat(), "loppu": tanaan.isoformat(), "kk": kk_lkm,
+            "nimet": nimet, "pankkiiri": pankkiiri,
+            "osuus": osuus, "maksettu": maksettu, "velka": velka,
+            "viikot": viikot, "vk_lista": sorted(vk_lista),
+            "boksi_yht": boksi_yht, "boksi_osuus": boksi_osuus,
+            "jaetut": jaetut, "tasan_yht": sum(jaetut.values()),
+            "palautus_yht": palautus_yht, "kategoria": oly_kat,
+            "viikkojako": sorted(viikkotark), "palautustarkenteet": sorted(palautustark),
+            "poimitut": sorted(poimitut, key=lambda x: x.get("pvm", "")),
+            "poissuljetut_rivit": sorted(poissuljetut_rivit, key=lambda x: x.get("pvm", ""))}
+
+
+def olympos_erittely_html(ledger):
+    """Itsenäinen, tulostusystävällinen erittely (selaimesta: tulosta → PDF)."""
+    oly = lue_olympos()
+    L = olympos_laskelma(ledger, oly)
+    e = html.escape
+
+    def eur2(v):
+        return f"{v:,.2f}".replace(",", " ").replace(".", ",")
+
+    def viikkovali(vk):
+        try:
+            ma = date.fromisocalendar(int(vk[:4]), int(vk[6:]), 1)
+            su = ma + timedelta(days=6)
+            if ma.month == su.month:
+                return f"{ma.day}.–{su.day}.{su.month}.{su.year}"
+            return f"{ma.day}.{ma.month}.–{su.day}.{su.month}.{su.year}"
+        except ValueError:
+            return vk
+
+    # Valinnainen paikallinen taustakuva: raportit/tausta.(jpg|jpeg|png|webp)
+    tausta = ""
+    for nimi in ("tausta.jpg", "tausta.jpeg", "tausta.png", "tausta.webp"):
+        if (RAPORTIT / nimi).exists():
+            tausta = nimi
+            break
+    otsikko = (siisti(str(oly.get("otsikko", "")))
+               or siisti(str(oly.get("kategoria", ""))) or "Yhteistalous")
+    if tausta:
+        banneri = (f'<div class="banneri" style="background-image:url(\'{e(tausta)}\')">'
+                   f'<div class="bannerivarjo"><h1>{e(otsikko)}</h1>'
+                   f'<p class="bannerimeta">jaettujen kulujen erittely · {e(L["alku"])} → {e(L["loppu"])}</p>'
+                   f'</div></div>')
+    else:
+        banneri = (f'<h1>{e(otsikko)} — jaettujen kulujen erittely</h1>')
+    o = ['<!DOCTYPE html><html lang="fi"><head><meta charset="utf-8">',
+         f'<title>{e(otsikko)}-erittely {e(L["alku"])} – {e(L["loppu"])}</title>',
+         '<style>body{font:13px/1.45 Georgia,serif;color:#26241f;max-width:52rem;'
+         'margin:2rem auto;padding:0 1rem}h1{font-size:1.4rem}h2{font-size:1.05rem;'
+         'margin:1.6rem 0 .4rem;border-bottom:1px solid #c9c3b8}table{border-collapse:'
+         'collapse;width:100%}td,th{padding:.18rem .5rem;text-align:left;border-bottom:'
+         '1px solid #eee7db}.num{text-align:right;font-variant-numeric:tabular-nums}'
+         '.pieni{color:#7a7466;font-size:.85em}'
+         '.banneri{background-size:cover;background-position:center;border-radius:8px;'
+         'overflow:hidden;margin-bottom:1rem}.bannerivarjo{background:linear-gradient('
+         'transparent,rgba(0,0,0,.55));padding:5rem 1.2rem 1rem;color:#fff}'
+         '.banneri h1{margin:0;text-shadow:0 1px 4px rgba(0,0,0,.6)}'
+         '.bannerimeta{margin:.2rem 0 0;color:#f0ece4;font-size:.9em}'
+         '@media print{body{margin:0;max-width:none}a{display:none}'
+         '.banneri{-webkit-print-color-adjust:exact;print-color-adjust:exact}}'
+         '</style></head><body>',
+         banneri,
+         f'<p class="pieni">Kausi {e(L["alku"])} → {e(L["loppu"])} · jäsenet: '
+         f'{e(", ".join(L["nimet"]))} · pankkiiri: {e(L["pankkiiri"])} · '
+         f'tulostettu {date.today().isoformat()}</p>']
+    o.append('<h2>Saldot</h2><table><tr><th>jäsen</th><th class="num">osuus</th>'
+             '<th class="num">maksanut</th><th class="num">saldo</th></tr>')
+    for nm in L["nimet"]:
+        o.append(f'<tr><td>{e(nm)}</td><td class="num">{eur2(L["osuus"][nm])}</td>'
+                 f'<td class="num">{eur2(L["maksettu"][nm])}</td>'
+                 f'<td class="num"><b>{eur2(L["velka"][nm])}</b></td></tr>')
+    o.append('</table>')
+    # Toimenpiteet: kuka maksaa pankkiirille ja mihin tiliin (tilit oly.jasenet[].tili)
+    pankkiiri = L["pankkiiri"]
+    tili_map = {}
+    for j in oly.get("jasenet", []):
+        t = siisti(str(j.get("tili", "")))
+        if t:
+            tili_map[j.get("nimi", "")] = t
+    toimet = []
+    for nm in L["nimet"]:
+        v = L["velka"][nm]
+        if nm == pankkiiri or abs(v) <= 0.005:
+            continue
+        if v > 0:
+            kohde = tili_map.get(pankkiiri, "")
+            kohde_txt = f' tilille {e(kohde)}' if kohde else ""
+            toimet.append(f'<li><b>{e(nm)}</b> maksaa <b>{eur2(v)} €</b> '
+                          f'{e(pankkiiri)}lle{kohde_txt}.</li>')
+        else:
+            kohde = tili_map.get(nm, "")
+            kohde_txt = f' tilille {e(kohde)}' if kohde else ""
+            toimet.append(f'<li><b>{e(pankkiiri)}</b> palauttaa <b>{eur2(-v)} €</b> '
+                          f'{e(nm)}lle{kohde_txt}.</li>')
+    o.append('<h2>Toimenpiteet</h2>')
+    if toimet:
+        o.append('<ul>' + "".join(toimet) + '</ul>')
+        puuttuu = [nm for nm in L["nimet"] if nm != pankkiiri
+                   and abs(L["velka"][nm]) > 0.005 and nm not in tili_map and L["velka"][nm] < 0]
+        if pankkiiri not in tili_map and any(L["velka"][nm] > 0.005 for nm in L["nimet"] if nm != pankkiiri):
+            o.append(f'<p class="pieni">Lisää maksutili {e(pankkiiri)}lle '
+                     f'(data/yhteistalous.json → jasenet[].tili), niin se näkyy tässä.</p>')
+    else:
+        o.append('<p class="pieni">Kaikki tasan — ei siirrettävää.</p>')
+    boksit = [x for x in L["poimitut"] if x["tyyppi"] == "boksi"]
+    if boksit:
+        o.append(f'<h2>Boksi viikoittain — yht. {eur2(L["boksi_yht"])} €</h2>'
+                 '<table><tr><th>viikko</th><th>pvm</th><th>kuvaus</th>'
+                 '<th>läsnä</th><th class="num">€</th><th class="num">€/osallinen</th></tr>')
+        lasna = oly.get("lasna", {})
+        for x in boksit:
+            lo = [nm for nm in L["nimet"] if lasna.get(x["vk"], {}).get(nm, 1)] or L["nimet"]
+            o.append(f'<tr><td>{e(viikkovali(x["vk"]))}</td>'
+                     f'<td>{e(x["pvm"])}</td><td>{e(str(x["kuvaus"]))}</td>'
+                     f'<td class="pieni">{e(", ".join(lo))}</td>'
+                     f'<td class="num">{eur2(x["summa"])}</td>'
+                     f'<td class="num">{eur2(x["summa"] / len(lo))}</td></tr>')
+        o.append('</table>')
+        o.append('<table style="width:auto;margin-top:.6rem"><tr><th>Yhteensä €</th>'
+                 + "".join(f'<th class="num">{e(nm)}</th>' for nm in L["nimet"])
+                 + '<th class="num">yht.</th></tr><tr><td class="pieni">koko kausi, läsnäolo huomioitu</td>'
+                 + "".join(f'<td class="num"><b>{eur2(L["boksi_osuus"][nm])}</b></td>' for nm in L["nimet"])
+                 + f'<td class="num"><b>{eur2(L["boksi_yht"])}</b></td></tr></table>')
+    if oly.get("hyvitykset"):
+        o.append('<h2>Vakiot (kk-hyvitykset)</h2><table><tr><th>kuvaus</th>'
+                 '<th>jäseneltä</th><th class="num">€/kk</th><th class="num">kk</th>'
+                 '<th class="num">yht.</th></tr>')
+        for h in oly["hyvitykset"]:
+            s_kk = float(h.get("summa_kk", 0) or 0)
+            try:
+                mx = int(h.get("kk_max") or 0)
+            except (TypeError, ValueError):
+                mx = 0
+            kk_h = min(L["kk"], mx) if mx > 0 else L["kk"]
+            o.append(f'<tr><td>{e(str(h.get("kuvaus", "")))}</td>'
+                     f'<td>{e(str(h.get("jasenelta", "")))}</td>'
+                     f'<td class="num">{eur2(s_kk)}</td><td class="num">{kk_h}</td>'
+                     f'<td class="num">{eur2(s_kk * kk_h)}</td></tr>')
+        o.append('</table>')
+    tasan = [x for x in L["poimitut"] if x["tyyppi"] not in ("boksi", "palautus", "kirjaus")]
+    if tasan:
+        o.append(f'<h2>Tasan jaetut — yht. {eur2(L["tasan_yht"])} €</h2>'
+                 '<table><tr><th>pvm</th><th>kuvaus</th><th>tarkenne</th>'
+                 '<th class="num">€</th><th class="num">€/osallinen</th></tr>')
+        n = max(len(L["nimet"]), 1)
+        for x in tasan:
+            o.append(f'<tr><td>{e(str(x["pvm"]))}</td><td>{e(str(x["kuvaus"]))}</td>'
+                     f'<td>{e(str(x["tyyppi"]))}</td><td class="num">{eur2(x["summa"])}</td>'
+                     f'<td class="num">{eur2(x["summa"] / n)}</td></tr>')
+        o.append('</table>')
+    kirj = [x for x in L["poimitut"] if x["tyyppi"] == "kirjaus"]
+    if kirj:
+        o.append('<h2>Käsikirjaukset</h2><table><tr><th>pvm</th><th>kuvaus</th>'
+                 '<th>maksaja</th><th>jaetaan</th><th class="num">€</th>'
+                 '<th class="num">€/osallinen</th></tr>')
+        for x in kirj:
+            jako = str(x.get("jako", ""))
+            m = len([t for t in jako.split(",") if t.strip()]) or 1
+            o.append(f'<tr><td>{e(str(x["pvm"]))}</td><td>{e(str(x["kuvaus"]))}</td>'
+                     f'<td>{e(str(x.get("jasen", "")))}</td><td class="pieni">{e(jako)}</td>'
+                     f'<td class="num">{eur2(x["summa"])}</td>'
+                     f'<td class="num">{eur2(x["summa"] / m)}</td></tr>')
+        o.append('</table>')
+    pal = [x for x in L["poimitut"] if x["tyyppi"] == "palautus"]
+    if pal:
+        o.append(f'<h2>Palautukset pankkiirille — yht. {eur2(L["palautus_yht"])} €</h2>'
+                 '<table><tr><th>pvm</th><th>jäsen</th><th>kuvaus</th><th class="num">€</th></tr>')
+        for x in pal:
+            o.append(f'<tr><td>{e(str(x["pvm"]))}</td><td>{e(str(x.get("jasen", "")))}</td>'
+                     f'<td>{e(str(x["kuvaus"]))}</td><td class="num">{eur2(x["summa"])}</td></tr>')
+        o.append('</table>')
+    o.append('</body></html>')
+    return "".join(o)
+
+
+def olympos_osio(ledger, cfg=None):
+    oly = lue_olympos()
+    n_alku = siisti(str(oly.get("nayta_alku", "")))
+    n_loppu = siisti(str(oly.get("nayta_loppu", "")))
+    tan = None
+    try:
+        tan = date.fromisoformat(n_loppu) if n_loppu else None
+    except ValueError:
+        tan = None
+    L = olympos_laskelma(ledger, oly, tanaan=tan, alku_yli=(n_alku or None))
+    e = html.escape
+
+    def eur2(v):
+        return f"{v:,.2f}".replace(",", " ").replace(".", ",")
+
+    nimet, pankkiiri, lasna = L["nimet"], L["pankkiiri"], oly.get("lasna", {})
+    maksaja_optiot = "".join(f"<option>{e(nm)}</option>" for nm in nimet)
+    rt = ['<table><tr><th>pvm</th><th>kuvaus</th><th>tyyppi</th><th class="num">€</th><th></th></tr>']
+    for x in L["poimitut"]:
+        if x["tyyppi"] == "palautus" or not x.get("rid"):
+            continue
+        rt.append(f'<tr><td>{e(str(x["pvm"]))}</td><td>{e(str(x["kuvaus"]))}</td>'
+                  f'<td>{e(str(x["tyyppi"]))}</td><td class="num">{eur2(abs(x["summa"]))}</td>'
+                  f'<td><a href="#" class="olpoissulje" data-rid="{e(str(x["rid"]))}">sulje pois</a></td></tr>')
+    for x in L.get("poissuljetut_rivit", []):
+        rt.append(f'<tr style="opacity:.5"><td>{e(str(x["pvm"]))}</td>'
+                  f'<td><s>{e(str(x["kuvaus"]))}</s></td><td>{e(str(x["tyyppi"]))}</td>'
+                  f'<td class="num">{eur2(abs(x["summa"]))}</td>'
+                  f'<td><a href="#" class="olotamukaan" data-rid="{e(str(x["rid"]))}">ota mukaan</a></td></tr>')
+    if len(rt) == 1:
+        rt.append('<tr><td colspan="5" class="pikkuteksti">ei poimittuja rivejä</td></tr>')
+    rt.append("</table>")
+    rivitaulu = "".join(rt)
+    st = ['<table><tr><th>jäsen</th><th class="num">osuus kuluista</th>'
+          '<th class="num">maksanut</th><th class="num">saldo</th><th></th></tr>']
+    for nm in nimet:
+        v = L["velka"][nm]
+        if abs(v) <= 0.005:
+            sanoitus = "tasan"
+        elif nm == pankkiiri:
+            sanoitus = "saatavaa muilta" if v < 0 else "velkaa yhteisölle"
+        else:
+            sanoitus = f"maksettava {pankkiiri}lle" if v > 0 else "etukäteen maksettua"
+        st.append(f'<tr><td>{e(nm)}</td><td class="num">{eur2(L["osuus"][nm])}</td>'
+                  f'<td class="num">{eur2(L["maksettu"][nm])}</td>'
+                  f'<td class="num"><b>{eur2(v)}</b></td><td class="pikkuteksti">{sanoitus}</td></tr>')
+    st.append("</table>")
+    n_j = max(len(nimet), 1)
+    vt = ['<table><tr><th>kuvaus</th><th>jäseneltä</th><th class="num">€/kk</th>'
+          '<th class="num">kk</th><th class="num">yht. kaudella</th>'
+          '<th class="num">muille / jäsen</th><th></th></tr>']
+    for i, h in enumerate(oly.get("hyvitykset", [])):
+        s_kk = float(h.get("summa_kk", 0) or 0)
+        try:
+            mx = int(h.get("kk_max") or 0)
+        except (TypeError, ValueError):
+            mx = 0
+        kk_h = min(L["kk"], mx) if mx > 0 else L["kk"]
+        kk_n = f'{kk_h}{f" / {mx}" if mx > 0 else ""}'
+        yht_h = s_kk * kk_h
+        per_muu = yht_h / (n_j - 1) if n_j > 1 else 0.0
+        muut = [nm for nm in nimet if nm != siisti(str(h.get("jasenelta", "")))]
+        selite = (" · ".join(f"{e(nm)} +{eur2(per_muu)}" for nm in muut)) if muut else "—"
+        vt.append(f'<tr><td>{e(str(h.get("kuvaus", "")))}</td><td>{e(str(h.get("jasenelta", "")))}</td>'
+                  f'<td class="num">{eur2(s_kk)}</td><td class="num">{kk_n}</td>'
+                  f'<td class="num">{eur2(yht_h)}</td>'
+                  f'<td class="num">{eur2(per_muu)} <span class="pikkuteksti">{selite}</span></td>'
+                  f'<td><a href="#" class="olvakiopoisto" data-i="{i}">poista</a></td></tr>')
+    if len(vt) == 1:
+        vt.append('<tr><td colspan="7" class="pikkuteksti">ei vakioita</td></tr>')
+    vt.append("</table>")
+    lt = ['<table><tr><th>viikko</th>'] + [f"<th>{e(nm)}</th>" for nm in nimet]
+    lt.append('<th class="num">boksi €</th><th class="num">€/läsnäolija</th></tr>')
+    for vk in L["vk_lista"]:
+        raw = lasna.get(vk, {})
+        lo = [nm for nm in nimet if raw.get(nm, 1)] or nimet
+        solut = ""
+        for nm in nimet:
+            a = 1 if raw.get(nm, 1) else 0
+            merkki = "✓" if a else "–"
+            solut += (f'<td class="olpres" data-vk="{e(vk)}" data-nimi="{e(nm)}" data-arvo="{a}" '
+                      f'style="cursor:pointer;text-align:center">{merkki}</td>')
+        try:
+            ma = date.fromisocalendar(int(vk[:4]), int(vk[6:]), 1)
+            su = ma + timedelta(days=6)
+            if ma.month == su.month:
+                vali = f"{ma.day}.–{su.day}.{su.month}.{su.year}"
+            else:
+                vali = f"{ma.day}.{ma.month}.–{su.day}.{su.month}.{su.year}"
+            nimio = e(vali)
+        except ValueError:
+            nimio = e(vk)
+        b = L["viikot"].get(vk, {}).get("boksi", 0.0)
+        lt.append(f'<tr><td>{nimio}</td>{solut}<td class="num">{eur2(b) if b else ""}</td>'
+                  f'<td class="num">{eur2(b / len(lo)) if b else ""}</td></tr>')
+    if L["boksi_yht"]:
+        summat = "".join(f'<td class="num"><b>{eur2(L["boksi_osuus"][nm])}</b></td>' for nm in nimet)
+        lt.append(f'<tr><td><b>Yhteensä €</b></td>{summat}'
+                  f'<td class="num"><b>{eur2(L["boksi_yht"])}</b></td><td></td></tr>')
+    lt.append("</table>")
+    kt = ['<table><tr><th>pvm</th><th>kuvaus</th><th>maksaja</th><th class="num">€</th><th>jaetaan</th><th class="num">€/osallinen</th><th></th></tr>']
+    for i, k in enumerate(oly.get("kirjaukset", [])):
+        merkinta = ""
+        try:
+            if date.fromisoformat(str(k.get("pvm", ""))) <= date.fromisoformat(L["alku"]):
+                merkinta = ' <span class="pikkuteksti">(ennen kautta)</span>'
+        except ValueError:
+            pass
+        k_summa = float(k.get("summa", 0) or 0)
+        osall = [x for x in (k.get("osallistujat") or []) if x in nimet]
+        if osall:
+            m_jako = len(osall)
+        elif k.get("jako") == "lasna":
+            try:
+                pk = date.fromisoformat(str(k.get("pvm", "")))
+                iso = pk.isocalendar()
+                vkey = f"{iso[0]}-W{iso[1]:02d}"
+                raw = oly.get("lasna", {}).get(vkey, {})
+                m_jako = len([nm for nm in nimet if raw.get(nm, 1)]) or len(nimet)
+            except ValueError:
+                m_jako = len(nimet)
+        else:
+            m_jako = max(len(nimet), 1)
+        per = eur2(k_summa / m_jako) if m_jako else ""
+        kt.append(f'<tr><td>{e(str(k.get("pvm", "")))}{merkinta}</td><td>{e(str(k.get("kuvaus", "")))}</td>'
+                  f'<td>{e(str(k.get("maksaja", "")))}</td><td class="num">{eur2(k_summa)}</td>'
+                  f'<td>{e(", ".join(k.get("osallistujat") or []) or ("läsnäviikko" if k.get("jako") == "lasna" else "kaikki"))}</td>'
+                  f'<td class="num">{per}</td>'
+                  f'<td><a href="#" class="olpoisto" data-i="{i}">poista</a></td></tr>')
+    if len(kt) == 1:
+        kt.append('<tr><td colspan="7" class="pikkuteksti">ei kirjauksia</td></tr>')
+    kt.append("</table>")
+    osallistujaruudut = "".join(f'<label style="margin-right:.5rem"><input type="checkbox" '
+                                f'class="ol-osall" value="{e(nm)}" checked> {e(nm)}</label>'
+                                for nm in nimet)
+    jaot = " + ".join(f"{e(t)} {eur2(v)}" for t, v in
+                      sorted(L["jaetut"].items(), key=lambda x: -abs(x[1]))) or "—"
+    nykyinen = L["kategoria"]
+    if cfg:
+        optiot = [f'<option value=""{"" if nykyinen else " selected"}>— ei käytössä —</option>']
+        loytyi = False
+        for k in sorted(cfg.get("kategoriat", {}), key=str.lower):
+            sel = " selected" if k == nykyinen else ""
+            loytyi = loytyi or bool(sel)
+            optiot.append(f"<option{sel}>{e(k)}</option>")
+        if nykyinen and not loytyi:
+            optiot.append(f"<option selected>{e(nykyinen)}</option>")
+        optiot.append('<option value="__uusi__">+ uusi kategoria…</option>')
+        katvalinta = f'<select id="ol-kat">{"".join(optiot)}</select>'
+        puuttuu = ("" if (not nykyinen or loytyi) else
+                   ' <span class="pikkuteksti">⚠ kategoriaa ei vielä ole pääkirjassa — '
+                   "rivit poimitaan toistaiseksi vain vanhoilla tunnisteilla</span>")
+    else:
+        katvalinta = f'"{e(nykyinen)}"'
+        puuttuu = ""
+    vihje = "" if L["boksi_yht"] else ('<p class="pikkuteksti">⚠ Kaudelta ei löytynyt Ruokaboksi-rivejä '
+                                      "pääkirjasta — tarkista kauden alkupäivä.</p>")
+    otsikko = (siisti(str(oly.get("otsikko", "")))
+               or siisti(str(oly.get("kategoria", ""))) or "Yhteistalous")
+    return (f'<details id="yhteistalous"><summary><h2 style="display:inline">{e(otsikko)} \u2014 jaettujen kulujen reskontra '
+            f'({e(L["alku"])} →)</h2></summary><div class="pkortti">'
+            f'<p class="pikkuteksti"><a href="yhteistalous_erittely.html" target="_blank" '
+            f'rel="noopener" style="font-size:1.05em">🖨 Avaa tulostettava erittely uuteen '
+            f'välilehteen</a> — selaimen tulostuksesta (⌘P) saat PDF:n. '
+            f'Taustakuva: pudota kuva tiedostoksi raportit/tausta.jpg</p>'
+            f'<p class="pikkuteksti">Kausi {e(L["alku"])} → {e(L["loppu"])} · boksi {eur2(L["boksi_yht"])} € '
+            f'· tasan jaetut: {jaot} · palautukset {eur2(L["palautus_yht"])} €</p>'
+            f'<p class="pikkuteksti">Näytettävä nimi: '
+            f'<input id="ol-otsikko" size="16" value="{e(otsikko)}" '
+            f'title="näkyy raportin ja erittelyn otsikossa"> '
+            f'(tyhjä = poimintakategorian nimi)</p>'
+            f'<p class="pikkuteksti">Poiminta pääkirjasta: kategorian {katvalinta} rivit{puuttuu} — '
+            f'<input id="ol-viikkotark" size="14" value="{e(", ".join(L["viikkojako"]))}" '
+            f'title="pilkuin eroteltuna"> jaetaan läsnäoloviikon mukaan, '
+            f'<input id="ol-palautustark" size="24" value="{e(", ".join(L["palautustarkenteet"]))}" '
+            f'title="pilkuin eroteltuna"> ovat jäsenten maksuja pankkiirille, '
+            f'muut tarkenteet (netti, sähkö, …) jaetaan tasan. Ruokaboksi tunnistetaan lisäksi '
+            f'nimestä kategoriasta riippumatta. Asetukset: data/olympos.json.</p>'
+            f'{vihje}<h3>Saldot</h3>{"".join(st)}'
+            f'<h3>Läsnäolo viikoittain</h3><p class="pikkuteksti">Klikkaa solua: ✓ läsnä / – poissa. '
+            f'Viikon boksi jaetaan läsnäolijoiden kesken (jos kaikki poissa, jaetaan kaikille).</p>{"".join(lt)}'
+            f'<h3>Vakiot (kk-hyvitykset)</h3>'
+            f'<p class="pikkuteksti">Jäsenen saldoa veloitetaan summa joka kuukausi ja muille '
+            f'hyvitetään tasan — esim. autolataus: Ville korvaa yhteisölle sähköstä. '
+            f'Kaudella {L["kk"]} kk.</p>{"".join(vt)}'
+            f'<p>uusi vakio: <input id="ol-vk-kuvaus" placeholder="kuvaus" size="14"> '
+            f'<select id="ol-vk-jasen">{maksaja_optiot}</select> '
+            f'<input id="ol-vk-summa" placeholder="€/kk" size="6"> '
+            f'<input id="ol-vk-kk" placeholder="kk (tyhjä = rajaton)" size="12"> '
+            f'<button id="ol-vk-lisaa">lisää vakio</button></p>'
+            f'<h3>Kirjaukset</h3><p class="pikkuteksti">Yhteiskulut, jotka joku maksoi omasta pussistaan '
+            f'(esim. puutarhuri).</p>{"".join(kt)}'
+            f'<h3>Poimitut rivit</h3><p class="pikkuteksti">Nämä rivit luetaan pääkirjasta jakoon. '
+            f'Jos jokin kuuluu eri kaudelle (esim. tasauspäivän jälkeen veloittunut edellisen '
+            f'kuun lasku), sulje se pois — se ei tuolloin vaikuta saldoihin.</p>{rivitaulu}'
+            f'<p>uusi: <input type="date" id="ol-pvm" value="{date.today().isoformat()}"> '
+            f'<input id="ol-kuvaus" placeholder="kuvaus" size="18"> '
+            f'<select id="ol-maksaja">{maksaja_optiot}</select> '
+            f'<input id="ol-summa" placeholder="summa" size="7"> '
+            f'jaetaan: {osallistujaruudut} '
+            f'<button id="ol-lisaa">lisää kirjaus</button></p>'
+            f'<p>Tarkastelujakso: <input type="date" id="ol-nayta-alku" value="{e(L["alku"])}"> – '
+            f'<input type="date" id="ol-nayta-loppu" value="{e(L["loppu"])}"> '
+            f'<button id="ol-nayta">näytä jakso</button> '
+            f'<span class="pikkuteksti">— rajaa laskennan valituille päiville (ei muuta tasausta). '
+            f'Tyhjä alku = viimeisin tasaus, tyhjä loppu = tänään.</span></p>'
+            f'<p>Uusi tasaus: <input type="date" id="ol-tasattu" value="{e(L["loppu"])}"> '
+            f'<button id="ol-tasaa">aloita uusi kausi tästä päivästä</button> '
+            f'<span class="pikkuteksti">— nollaa laskennan; paina kun rahat on siirretty.</span></p>'
+            f"</div></details>")
+
+
+def rakenna_raportit(ledger, cfg, kk=13):
+    RAPORTIT.mkdir(exist_ok=True)
+    kuukaudet, taulu, tulot, menot = koosta(ledger, cfg)
+    kaikki_kk = list(kuukaudet)
+    if kk and len(kuukaudet) > kk:
+        kuukaudet = kuukaudet[-kk:]
+    tyypit = cfg["kategoriat"]
+    menokat = [k for k in taulu if tyypit.get(k, "meno") == "meno"]
+    menokat.sort(key=lambda k: -sum(taulu[k][m] for m in kuukaudet))
+    tulokat = [k for k in taulu if tyypit.get(k) == "tulo"]
+    raamit = lue_budjetti()
+
+    # --- koko historian koonti: yhteensä + keskim./kk + keskim./v ---
+    tanaan_kk = date.today().isoformat()[:7]
+    taydet = [m for m in kaikki_kk if m < tanaan_kk] or list(kaikki_kk)
+    n_kk = len(taydet)
+    tayset = set(taydet)
+    menokat_koko = sorted((kx for kx in taulu if tyypit.get(kx, "meno") == "meno"),
+                          key=lambda kx: -sum(taulu[kx].values()))
+
+    def rivi_koonti(nimi, sarja_kk, yht, tyyppi):
+        arvot = [sarja_kk.get(m, 0.0) for m in taydet]
+        ka = sum(arvot) / n_kk
+        med = statistics.median(arvot) if arvot else 0.0
+        delta = _trendi3(arvot)
+        hyva = None if delta is None else (delta > 0 if tyyppi == "tulo" else delta < 0)
+        return {"nimi": nimi, "yht": yht, "ka": ka, "kav": ka * 12, "med": med,
+                "delta": delta, "hyva": hyva, "spark": _spark(arvot)}
+
+    koonti = [rivi_koonti(kx, taulu[kx], sum(taulu[kx].values()), tyypit.get(kx, "meno"))
+              for kx in menokat_koko + tulokat]
+    m_yht, t_yht = sum(menot.values()), sum(tulot.values())
+    saasto_kk = {m: tulot.get(m, 0.0) - menot.get(m, 0.0) for m in taydet}
+    koonti_summat = [rivi_koonti("Menot yhteensä", menot, m_yht, "meno"),
+                     rivi_koonti("Tulot yhteensä", tulot, t_yht, "tulo"),
+                     rivi_koonti("Säästö", saasto_kk, t_yht - m_yht, "tulo")]
+    jakso = (min(r["pvm"] for r in ledger), max(r["pvm"] for r in ledger)) if ledger else ("", "")
+    with open(RAPORTIT / "yhteenveto_koko.csv", "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(["Kategoria", "Yhteensä", "Keskim./kk", "Mediaani/kk", "Keskim./v",
+                    "Trendi 3kk vs ed. 3kk (€/kk)"])
+        for r in koonti + koonti_summat:
+            w.writerow([r["nimi"], fmt_eur(r["yht"]), fmt_eur(r["ka"]), fmt_eur(r["med"]),
+                        fmt_eur(r["kav"]), "" if r["delta"] is None else f"{r['delta']:+.0f}".replace(".", ",")])
+
+    # --- yhteenveto_kk.csv (liitä sellaisenaan Google Sheetsiin) ---
+    with open(RAPORTIT / "yhteenveto_kk.csv", "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(["Kategoria"] + kuukaudet)
+        for k in menokat:
+            w.writerow([k] + [fmt_eur(taulu[k][m]) if taulu[k][m] else "" for m in kuukaudet])
+        w.writerow(["MENOT YHT"] + [fmt_eur(menot[m]) for m in kuukaudet])
+        for k in tulokat:
+            w.writerow([k] + [fmt_eur(taulu[k][m]) if taulu[k][m] else "" for m in kuukaudet])
+        w.writerow(["TULOT YHT"] + [fmt_eur(tulot[m]) for m in kuukaudet])
+        w.writerow(["Säästö €"] + [fmt_eur(tulot[m] - menot[m]) for m in kuukaudet])
+        w.writerow(["Säästö %"] + [f"{(tulot[m] - menot[m]) / tulot[m] * 100:.1f}".replace(".", ",")
+                                   if tulot[m] > 0 else "" for m in kuukaudet])
+    tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit, ledger,
+             koonti, koonti_summat, jakso, n_kk, kaikki_kk, tyypit)
+
+
+def tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit, ledger,
+             koonti, koonti_summat, jakso, n_kk, kaikki_kk, tyypit):
+    e = html.escape
+    tanaan = date.today().isoformat()[:7]
+    taydet = [m for m in kuukaudet if m < tanaan]
+    kohde = taydet[-1] if taydet else (kuukaudet[-1] if kuukaudet else None)
+
+    # --- porautumisdata: kategoria -> kk -> [pvm, summa(näyttö), saaja, tarkenne, tili] ---
+    naytto = {}
+    for r in ledger:
+        kat = r["kategoria"]
+        ty = tyypit.get(kat, "meno")
+        s = float(r["summa"])
+        if ty == "pois":
+            disp = round(s, 2)  # siirrot raakamerkillä: negatiivinen = rahaa lähti
+        else:
+            disp = round(-s if ty == "meno" else s, 2)
+        teksti = r["saaja"] or r["selite"][:60]
+        naytto.setdefault(kat, {}).setdefault(r["pvm"][:7], []).append(
+            [r["pvm"], disp, teksti, r.get("tarkenne", "").lower(), r["tili"], r["id"],
+             r.get("peruste", ""), siisti(r["selite"])[:220]])
+    for kat in naytto.values():
+        for lista in kat.values():
+            lista.sort(key=lambda x: x[0], reverse=True)
+    data_js = json.dumps({"kk": kaikki_kk, "kat": naytto}, ensure_ascii=False,
+                         separators=(",", ":")).replace("</", "<\\/")
+    def _aakkoset(tyyppi):
+        return sorted((k for k, ty in tyypit.items() if ty == tyyppi and k != "TARKISTA"),
+                      key=str.lower)
+    kat_js = json.dumps({"menot": _aakkoset("meno"), "tulot": _aakkoset("tulo"),
+                         "pois": _aakkoset("pois") + ["TARKISTA"]}, ensure_ascii=False)
+    tarkenteet_js = json.dumps(sorted({r.get("tarkenne", "").lower() for r in ledger} - {""}), ensure_ascii=False)
+    tark_kat = {}
+    for r in ledger:
+        t = r.get("tarkenne", "").lower()
+        if t:
+            tark_kat.setdefault(r["kategoria"], set()).add(t)
+    tarkkat_js = json.dumps({k: sorted(v) for k, v in tark_kat.items()}, ensure_ascii=False)
+    ehdot_map = {}
+    for s_ in lue_saannot_raaka():
+        ehdot_map.setdefault(normalisoi(s_["malli"]), []).append(
+            (s_.get("ehto", ""), s_.get("kategoria", "")))
+    saantoehdot_js = json.dumps(
+        {m: "; ".join((e or "ei ehtoa") + " → " + k for e, k in v)
+         for m, v in ehdot_map.items() if any(e for e, _ in v)}, ensure_ascii=False)
+
+    # --- ylägraafi: tulot ja menot per kk ---
+    maksimi = max([menot[m] for m in kuukaudet] + [tulot[m] for m in kuukaudet] + [1])
+    W, H, POHJA = 900, 260, 220
+    lev = W / max(len(kuukaudet), 1)
+    palkit = []
+    for i, m in enumerate(kuukaudet):
+        x = i * lev
+        mh = menot[m] / maksimi * (POHJA - 20)
+        th = tulot[m] / maksimi * (POHJA - 20)
+        palkit.append(
+            f'<rect data-laji="tulot" data-kkm="{m}" style="cursor:pointer" '
+            f'x="{x + lev * 0.14:.1f}" y="{POHJA - th:.1f}" width="{lev * 0.3:.1f}" height="{th:.1f}" '
+            f'fill="#2e7d5b"><title>{m} tulot {fmt_eur(tulot[m])} € — klikkaa avataksesi</title></rect>'
+            f'<rect data-laji="menot" data-kkm="{m}" style="cursor:pointer" '
+            f'x="{x + lev * 0.5:.1f}" y="{POHJA - mh:.1f}" width="{lev * 0.3:.1f}" height="{mh:.1f}" '
+            f'fill="#b3502d"><title>{m} menot {fmt_eur(menot[m])} € — klikkaa avataksesi</title></rect>'
+            f'<text x="{x + lev / 2:.1f}" y="{POHJA + 16}" text-anchor="middle" class="aks">{m[5:]}/{m[2:4]}</text>'
+        )
+        saasto = tulot[m] - menot[m]
+        if tulot[m] > 0:
+            palkit.append(f'<text x="{x + lev / 2:.1f}" y="{POHJA + 32}" text-anchor="middle" '
+                          f'class="aks {"plus" if saasto >= 0 else "miinus"}">{saasto / tulot[m] * 100:+.0f}%</text>')
+    ma_menot = _liukuva3([menot[m] for m in kuukaudet])
+    ma_pisteet = " ".join(f"{i * lev + lev * 0.65:.1f},{POHJA - v / maksimi * (POHJA - 20):.1f}"
+                          for i, v in enumerate(ma_menot) if v is not None)
+    ma_viiva = (f'<polyline points="{ma_pisteet}" fill="none" stroke="#26241f" stroke-width="2"/>'
+                if ma_pisteet else "")
+    kaavio = (f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="Tulot ja menot kuukausittain">'
+              f'<line x1="0" y1="{POHJA}" x2="{W}" y2="{POHJA}" stroke="#8a857c" stroke-width="1"/>'
+              + "".join(palkit) + ma_viiva + "</svg>")
+
+    def kat_attr(nimi, mkk=None):
+        if nimi not in naytto:
+            return ""
+        lisa = f' data-kk="{mkk}"' if mkk else ""
+        return f' class="klik" data-kat="{e(nimi)}"{lisa}'
+
+    # --- koko historian koonti ---
+    def koonti_rivi(r, luokka=""):
+        if r["delta"] is None:
+            trendi = '<td class="num">–</td>'
+        else:
+            vari = "" if r["hyva"] is None else (" plus" if r["hyva"] else " miinus")
+            nuoli = "↘" if r["delta"] < -1 else ("↗" if r["delta"] > 1 else "→")
+            trendi = f'<td class="num{vari}">{nuoli} {r["delta"]:+.0f}</td>'.replace(".", ",")
+        attr = kat_attr(r["nimi"]) if not luokka else ""
+        return (f'<tr class="{luokka}"><td{attr}>{e(r["nimi"])}</td><td class="spark">{r["spark"]}</td>'
+                f'<td class="num">{fmt_eur(r["yht"])}</td><td class="num">{fmt_eur(r["ka"])}</td>'
+                f'<td class="num">{fmt_eur(r["med"])}</td><td class="num">{fmt_eur(r["kav"])}</td>{trendi}</tr>')
+
+    koonti_html = "".join(koonti_rivi(r) for r in koonti)
+    koonti_html += "".join(koonti_rivi(r, "summa") for r in koonti_summat)
+    t_yht_kaikki = sum(tulot.values())
+    saasto_rivi = ""
+    if t_yht_kaikki > 0:
+        saasto_rivi = ("Säästöaste koko jaksolta " +
+                       f"{(1 - sum(menot.values()) / t_yht_kaikki) * 100:.1f}".replace(".", ",") + " %. ")
+
+    # --- kohdekuukauden budjettivertailu ---
+    rivit_html = []
+    if kohde:
+        for k in menokat:
+            tot = taulu[k][kohde]
+            raami = raamit.get(k)
+            if not tot and not raami:
+                continue
+            if raami:
+                osuus = min(tot / raami, 1.5) if raami else 0
+                palkki = (f'<div class="palkki"><div class="taytto {"yli" if tot > raami else ""}" '
+                          f'style="width:{osuus / 1.5 * 100:.0f}%"></div><i style="left:{100 / 1.5:.1f}%"></i></div>')
+                erotus = f'<td class="num {"plus" if raami - tot >= 0 else "miinus"}">{fmt_eur(raami - tot)}</td>'
+                raami_s = f'<td class="num">{fmt_eur(raami)}</td>'
+            else:
+                palkki, erotus, raami_s = '<div class="palkki tyhja"></div>', '<td class="num">–</td>', '<td class="num">–</td>'
+            rivit_html.append(f'<tr><td{kat_attr(k, kohde)}>{e(k)}</td><td class="num">{fmt_eur(tot)}</td>{raami_s}{erotus}'
+                              f'<td>{palkki}</td></tr>')
+
+    # --- kategoriat × kuukaudet -matriisi (klikattavat solut) ---
+    def matriisirivi(nimi, arvot, luokka="", klik=False):
+        solut = []
+        for a, mkk in zip(arvot, kuukaudet):
+            attr = kat_attr(nimi, mkk) if (klik and a) else ' class="num"'
+            if klik and a:
+                attr = attr.replace('class="klik"', 'class="klik num"')
+            solut.append(f'<td{attr}>{fmt_eur(a) if a else ""}</td>')
+        nimi_attr = kat_attr(nimi) if klik else ""
+        return f'<tr class="{luokka}"><td{nimi_attr}>{e(nimi)}</td>{"".join(solut)}</tr>'
+
+    matriisi = [f'<tr><th>Kategoria</th>{"".join(f"<th>{m[5:]}/{m[2:4]}</th>" for m in kuukaudet)}</tr>']
+    matriisi += [matriisirivi(k, [taulu[k][m] for m in kuukaudet], klik=True) for k in menokat]
+    matriisi.append(matriisirivi("Menot yhteensä", [menot[m] for m in kuukaudet], "summa"))
+    matriisi += [matriisirivi(k, [taulu[k][m] for m in kuukaudet], klik=True) for k in tulokat]
+    matriisi.append(matriisirivi("Tulot yhteensä", [tulot[m] for m in kuukaudet], "summa"))
+    matriisi.append(matriisirivi("Säästö €", [tulot[m] - menot[m] for m in kuukaudet], "summa"))
+
+    saannot_raaka = lue_saannot_raaka()
+    saanto_n = len(saannot_raaka)
+    kaytto = Counter(r.get("peruste", "") for r in ledger)
+    tekstit = [(normalisoi(f"{r['saaja']} {r['selite']}"), float(r["summa"])) for r in ledger]
+
+    def _osumia(s):
+        try:
+            t = _saanto_tuple(s["malli"], "x", s["ehto"])
+        except re.error:
+            return "–"
+        return sum(1 for tx, sm in tekstit
+                   if (t[1].search(tx) if t[0] == "re" else t[1] in tx) and _ehto_ok(t[3], sm))
+
+    olympos_html = olympos_osio(ledger, cfg)
+    with open(RAPORTIT / "yhteistalous_erittely.html", "w", encoding="utf-8") as f_oe:
+        f_oe.write(olympos_erittely_html(ledger))
+    saannot_html = "".join(
+        f'<tr class="saantorivi"><td class="num"><a href="#" class="saantosija" '
+        f'data-malli="{e(s["malli"])}" data-kategoria="{e(s["kategoria"])}" data-ehto="{e(s["ehto"])}" '
+        f'title="klikkaa: siirrä numeroituun sijaintiin">{i}</a></td>'
+        f'<td>{e(s["malli"])}</td><td>{e(s["kategoria"])}</td>'
+        f'<td>{e(s["ehto"])}</td><td class="num">{_osumia(s)}</td>'
+        f'<td class="num">{kaytto.get("sääntö: " + normalisoi(s["malli"]), 0) or ""}</td>'
+        f'<td><a href="#" class="saantopoisto" data-malli="{e(s["malli"])}" '
+        f'data-kategoria="{e(s["kategoria"])}" data-ehto="{e(s["ehto"])}" '
+        f'data-n="{kaytto.get("sääntö: " + normalisoi(s["malli"]), 0)}">poista</a> · <a href="#" class="saantomuokkaus" data-malli="{e(s["malli"])}" data-kategoria="{e(s["kategoria"])}" data-ehto="{e(s["ehto"])}">muokkaa</a> · <a href="#" class="saantosiirto" data-suunta="-1" data-malli="{e(s["malli"])}" data-kategoria="{e(s["kategoria"])}" data-ehto="{e(s["ehto"])}" title="askel ylös">↑</a><a href="#" class="saantosiirto" data-suunta="1" data-malli="{e(s["malli"])}" data-kategoria="{e(s["kategoria"])}" data-ehto="{e(s["ehto"])}" title="askel alas">↓</a><a href="#" class="saantosiirto" data-suunta="alkuun" data-malli="{e(s["malli"])}" data-kategoria="{e(s["kategoria"])}" data-ehto="{e(s["ehto"])}" title="siirrä ylimmäksi">⤒</a><a href="#" class="saantosiirto" data-suunta="loppuun" data-malli="{e(s["malli"])}" data-kategoria="{e(s["kategoria"])}" data-ehto="{e(s["ehto"])}" title="siirrä alimmaksi">⤓</a></td></tr>'
+        for i, s in enumerate(saannot_raaka, 1))
+    avoimia = sum(1 for r in ledger if r["kategoria"] == "TARKISTA")
+    # --- saldot & kulukatsaus ---
+    saatava_kat = list(dict.fromkeys(
+        [k for k, t in tyypit.items()
+         if t == "pois" and k not in ("Siirto", "Sijoitukset", "Luoton lyhennys")]
+        + (["Laina"] if "Laina" in tyypit else [])))
+    saldo_rivit = []
+    tasatut_rivit = []
+    for k in saatava_kat:
+        ryhmat = defaultdict(lambda: [0.0, 0])
+        for r in ledger:
+            if r["kategoria"] == k:
+                g = ryhmat[r.get("tarkenne", "")]
+                g[0] += float(r["summa"])
+                g[1] += 1
+        for tark, (netto, n) in sorted(ryhmat.items()):
+            nimi = f"{k} · {tark}" if tark else k
+            if netto < -1:
+                teksti = f"avointa saatavaa {fmt_eur(-netto)} €"
+            elif netto > 1:
+                teksti = f"saldo +{fmt_eur(netto)} € (saatu enemmän kuin maksettu)"
+            elif n >= 2:
+                tasatut_rivit.append(f'<tr><td><a href="#" class="klik" data-kat="{e(k)}">{e(nimi)}</a></td>'
+                                     f'<td>✓ tasan — maksettu takaisin</td></tr>')
+                continue
+            else:
+                continue
+            saldo_rivit.append(f'<tr><td><a href="#" class="klik" data-kat="{e(k)}">{e(nimi)}</a></td>'
+                               f'<td>{teksti}</td></tr>')
+    def _seuraava_era(paiva):
+        tanaan = date.today()
+        if paiva == "loppu":
+            viim = calendar.monthrange(tanaan.year, tanaan.month)[1]
+            if tanaan.day <= viim:
+                d = date(tanaan.year, tanaan.month, viim)
+            else:
+                v, k2 = (tanaan.year + 1, 1) if tanaan.month == 12 else (tanaan.year, tanaan.month + 1)
+                d = date(v, k2, calendar.monthrange(v, k2)[1])
+        else:
+            if tanaan.day <= paiva:
+                d = date(tanaan.year, tanaan.month, paiva)
+            else:
+                v, k2 = (tanaan.year + 1, 1) if tanaan.month == 12 else (tanaan.year, tanaan.month + 1)
+                d = date(v, k2, paiva)
+        return f"{d.day}.{d.month}."
+
+    for nimi, (maksut, tuodut) in kortti_summat(ledger).items():
+        ero = round(sum(maksut.values()) - sum(t[1] for t in tuodut.values()), 2)
+        if ero < -5:
+            spec = KORTIT_SPEC.get(nimi, {})
+            era = _seuraava_era(spec.get("era_paiva", "loppu"))
+            minimi = -ero * spec.get("minimi_pct", 2) / 100
+            teksti = (f"avointa korttivelkaa ~{fmt_eur(-ero)} € · seuraava eräpäivä ~{era} "
+                      f"(minimierä ~{fmt_eur(max(30.0, minimi))} €)")
+        elif ero > 5:
+            teksti = f"täsmäytysvakio +{fmt_eur(ero)} € (rajapäivä/ennakot)"
+        else:
+            teksti = "✓ maksut ja ostot täsmäävät"
+        saldo_rivit.append(f'<tr><td>{e(nimi)} (kortti)</td><td>{teksti}</td></tr>')
+
+    korko_kaikki = korko_viim3 = 0.0
+    raja3 = sorted({r["pvm"][:7] for r in ledger})[-3:]
+    for r in ledger:
+        t = normalisoi(f"{r['saaja']} {r['selite']}")
+        if r["tili"] in ("OP-kortti", "S-Pankki Visa") and ("korko" in t or "tilinhoito" in t):
+            korko_kaikki += -float(r["summa"])
+            if r["pvm"][:7] in raja3:
+                korko_viim3 += -float(r["summa"])
+    til_kk = defaultdict(float)
+    til_saajat = Counter()
+    for r in ledger:
+        if r["kategoria"] == "Tilaukset & liittymät":
+            til_kk[r["pvm"][:7]] += -float(r["summa"])
+            til_saajat[r["saaja"][:24]] += -float(r["summa"])
+    til_taso = (sum(til_kk.values()) / len(til_kk)) if til_kk else 0.0
+    vinkit = []
+    if korko_kaikki > 1:
+        vinkit.append(f"Luottokulut (korot + tilinhoidot) yhteensä {fmt_eur(korko_kaikki)} €, "
+                      f"viim. 3 kk tasolla ~{fmt_eur(korko_viim3 / 3)} €/kk — "
+                      f"poistuu kokonaan kuittaamalla avoimen korttisaldon.")
+    til_lkm = Counter()
+    for r in ledger:
+        if r["kategoria"] == "Tilaukset & liittymät":
+            til_lkm[r["saaja"][:24]] += 1
+    if til_taso > 1:
+        isoimmat = ", ".join(f"{n} ({fmt_eur(s / max(1, len(til_kk)))} €/kk)"
+                             for n, s in til_saajat.most_common(3))
+        vinkit.append(f"Tilaukset & liittymät ~{fmt_eur(til_taso)} €/kk — suurimmat: {isoimmat}.")
+    til_lista = ""
+    if til_saajat:
+        kkia = max(1, len(til_kk))
+        rivit_t = []
+        for n, s in til_saajat.most_common():
+            krt = til_lkm[n]
+            if krt >= kkia - 2 and kkia >= 4:
+                kuvaus = f"{fmt_eur(s / kkia)} €/kk"
+            elif krt <= 2 and s > 20:
+                kuvaus = f"vuosittainen ~{fmt_eur(s)} €/v"
+            else:
+                kuvaus = f"{fmt_eur(s)} € / {krt} krt"
+            rivit_t.append(f'<tr><td>{e(n)}</td><td class="num">{fmt_eur(s)}</td>'
+                           f'<td>{kuvaus}</td></tr>')
+        til_lista = (f'<details class="pikkuteksti"><summary>kaikki tilaukset '
+                     f'({len(til_saajat)} kpl · {fmt_eur(sum(til_saajat.values()))} € jaksolla) '
+                     f'— vuositilaukset tunnistettu rytmistä</summary>'
+                     f'<table><tr><th>Saaja</th><th>Yht €</th><th>Rytmi</th></tr>'
+                     + "".join(rivit_t) + '</table></details>')
+    tasatut_html = ""
+    if tasatut_rivit:
+        tasatut_html = (f'<details class="pikkuteksti"><summary>✓ tasatut lainat ja saatavat '
+                        f'({len(tasatut_rivit)})</summary><table>'
+                        + "".join(tasatut_rivit) + '</table></details>')
+    saldot_html = ""
+    if saldo_rivit or vinkit or tasatut_rivit:
+        saldot_html = ('<h2>Saldot & kulukatsaus</h2><table>'
+                       '<tr><th>Kohde</th><th>Tilanne</th></tr>'
+                       + "".join(saldo_rivit) + '</table>'
+                       + tasatut_html
+                       + "".join(f'<p class="pikkuteksti">\U0001f4a1 {v}</p>' for v in vinkit)
+                       + til_lista)
+
+    huomio = (f'<p class="huomio">⚠ {avoimia} tapahtumaa luokittelematta (kategoria TARKISTA) — '
+              f'luvut tarkentuvat kun täytät tarkistettavat.csv ja ajat <code>opi</code>.</p>') if avoimia else ""
+
+    skripti = """
+<script>
+const DATA=__DATA__;
+const KAT=__KAT__;
+const TARKENTEET=__TARKENTEET__;
+const TARKKAT=__TARKKAT__;
+const SAANTOEHDOT=__SAANTOEHDOT__;
+// ---- Tutki-graafi: kk × kategoria × tarkenne, koottu DATA.kat-riveistä ----
+const TUTKI={valitut:[], varit:{}, tila:'stacked'};
+const TUTKIVARIT=['#c0532b','#2e7d5b','#3a6ea5','#9a6b2f','#7d4f9c','#b5893a','#4a8a8a',
+  '#a8476b','#5f7d3a','#8a5a3c','#d08a2e','#556b8d','#6b8e4e','#a05a7a','#3f7a6b','#8d6a9c'];
+function tutkiVari(avain){
+  if(!TUTKI.varit[avain]){
+    TUTKI.varit[avain]=TUTKIVARIT[Object.keys(TUTKI.varit).length % TUTKIVARIT.length];
+  }
+  return TUTKI.varit[avain];
+}
+function tutkiSarja(avain){
+  // avain = "Kategoria" tai "Kategoria \u203a tarkenne"
+  const osat=avain.split(' \u203a ');
+  const kat=osat[0], tark=osat.length>1?osat[1]:null;
+  // Jos koko kategoria on valittu JA sen tarkenteita on erikseen valittu,
+  // vähennä ne pois kategoriapalkista — muuten osa laskettaisiin kahdesti.
+  let poisTark=null;
+  if(tark===null){
+    poisTark={};
+    TUTKI.valitut.forEach(function(v){
+      const o=v.split(' \u203a ');
+      if(o.length>1 && o[0]===kat){ poisTark[o[1]]=1; }
+    });
+  }
+  const perKk={};
+  const kdata=(DATA.kat||{})[kat]||{};
+  for(const kk in kdata){
+    let summa=0;
+    for(const rivi of kdata[kk]){
+      const rtark=(rivi[3]||'');
+      if(tark===null){
+        if(poisTark[rtark]) continue;   // tämä tarkenne on jo omana sarjanaan
+        summa+=Math.abs(rivi[1]);
+      }else if(rtark===tark){
+        summa+=Math.abs(rivi[1]);
+      }
+    }
+    if(summa) perKk[kk]=summa;
+  }
+  return perKk;
+}
+function tutkiOnkoOsittainen(avain){
+  // tosi, jos tämä on kategoria jonka tarkenteita on erikseen valittu (= "muut"-jäännös)
+  if(avain.indexOf(' \u203a ')>=0) return false;
+  return TUTKI.valitut.some(function(v){
+    const o=v.split(' \u203a '); return o.length>1 && o[0]===avain;
+  });
+}
+function tutkiPiirra(){
+  const svgHolder=document.getElementById('tutki-svg');
+  const leg=document.getElementById('tutki-legenda');
+  if(!TUTKI.valitut.length){
+    svgHolder.innerHTML='<p class="pikkuteksti">Valitse vasemmalta kategorioita tai tarkenteita.</p>';
+    leg.innerHTML=''; return;
+  }
+  const kuut=DATA.kk||[];
+  const sarjat=TUTKI.valitut.map(function(av){
+    return {avain:av, vari:tutkiVari(av), data:tutkiSarja(av)};
+  });
+  // maksimi: stacked = pinon summa, grouped = yksittäinen
+  let maksimi=1;
+  for(const kk of kuut){
+    if(TUTKI.tila==='stacked'){
+      let s=0; sarjat.forEach(function(sr){s+=sr.data[kk]||0;});
+      if(s>maksimi)maksimi=s;
+    }else{
+      sarjat.forEach(function(sr){ if((sr.data[kk]||0)>maksimi)maksimi=sr.data[kk]||0; });
+    }
+  }
+  const W=900,H=300,POHJA=250,VASEN=4;
+  const lev=(W-VASEN)/Math.max(kuut.length,1);
+  let parts=['<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Kategoriat kuukausittain">'];
+  parts.push('<line x1="0" y1="'+POHJA+'" x2="'+W+'" y2="'+POHJA+'" stroke="#8a857c"/>');
+  kuut.forEach(function(kk,i){
+    const x0=VASEN+i*lev;
+    if(TUTKI.tila==='stacked'){
+      let y=POHJA;
+      sarjat.forEach(function(sr){
+        const v=sr.data[kk]||0; if(!v)return;
+        const h=v/maksimi*(POHJA-20);
+        parts.push('<rect x="'+(x0+lev*0.15).toFixed(1)+'" y="'+(y-h).toFixed(1)+
+          '" width="'+(lev*0.7).toFixed(1)+'" height="'+h.toFixed(1)+'" fill="'+sr.vari+
+          '"><title>'+esc(kk)+' · '+esc(sr.avain)+': '+eur(v)+' \u20ac</title></rect>');
+        y-=h;
+      });
+    }else{
+      const n=sarjat.length, bw=lev*0.7/n;
+      sarjat.forEach(function(sr,j){
+        const v=sr.data[kk]||0; if(!v)return;
+        const h=v/maksimi*(POHJA-20);
+        parts.push('<rect x="'+(x0+lev*0.15+j*bw).toFixed(1)+'" y="'+(POHJA-h).toFixed(1)+
+          '" width="'+(bw*0.92).toFixed(1)+'" height="'+h.toFixed(1)+'" fill="'+sr.vari+
+          '"><title>'+esc(kk)+' · '+esc(sr.avain)+': '+eur(v)+' \u20ac</title></rect>');
+      });
+    }
+    const lyhyt=kk.slice(2);
+    parts.push('<text x="'+(x0+lev/2).toFixed(1)+'" y="'+(POHJA+16)+'" text-anchor="middle" '+
+      'style="font-size:11px;fill:#6b6459">'+esc(lyhyt)+'</text>');
+  });
+  parts.push('</svg>');
+  svgHolder.innerHTML=parts.join('');
+  leg.innerHTML=sarjat.map(function(sr){
+    const yht=Object.values(sr.data).reduce(function(a,b){return a+b;},0);
+    const nimi=esc(sr.avain)+(tutkiOnkoOsittainen(sr.avain)?' <span class="pikkuteksti">(muut)</span>':'');
+    return '<span><span class="tutki-lammas" style="background:'+sr.vari+'"></span>'+
+      nimi+' <span class="pikkuteksti">'+eur(yht)+' \u20ac</span></span>';
+  }).join('');
+}
+function tutkiToggle(avain){
+  const i=TUTKI.valitut.indexOf(avain);
+  if(i>=0){ TUTKI.valitut.splice(i,1); }
+  else { TUTKI.valitut.push(avain); tutkiVari(avain); }
+  tutkiPaivitaLamput(); tutkiPiirra();
+}
+// Päivitä vain valintalamppujen värit paikallaan (ei koko puun uudelleenrakennusta -> ei skrollihyppyä).
+function tutkiPaivitaLamput(){
+  const puu=document.getElementById('tutki-puu'); if(!puu)return;
+  const rivit=puu.querySelectorAll('[data-tkat],[data-av]');
+  for(let i=0;i<rivit.length;i++){
+    const el=rivit[i];
+    const av=el.getAttribute('data-av')||el.getAttribute('data-tkat');
+    const lammas=el.querySelector('.tutki-lammas'); if(!lammas)continue;
+    if(TUTKI.valitut.indexOf(av)>=0){
+      lammas.style.background=tutkiVari(av); lammas.style.border='none';
+    }else{
+      lammas.style.background='transparent'; lammas.style.border='1px solid #c9c3b8';
+    }
+  }
+}
+function tutkiRakennaPuu(){
+  const puu=document.getElementById('tutki-puu');
+  if(!puu)return;
+  const menot=(KAT.menot||[]).concat(KAT.tulot||[]);
+  const tarkPerKat={};
+  for(const kat in (DATA.kat||{})){
+    const setti={};
+    for(const kk in DATA.kat[kat]){
+      for(const rivi of DATA.kat[kat][kk]){ if(rivi[3]) setti[rivi[3]]=1; }
+    }
+    tarkPerKat[kat]=Object.keys(setti).sort();
+  }
+  const auki=TUTKI._auki||(TUTKI._auki={});
+  function lammas(av){
+    return TUTKI.valitut.indexOf(av)>=0
+      ? '<span class="tutki-lammas" style="background:'+tutkiVari(av)+'"></span>'
+      : '<span class="tutki-lammas" style="background:transparent;border:1px solid #c9c3b8"></span>';
+  }
+  let h=[];
+  menot.forEach(function(kat){
+    if(!(DATA.kat||{})[kat])return;
+    const tarkit=tarkPerKat[kat]||[];
+    const nuoli=tarkit.length?(auki[kat]?'\\u25be':'\\u25b8'):'\\u00a0';
+    h.push('<div class="tutki-katrivi" data-tkat="'+esc(kat)+'">'+
+      '<span class="tutki-nuoli" data-toggle="'+esc(kat)+'">'+nuoli+'</span>'+
+      lammas(kat)+'<span>'+esc(kat)+'</span></div>');
+    tarkit.forEach(function(t){
+      const av=kat+' \\u203a '+t;
+      h.push('<div class="tutki-tark'+(auki[kat]?'':' piilossa')+'" data-av="'+esc(av)+'" '+
+        'data-kat-ryhma="'+esc(kat)+'">'+lammas(av)+'<span>'+esc(t)+'</span></div>');
+    });
+  });
+  puu.innerHTML=h.join('');
+}
+function tutkiAvaa(kat){
+  TUTKI._auki=TUTKI._auki||{}; TUTKI._auki[kat]=!TUTKI._auki[kat];
+  const auki=TUTKI._auki[kat];
+  const puu=document.getElementById('tutki-puu'); if(!puu)return;
+  const rivit=puu.querySelectorAll('[data-kat-ryhma]');
+  for(let i=0;i<rivit.length;i++){
+    if(rivit[i].getAttribute('data-kat-ryhma')!==kat)continue;
+    if(auki)rivit[i].classList.remove('piilossa'); else rivit[i].classList.add('piilossa');
+  }
+  const nuolet=puu.querySelectorAll('.tutki-nuoli');
+  for(let i=0;i<nuolet.length;i++){
+    if(nuolet[i].getAttribute('data-toggle')===kat){ nuolet[i].textContent=auki?'\\u25be':'\\u25b8'; }
+  }
+}
+let SERVER=false;
+const MUUT={rivit:{},saannot:[],poistot:[]};
+const PSP=['klarna','paytrail','trustly','zettle','sumup','vfi*','ptl*','mob.pay','vipps','mobilepay','epassi','nyx*','adyen','stripe'];
+function eur(x){return x.toLocaleString('fi-FI',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function esc(s){const d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML;}
+function sulje(){
+  document.getElementById('paneeli').style.display='none';
+  if(PANEELI&&PANEELI.haku){
+    const k=document.getElementById('haku');
+    if(k){k.value='';}
+  }
+  PANEELI=null;
+}
+let MUOKKAUS=null;
+let PANEELI=null;
+let VALINTA=[];
+let ANKKURI=null;
+function soveltaKasin(id,kat,tark){
+  const s=etsiTuple(id);
+  if(s){
+    s.t[3]=tark;s.t[6]='k\u00e4sin';
+    if(s.kat!==kat){
+      DATA.kat[s.kat][s.kk].splice(s.i,1);
+      if(!DATA.kat[kat]){DATA.kat[kat]={};}
+      if(!DATA.kat[kat][s.kk]){DATA.kat[kat][s.kk]=[];}
+      DATA.kat[kat][s.kk].unshift(s.t);
+    }
+  }
+  const tr=document.getElementById('rivi-'+id);
+  if(tr){
+    tr.classList.add('tallennettu');
+    const pm=tr.querySelector('.perus');
+    if(pm){pm.textContent='\u270e';pm.title='k\u00e4sin';}
+    const sel=tr.querySelector('.katsel'); if(sel){sel.value=kat;}
+    const ip=tr.querySelector('.tarkinp'); if(ip){ip.value=tark;}
+  }
+}
+function paivitaSivu(kohde,viesti){
+  if(viesti){try{sessionStorage.setItem('rahaputki_viesti',viesti);}catch(err){}}
+  if(kohde==='saannot'){location.hash='saannot';}
+  else if(kohde==='yhteistalous'){location.hash='yhteistalous';}
+  else if(PANEELI&&PANEELI.haku){location.hash='haku='+encodeURIComponent(PANEELI.haku);}
+  else if(PANEELI&&PANEELI.kk_laji){location.hash='kklaji='+PANEELI.kk_laji+'&kkm='+PANEELI.kk_kk;}
+  else if(PANEELI&&PANEELI.kat){location.hash='kat='+encodeURIComponent(PANEELI.kat)+(PANEELI.kk?'&kk='+PANEELI.kk:'')+(PANEELI.tark?'&tark='+encodeURIComponent(PANEELI.tark):'');}
+  location.reload();
+}
+function riviLista(){
+  return Array.prototype.slice.call(document.querySelectorAll('#paneeli tr')).filter(function(x){
+    return x.id&&x.id.indexOf('rivi-')===0;});
+}
+function paivitaValinta(){
+  riviLista().forEach(function(tr){
+    tr.classList.toggle('valittu',VALINTA.indexOf(tr.id.slice(5))>=0);});
+  const p=document.getElementById('massapalkki');
+  if(p){
+    const ns=document.getElementById('massa-n');
+    if(ns){ns.textContent=VALINTA.length;}
+    p.style.display=VALINTA.length>1?'flex':'none';
+  }
+}
+function massaMuuta(){
+  const sel=document.querySelector('.katsel[data-id="__massa__"]');
+  const kat=sel?sel.value:'';
+  const tark=(document.getElementById('massa-tark')||{value:''}).value.trim().toLowerCase();
+  if(!kat||kat==='__uusi__'){alert('valitse kategoria');return;}
+  const idt=VALINTA.slice();
+  if(!idt.length){return;}
+  const kuvat=idt.map(tilannekuva).filter(function(x){return x;});
+  if(SERVER){
+    fetch('api/muutos',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({idt:idt,kategoria:kat,tarkenne:tark})})
+      .then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){alert(v.virhe||'virhe');return;}
+        idt.forEach(function(id){soveltaKasin(id,kat,tark);});
+        VALINTA=[];ANKKURI=null;paivitaValinta();
+        KUMOA=kuvat;
+        naytaKumoa(v.paivitetty+' rivi\u00e4 muutettu k\u00e4sin \u2713');
+      });
+  }else{
+    idt.forEach(function(id){
+      MUUT.rivit[id]={kategoria:kat,tarkenne:tark};
+      soveltaKasin(id,kat,tark);
+    });
+    KUMOA=kuvat;
+    VALINTA=[];ANKKURI=null;paivitaValinta();paivitaPalkki();
+    naytaKumoa(idt.length+' rivi\u00e4 jonossa');
+  }
+}
+function muokkaaRivi(tr, a){
+  if(MUOKKAUS){MUOKKAUS.tr.innerHTML=MUOKKAUS.html;}
+  MUOKKAUS={tr:tr,html:tr.innerHTML,
+    vanha:{malli:a.getAttribute('data-malli'),kategoria:a.getAttribute('data-kategoria'),
+           ehto:a.getAttribute('data-ehto')}};
+  const osat=MUOKKAUS.vanha.kategoria.split(':');
+  tr.innerHTML='<td class="num"></td>'+
+    '<td><input id="mk-malli" class="minp" size="20" value="'+esc(MUOKKAUS.vanha.malli)+'"></td>'+
+    '<td>'+katvalikko('__muok__',osat[0])+' <input id="mk-tark" class="tarkinp" data-id="__muok2__" '+
+    'list="tarklist" placeholder="tarkenne" value="'+esc(osat.slice(1).join(':'))+'"></td>'+
+    '<td><input id="mk-ehto" class="minp" size="8" value="'+esc(MUOKKAUS.vanha.ehto)+'"></td>'+
+    '<td class="num"><span id="mk-osuma" class="pikkuteksti"></span></td>'+
+    '<td><a href="#" id="mk-tallenna"><b>tallenna</b></a> \u00b7 <a href="#" id="mk-peru">peru</a></td>';
+  osumalaskuri(MUOKKAUS.vanha.malli,'mk-osuma');
+}
+let OSUMA_AJASTIN=null;
+function osumalaskuri(teksti, kohde, viive){
+  if(OSUMA_AJASTIN){clearTimeout(OSUMA_AJASTIN);}
+  const heti=document.getElementById(kohde);
+  if(heti&&teksti.trim()){heti.textContent='lasketaan\u2026';}
+  OSUMA_AJASTIN=setTimeout(function(){
+    const el=document.getElementById(kohde);
+    if(!el){return;}
+    const malli=teksti.trim().toLowerCase();
+    if(!malli){el.textContent='';return;}
+    if(SERVER){
+      fetch('api/saanto-osuma',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({malli:malli})})
+        .then(function(r){return r.json();}).then(function(v){
+          if(v.ok){el.textContent='osuu '+v.osuu+' riviin';
+            el.title=(v.esimerkit||[]).join(' | ');}
+          else{el.textContent=v.virhe||'';}
+        });
+    }else{
+      let n=0, re2=null;
+      const os=malli.indexOf('re:')===0?null:malli;
+      if(!os){try{re2=new RegExp(malli.slice(3),'i');}catch(err){el.textContent='regex-virhe';return;}}
+      for(const k in DATA.kat){const kuut=DATA.kat[k];
+        for(const m in kuut){kuut[m].forEach(function(t){
+          const tx=(String(t[2])+' '+String(t[7]||'')).toLowerCase();
+          if(os?tx.indexOf(os)>=0:re2.test(tx)){n++;}
+        });}}
+      el.textContent='~'+n+' rivi\u00e4 (porattavista)';
+    }
+  },viive===0?0:2000);
+}
+function kysyPakota(v){
+  if(!v.kasin_voisi){return false;}
+  let m='Uusi s\u00e4\u00e4nt\u00f6 osuisi ensimm\u00e4isen\u00e4 my\u00f6s '+v.kasin_voisi+
+    ' k\u00e4sin/oletus-luokiteltuun riviin';
+  if(v.kasin_esim&&v.kasin_esim.length){m+=' (esim. '+v.kasin_esim.join(' | ')+')';}
+  return confirm(m+'.'+String.fromCharCode(10)+
+    'OK = my\u00f6s ne siirtyv\u00e4t noudattamaan s\u00e4\u00e4nt\u00f6\u00e4. '+
+    'Peruuta = ne pysyv\u00e4t k\u00e4sivalinnoissaan.');
+}
+function toteutaSaanto(malli,kat,tark,ehto,poistaen,valmisTeksti,pakota,kohde){
+  fetch('api/saanto',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({malli:malli,kategoria:kat,tarkenne:tark,ehto:ehto,poistaen:poistaen,
+      pakota:!!pakota})})
+    .then(function(r){return r.json();}).then(function(w){
+      if(w.ok){
+        let vt=valmisTeksti+' \u2014 '+w.muuttui+' rivi\u00e4 luokiteltu uudelleen';
+        if(!w.muuttui){vt+=' \u26a0 jos odotit muutoksia, aikaisempi s\u00e4\u00e4nt\u00f6 '+
+          'todenn\u00e4k\u00f6isesti varjostaa uutta \u2014 katso S\u00e4\u00e4nn\u00f6t-taulukon Osuu/Perusteena-sarakkeet';}
+        paivitaSivu(kohde||'paneeli',vt);
+      }
+      else{alert(w.virhe||'virhe');}
+    });
+}
+function perusSymboli(p){
+  if(!p)return '\u00b7';
+  if(p.indexOf('s\u00e4\u00e4nt\u00f6')===0)return '\u00a7';
+  if(p==='k\u00e4sin')return '\u270e';
+  if(p==='oletus')return '\u25e6';
+  if(p==='oma tili')return '\u21c4';
+  return '\u00b7';
+}
+function perus(p){
+  if(!p)return '';
+  let t=p;
+  if(p.indexOf('s\u00e4\u00e4nt\u00f6: ')===0){
+    const eh=SAANTOEHDOT[p.slice(8)];
+    if(eh){t=p+' \u00b7 '+eh;}
+  }
+  return '<span class="perus" title="'+esc(t)+'">'+perusSymboli(p)+'</span> ';
+}
+let KUMOA=null;
+function tilannekuva(id){
+  const s=etsiTuple(id);
+  if(!s)return null;
+  return {id:id,kategoria:s.kat,tarkenne:s.t[3],peruste:s.t[6]};
+}
+function soveltaPalautus(rp){
+  const s=etsiTuple(rp.id);
+  if(s){
+    s.t[3]=rp.tarkenne;s.t[6]=rp.peruste;
+    if(s.kat!==rp.kategoria){
+      DATA.kat[s.kat][s.kk].splice(s.i,1);
+      if(!DATA.kat[rp.kategoria]){DATA.kat[rp.kategoria]={};}
+      if(!DATA.kat[rp.kategoria][s.kk]){DATA.kat[rp.kategoria][s.kk]=[];}
+      DATA.kat[rp.kategoria][s.kk].unshift(s.t);
+    }
+  }
+  const tr=document.getElementById('rivi-'+rp.id);
+  if(tr){
+    const pm=tr.querySelector('.perus');
+    if(pm){pm.textContent=perusSymboli(rp.peruste);pm.title=rp.peruste||'';}
+    const sel=tr.querySelector('.katsel'); if(sel){sel.value=rp.kategoria;}
+    const ip=tr.querySelector('.tarkinp'); if(ip){ip.value=rp.tarkenne;}
+    tr.classList.remove('tallennettu');
+  }
+}
+function vapautaRivi(vid){
+  fetch('api/vapauta',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:vid})})
+    .then(function(r){return r.json();}).then(function(v){
+      if(!v.ok){alert(v.virhe||'virhe');return;}
+      soveltaPalautus({id:vid,kategoria:v.kategoria,tarkenne:v.tarkenne,peruste:v.peruste});
+      merkitse(null,'vapautettu \u2713 \u2014 rivi luokittui: '+v.kategoria+
+        (v.tarkenne?':'+v.tarkenne:'')+' ('+(v.peruste||'avoin')+')');
+    });
+}
+function naytaKumoa(teksti){
+  const t=document.getElementById('tila');
+  if(!t)return;
+  t.innerHTML=esc(teksti)+' \u00b7 <a href="#" id="kumoa-linkki">kumoa</a>';
+}
+function katvalikko(id,valittu){
+  let h='<select class="katsel" data-id="'+id+'">';
+  const ryhmat=[['Menot',KAT.menot],['Tulot',KAT.tulot],['Siirrot ym.',KAT.pois]];
+  ryhmat.forEach(function(g){
+    h+='<optgroup label="'+g[0]+'">';
+    g[1].forEach(function(k){h+='<option'+(k===valittu?' selected':'')+'>'+esc(k)+'</option>';});
+    h+='</optgroup>';
+  });
+  h+='<option value="__uusi__">+ uusi kategoria\u2026</option></select>';
+  return h;
+}
+function etsiTuple(id){
+  for(const k in DATA.kat){const kuut=DATA.kat[k];
+    for(const m in kuut){const l=kuut[m];
+      for(let i=0;i<l.length;i++){if(l[i][5]===id){return {kat:k,kk:m,i:i,t:l[i]};}}}}
+  return null;
+}
+const KKNIMET=['tammikuu','helmikuu','maaliskuu','huhtikuu','toukokuu','kes\u00e4kuu',
+  'hein\u00e4kuu','elokuu','syyskuu','lokakuu','marraskuu','joulukuu'];
+function kkOtsikko(m){return KKNIMET[parseInt(m.slice(5,7),10)-1]+' '+m.slice(0,4);}
+function riviHtml(t,katR){
+  const selite=(t[7]&&t[7]!==t[2])?'<div class="selite2'+(katR==='TARKISTA'?' tarkselite':'')+
+    '">'+esc(t[7])+'</div>':'';
+  const etu=t[1]<0?(KAT.tulot.indexOf(katR)>=0?' miinus':' plus'):'';
+  return '<tr id="rivi-'+t[5]+'"><td class="pvm2" title="'+t[0]+'">'+
+    parseInt(t[0].slice(8),10)+'.'+parseInt(t[0].slice(5,7),10)+'.</td><td>'+perus(t[6])+esc(t[2])+
+    ' <a href="#" class="saantolinkki" data-saaja="'+esc(t[2])+'">s\u00e4\u00e4nt\u00f6</a>'+selite+'</td>'+
+    '<td>'+katvalikko(t[5],katR)+' <input class="tarkinp" list="tarklist" data-id="'+t[5]+
+    '" value="'+esc(t[3])+'" placeholder="tarkenne"></td>'+
+    '<td class="tili2">'+esc(t[4])+'</td><td class="num'+etu+'">'+eur(t[1])+'</td></tr>';
+}
+function lomakeJaMassa(katX){
+  return '<div class="sform"><b>Uusi s\u00e4\u00e4nt\u00f6:</b>'+
+    '<input id="sf-malli" placeholder="osamerkkijono, esim. brang" size="22">'+
+    '<span>\u2192</span>'+katvalikko('__saanto__',katX)+
+    '<input id="sf-tark" class="tarkinp" list="tarklist" placeholder="tarkenne">'+
+    '<input id="sf-ehto" placeholder="ehto: min=50 / max=50" size="12" title="summaraja itseisarvosta; tyhj\u00e4 = ei rajaa">'+
+    '<span id="sf-osuma" class="pikkuteksti"></span>'+
+    '<button id="sf-nappi">Lis\u00e4\u00e4 s\u00e4\u00e4nt\u00f6</button>'+
+    '<span class="pikkuteksti">osuu saajaan/selitteeseen, luokittelee my\u00f6s avoimet rivit</span></div>'+
+    '<div id="massapalkki"><b><span id="massa-n"></span> rivi\u00e4 valittu:</b>'+
+    katvalikko('__massa__','TARKISTA')+
+    '<input id="massa-tark" class="tarkinp" data-id="__massa9__" list="tarklist" placeholder="tarkenne">'+
+    '<button id="massa-nappi">Muuta valitut</button>'+
+    '<a href="#" id="massa-tyhjenna">tyhjenn\u00e4</a>'+
+    '<span class="pikkuteksti">\u2318/Ctrl = lis\u00e4\u00e4, Shift = v\u00e4li</span></div>';
+}
+function avaa(kat, kk, tark){
+  const p=document.getElementById('paneeli');
+  const kdata0=DATA.kat[kat]||{};
+  let kdata=kdata0;
+  if(tark){
+    kdata={};
+    Object.keys(kdata0).forEach(function(m){
+      const ts=kdata0[m].filter(function(t){
+        return ((t[3]||'').trim()||'(ei tarkennetta)')===tark;});
+      if(ts.length){kdata[m]=ts;}});
+  }
+  const kaikki=DATA.kk;
+  const summat=kaikki.map(function(m){return (kdata[m]||[]).reduce(function(a,t){return a+t[1];},0);});
+  const max=Math.max.apply(null, summat.map(Math.abs).concat([1]));
+  const W=880,H=160,POHJA=126,lev=W/kaikki.length;
+  let svg='<svg viewBox="0 0 '+W+' '+H+'"><line x1="0" y1="'+POHJA+'" x2="'+W+'" y2="'+POHJA+'" stroke="#8a857c"/>';
+  kaikki.forEach(function(m,i){
+    const h=Math.abs(summat[i])/max*(POHJA-12);
+    const y=summat[i]>=0?POHJA-h:POHJA;
+    const vari=(m===kk)?'#26241f':'#b3502d';
+    svg+='<rect data-kat="'+esc(kat)+'"'+(tark?' data-tark="'+esc(tark)+'"':'')+' data-kk="'+m+'" x="'+(i*lev+lev*0.18).toFixed(1)+'" y="'+y.toFixed(1)+
+      '" width="'+(lev*0.64).toFixed(1)+'" height="'+h.toFixed(1)+'" fill="'+vari+'" style="cursor:pointer">'+
+      '<title>'+m+': '+eur(summat[i])+' \u20ac</title></rect>';
+    if(kaikki.length<=16||i%2===0){svg+='<text x="'+(i*lev+lev/2).toFixed(1)+'" y="'+(POHJA+15)+
+      '" text-anchor="middle" class="aks">'+m.slice(5)+'/'+m.slice(2,4)+'</text>';}
+  });
+  const MA=summat.map(function(v,i){return i<2?null:(summat[i]+summat[i-1]+summat[i-2])/3;});
+  let pts='';
+  MA.forEach(function(v,i){if(v===null)return;
+    pts+=(i*lev+lev/2).toFixed(1)+','+(POHJA-Math.max(v,0)/max*(POHJA-12)).toFixed(1)+' ';});
+  if(pts){svg+='<polyline points="'+pts+'" fill="none" stroke="#26241f" stroke-width="2"/>';}
+  svg+='</svg>';
+  svg+='<p class="pikkuteksti" style="margin:.2rem 0 0">tumma viiva = 3 kk liukuva keskiarvo '+
+    '\u00b7 luokitteluperuste: \u00a7 s\u00e4\u00e4nt\u00f6 \u2014 klikkaa rivin merkki\u00e4 n\u00e4hd\u00e4ksesi mik\u00e4 s\u00e4\u00e4nt\u00f6 '+
+    '\u270e k\u00e4sin \u25e6 oletus \u21c4 oma tili \u00b7 klikkaa rivi\u00e4 valitaksesi '+
+    '(\u2318/Ctrl lis\u00e4\u00e4, Shift ottaa v\u00e4lin)</p>';
+  const lomake=lomakeJaMassa(kat);
+  let tarkTaulu='';
+  (function(){
+    if(tark){tarkTaulu='<p class="pikkuteksti"><a href="#" class="klik" data-kat="'+esc(kat)+
+      '">\u2190 kaikki tarkenteet</a></p>';return;}
+    const perT={},jarj=[];
+    kaikki.forEach(function(m){(kdata0[m]||[]).forEach(function(t){
+      const tk=(t[3]||'').trim()||'(ei tarkennetta)';
+      if(!perT[tk]){perT[tk]={yht:0};jarj.push(tk);}
+      perT[tk][m]=(perT[tk][m]||0)+t[1];perT[tk].yht+=t[1];});});
+    const aidot=jarj.filter(function(x){return x!=='(ei tarkennetta)';});
+    if(!aidot.length){return;}
+    jarj.sort(function(a,b){return Math.abs(perT[b].yht)-Math.abs(perT[a].yht);});
+    let h='<details'+(aidot.length<=8?' open':'')+'><summary>Tarkenteet kuukausittain ('+aidot.length+')</summary>'+
+      '<table><tr><th>tarkenne</th>';
+    kaikki.forEach(function(m){h+='<th class="num">'+m.slice(5)+'/'+m.slice(2,4)+'</th>';});
+    h+='<th class="num">yht</th></tr>';
+    jarj.forEach(function(tk){
+      h+='<tr><td><a href="#" class="klik" data-kat="'+esc(kat)+'" data-tark="'+esc(tk)+'">'+esc(tk)+'</a></td>';
+      kaikki.forEach(function(m){const v=perT[tk][m];
+        h+='<td class="num">'+(v?'<a href="#" class="klik" data-kat="'+esc(kat)+'" data-kk="'+m+
+          '" data-tark="'+esc(tk)+'">'+eur(v)+'</a>':'')+'</td>';});
+      h+='<td class="num"><b>'+eur(perT[tk].yht)+'</b></td></tr>';});
+    h+='</table></details>';
+    tarkTaulu=h;
+  })();
+
+  const kuut=kk?[kk]:kaikki.slice().reverse();
+  let rivit='';
+  kuut.forEach(function(m){
+    const ts=kdata[m]||[]; if(!ts.length)return;
+    const sum=ts.reduce(function(a,t){return a+t[1];},0);
+    rivit+='<tr class="kkots"><td colspan="4">'+kkOtsikko(m)+'</td><td class="num">'+eur(sum)+'</td></tr>';
+    ts.forEach(function(t){rivit+=riviHtml(t,kat);});
+  });
+  p.innerHTML='<div class="pkortti"><div class="privi"><h2 style="margin:0">'+esc(kat)+(tark?' \u00b7 '+esc(tark):'')+(kk?' \u00b7 '+kk:'')+
+    '</h2><span class="pikkuteksti">'+(kk?'<a href="#" data-kat="'+esc(kat)+'"'+(tark?' data-tark="'+esc(tark)+'"':'')+'>kaikki kuukaudet</a> \u00b7 ':'')+
+    '<a href="#" class="katpoisto" data-kat="'+esc(kat)+'">poista kategoria\u2026</a> \u00b7 '+
+    '<a href="#" id="psulje">sulje \u2715</a></span></div>'+svg+tarkTaulu+lomake+
+    '<table><tr><th>Pvm</th><th>Saaja</th><th>Kategoria \u00b7 tarkenne</th><th>Tili</th><th>\u20ac</th></tr>'+
+    (rivit||'<tr><td colspan="5">ei tapahtumia</td></tr>')+'</table></div>';
+  p.style.display='block';
+  PANEELI={kat:kat,kk:kk||'',tark:tark||''};
+  VALINTA=[];ANKKURI=null;
+  p.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function haku(termi){
+  const t0=termi.trim().toLowerCase();
+  if(t0.length<2){
+    if(t0.length===1){merkitse(null,'kirjoita v\u00e4hint\u00e4\u00e4n 2 merkki\u00e4');}
+    if(PANEELI&&PANEELI.haku){sulje();}
+    return;
+  }
+  const p=document.getElementById('paneeli');
+  const kuut={};
+  let n=0,summa=0;
+  for(const k in DATA.kat){const kk=DATA.kat[k];
+    for(const m in kk){kk[m].forEach(function(t){
+      const teksti=(String(t[2])+' '+String(t[3])+' '+String(t[4])+' '+String(t[7]||'')+' '+k+
+        ' '+String(t[1])+' '+String(t[1]).replace('.',',')).toLowerCase();
+      if(teksti.indexOf(t0)>=0){
+        if(!kuut[m]){kuut[m]=[];}
+        kuut[m].push([t,k]);n++;summa+=t[1];
+      }});}}
+  const kkLista=Object.keys(kuut).sort().reverse();
+  let rivit='',naytetty=0;
+  kkLista.forEach(function(m){
+    if(naytetty>=400){return;}
+    const ts=kuut[m];
+    ts.sort(function(a,b){return a[0][0]<b[0][0]?1:-1;});
+    const sum=ts.reduce(function(a,x){return a+x[0][1];},0);
+    rivit+='<tr class="kkots"><td colspan="4">'+kkOtsikko(m)+'</td><td class="num">'+eur(sum)+'</td></tr>';
+    ts.forEach(function(x){if(naytetty<400){rivit+=riviHtml(x[0],x[1]);naytetty++;}});
+  });
+  p.innerHTML='<div class="pkortti"><div class="privi"><h2 style="margin:0">Haku: \u201d'+esc(t0)+
+    '\u201d</h2><span class="pikkuteksti"><a href="#" id="psulje">sulje \u2715</a></span></div>'+
+    '<p class="pikkuteksti">'+n+' rivi\u00e4 \u00b7 nettosumma '+eur(summa)+' \u20ac'+
+    (n>400?' \u00b7 n\u00e4ytet\u00e4\u00e4n 400 ensimm\u00e4ist\u00e4':'')+
+    ' \u00b7 valinta ja massamuutos toimivat my\u00f6s t\u00e4\u00e4ll\u00e4</p>'+
+    lomakeJaMassa('TARKISTA')+
+    '<table><tr><th>Pvm</th><th>Saaja</th><th>Kategoria \u00b7 tarkenne</th><th>Tili</th><th>\u20ac</th></tr>'+
+    (rivit||'<tr><td colspan="5">ei osumia</td></tr>')+'</table></div>';
+  p.style.display='block';
+  PANEELI={haku:t0};
+  VALINTA=[];ANKKURI=null;
+}
+function kuukausi(kk, laji){
+  const p=document.getElementById('paneeli');
+  const katLista=(laji==='menot')?KAT.menot.concat(['TARKISTA']):KAT.tulot;
+  const ryhmat=[];
+  let n=0,summa=0;
+  katLista.forEach(function(k){
+    const ts=(DATA.kat[k]&&DATA.kat[k][kk])?DATA.kat[k][kk].slice():[];
+    if(!ts.length){return;}
+    ts.sort(function(a,b){return a[0]<b[0]?1:-1;});
+    const sum=ts.reduce(function(a,t){return a+t[1];},0);
+    ryhmat.push([k,sum,ts]);
+    n+=ts.length;summa+=sum;
+  });
+  ryhmat.sort(function(a,b){return b[1]-a[1];});
+  let rivit='';
+  ryhmat.forEach(function(g){
+    rivit+='<tr class="kkots"><td colspan="4" class="klik" data-kat="'+esc(g[0])+
+      '" data-kk="'+kk+'">'+esc(g[0])+'</td><td class="num">'+eur(g[1])+'</td></tr>';
+    g[2].forEach(function(t){rivit+=riviHtml(t,g[0]);});
+  });
+  p.innerHTML='<div class="pkortti"><div class="privi"><h2 style="margin:0">'+
+    (laji==='menot'?'Menot \u00b7 ':'Tulot \u00b7 ')+kkOtsikko(kk)+'</h2><span class="pikkuteksti">'+
+    '<a href="#" id="psulje">sulje \u2715</a></span></div>'+
+    '<p class="pikkuteksti">'+n+' rivi\u00e4 \u00b7 yhteens\u00e4 '+eur(summa)+
+    ' \u20ac \u00b7 kategoriat suurimmasta pienimp\u00e4\u00e4n \u00b7 klikkaa rivi\u00e4 valitaksesi</p>'+
+    lomakeJaMassa('TARKISTA')+
+    '<table><tr><th>Pvm</th><th>Saaja</th><th>Kategoria \u00b7 tarkenne</th><th>Tili</th><th>\u20ac</th></tr>'+
+    (rivit||'<tr><td colspan="5">ei tapahtumia</td></tr>')+'</table></div>';
+  p.style.display='block';
+  PANEELI={kk_laji:laji,kk_kk:kk};
+  VALINTA=[];ANKKURI=null;
+  p.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function haeRivi(id){
+  const sel=document.querySelector('.katsel[data-id="'+id+'"]');
+  const inp=document.querySelector('.tarkinp[data-id="'+id+'"]');
+  return {kategoria:sel?sel.value:'',tarkenne:inp?inp.value.trim().toLowerCase():''};
+}
+function merkitse(id,teksti){
+  const tr=document.getElementById('rivi-'+id);
+  if(tr){tr.classList.add('tallennettu');}
+  const t=document.getElementById('tila');
+  if(t&&teksti){t.textContent=teksti;}
+}
+function paivitaPalkki(){
+  const n=Object.keys(MUUT.rivit).length+MUUT.saannot.length+MUUT.poistot.length;
+  const palkki=document.getElementById('muutospalkki');
+  document.getElementById('muutosteksti').textContent=n+' tallentamatonta muutosta';
+  palkki.style.display=n?'block':'none';
+}
+function tallennaRivi(id){
+  const m=haeRivi(id);
+  if(m.kategoria==='__uusi__'){
+    const nimi=prompt('Uuden kategorian nimi:');
+    if(!nimi){avaa(document.querySelector('#paneeli h2').textContent);return;}
+    if(SERVER){
+      fetch('api/kategoria',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({nimi:nimi})}).then(function(r){return r.json();}).then(function(v){
+          if(!v.ok){alert(v.virhe||'virhe');return;}
+          KAT.menot.push(nimi);
+          KAT.menot.sort(function(a,b){return a.toLowerCase()<b.toLowerCase()?-1:1;});
+          const sel=document.querySelector('.katsel[data-id="'+id+'"]');
+          const o=document.createElement('option');o.textContent=nimi;
+          sel.querySelector('optgroup').appendChild(o);sel.value=nimi;
+          tallennaRivi(id);
+        });
+    }else{alert('Uusi kategoria lis\u00e4t\u00e4\u00e4n config.json:iin (tai k\u00e4yt\u00e4 selaa-tilaa).');}
+    return;
+  }
+  const kuva=tilannekuva(id);
+  if(SERVER){
+    fetch('api/muutos',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:id,kategoria:m.kategoria,tarkenne:m.tarkenne})})
+      .then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){alert(v.virhe||'tallennus ep\u00e4onnistui');return;}
+        soveltaKasin(id,m.kategoria,m.tarkenne);
+        if(kuva){KUMOA=[kuva];}
+        naytaKumoa('tallennettu k\u00e4sin \u2713 (s\u00e4\u00e4nn\u00f6t eiv\u00e4t koske t\u00e4h\u00e4n en\u00e4\u00e4)');
+      }).catch(function(){alert('yhteys palvelimeen katkesi \u2014 k\u00e4ynnist\u00e4 selaa uudelleen');});
+  }else{
+    MUUT.rivit[id]=m;
+    soveltaKasin(id,m.kategoria,m.tarkenne);
+    if(kuva){KUMOA=[kuva];}
+    paivitaPalkki();
+  }
+}
+function lisaaSaanto(){
+  const malli=document.getElementById('sf-malli').value.trim().toLowerCase();
+  const kat=document.querySelector('.katsel[data-id="__saanto__"]').value;
+  const tark=document.getElementById('sf-tark').value.trim().toLowerCase();
+  const ehto=document.getElementById('sf-ehto').value.trim().toLowerCase();
+  if(!malli||kat==='__uusi__'){alert('anna malli ja kategoria');return;}
+  const psp=PSP.find(function(x){return malli.indexOf(x)>=0;});
+  if(psp&&!confirm('"'+malli+'" on maksunv\u00e4litt\u00e4j\u00e4 ('+psp+') \u2014 s\u00e4\u00e4nt\u00f6 osuisi moniin eri kauppoihin. Tehd\u00e4\u00e4nk\u00f6 silti?')){return;}
+  if(SERVER){
+    fetch('api/saanto',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({malli:malli,kategoria:kat,tarkenne:tark,ehto:ehto,esikatselu:true})})
+      .then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){alert(v.virhe||'virhe');return;}
+        const perhe=function(x){return x.malli.indexOf(malli)>=0||malli.indexOf(x.malli)>=0;};
+        const korvattavat=(v.estajat||[]).filter(perhe);
+        const vieraat=(v.estajat||[]).filter(function(x){return !perhe(x);});
+        if(korvattavat.length){
+          const lista=korvattavat.map(function(x){return x.malli+' \u2192 '+x.kategoria+' ('+x.rivit+' r.)';}).join('; ');
+          let vm='Saman s\u00e4\u00e4nt\u00f6perheen vanhat s\u00e4\u00e4nn\u00f6t est\u00e4v\u00e4t uuden: '+lista+'.';
+          if(vieraat.length){vm+=' (Muut p\u00e4\u00e4llekk\u00e4isyydet j\u00e4tet\u00e4\u00e4n rauhaan: '+
+            vieraat.map(function(x){return x.malli;}).join(', ')+'.)';}
+          if(!confirm(vm+String.fromCharCode(10)+'OK = korvataan ne uudella s\u00e4\u00e4nn\u00f6ll\u00e4 (rivit '+
+            'luokitellaan uudelleen). Peruuta = ei tehd\u00e4 mit\u00e4\u00e4n.')){return;}
+          const poistaen=korvattavat.map(function(x){return {malli:x.malli,kategoria:x.kategoria};});
+          fetch('api/saanto',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({malli:malli,kategoria:kat,tarkenne:tark,esikatselu:true,poistaen:poistaen})})
+            .then(function(r){return r.json();}).then(function(v2){
+              if(!v2.ok){alert(v2.virhe||'virhe');return;}
+              let m2='Korvauksen vaikutus: '+v2.muuttuu+' rivi\u00e4 luokittuu uudelleen';
+              if(v2.suojattu){m2+='; '+v2.suojattu+' k\u00e4sin/oletus-luokiteltua ei muuteta';}
+              if(v2.estajat&&v2.estajat.length){
+                m2+='.'+String.fromCharCode(10)+
+                  '\u26a0 HUOM: korvauksenkin j\u00e4lkeen AIKAISEMPI s\u00e4\u00e4nt\u00f6 voittaisi uuden s\u00e4\u00e4nt\u00f6si ('+
+                  v2.estajat.map(function(e){return "'"+e.malli+"'";}).join(', ')+
+                  ') \u2014 esimerkit n\u00e4ytt\u00e4v\u00e4t mihin rivit OIKEASTI menisiv\u00e4t';
+              }
+              if(v2.esimerkit&&v2.esimerkit.length){m2+='.'+String.fromCharCode(10)+'Esim: '+v2.esimerkit.join(' | ');}
+              if(!confirm(m2+'. Toteutetaanko?')){return;}
+              toteutaSaanto(malli,kat,tark,ehto,poistaen,
+                v.estajat.length+' s\u00e4\u00e4nt\u00f6\u00e4 korvattu \u2713',kysyPakota(v2));
+            });
+          return;
+        }
+        let viesti='S\u00e4\u00e4nt\u00f6 osuu '+v.osuu+' riviin. '+v.muuttuu+
+          ' luokittuu uudelleen (joista '+v.avoimia+' avointa saa luokan).';
+        if(v.suojattu){viesti+=' '+v.suojattu+' k\u00e4sin/oletus-luokiteltua ei muuteta.';}
+        if(v.esimerkit&&v.esimerkit.length){viesti+=' Esim: '+v.esimerkit.join(' | ')+'.';}
+        if(!confirm(viesti+' Lis\u00e4t\u00e4\u00e4nk\u00f6 s\u00e4\u00e4nt\u00f6?')){return;}
+        toteutaSaanto(malli,kat,tark,ehto,[], 's\u00e4\u00e4nt\u00f6 lis\u00e4tty \u2713',kysyPakota(v));
+      });
+  }else{
+    MUUT.saannot.push({malli:malli,kategoria:kat,tarkenne:tark});paivitaPalkki();
+  }
+}
+function lataaMuutokset(){
+  const NL=String.fromCharCode(10);
+  let csv='id;kategoria;tarkenne;malli;toiminto'+NL;
+  Object.keys(MUUT.rivit).forEach(function(id){
+    const m=MUUT.rivit[id];
+    csv+=id+';'+m.kategoria+';'+m.tarkenne+';;'+NL;
+  });
+  MUUT.saannot.forEach(function(s){csv+=';'+s.kategoria+';'+s.tarkenne+';'+s.malli+';'+NL;});
+  MUUT.poistot.forEach(function(s){csv+=';'+s.kategoria+';;'+s.malli+';poista'+NL;});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  a.download='muutokset.csv';a.click();
+  document.getElementById('tila').textContent='muutokset.csv ladattu \u2014 aja: python3 kirjanpito.py opi';
+}
+function siivoaTarkenne(kat, inp){
+  if(!inp||!inp.value||kat==='__uusi__'){return;}
+  const lista=TARKKAT[kat]||[];
+  if(lista.indexOf(inp.value.trim().toLowerCase())<0){inp.value='';}
+}
+function tutkiSailyta(fn){
+  // Säilytä sivun pystyskrollaus ja puun oma skrollaus DOM-uudelleenrakennuksen yli.
+  const y=window.pageYOffset||document.documentElement.scrollTop||0;
+  const puu=document.getElementById('tutki-puu');
+  const py=puu?puu.scrollTop:0;
+  fn();
+  // Palauta heti ja uudelleen seuraavalla ruudulla (reflow'n jälkeen), ettei selain hyppää.
+  window.scrollTo(0,y);
+  if(puu)puu.scrollTop=py;
+  if(typeof requestAnimationFrame==='function'){
+    requestAnimationFrame(function(){
+      window.scrollTo(0,y);
+      const p2=document.getElementById('tutki-puu'); if(p2)p2.scrollTop=py;
+    });
+  }
+}
+document.addEventListener('toggle',function(ev){
+  if(ev.target && ev.target.id==='tutki-details' && ev.target.open){
+    tutkiRakennaPuu(); tutkiPiirra();
+  }
+},true);
+document.addEventListener('click',function(ev){
+  const nuoli=ev.target.closest('.tutki-nuoli');
+  if(nuoli && nuoli.getAttribute('data-toggle')){
+    ev.preventDefault();
+    tutkiSailyta(function(){ tutkiAvaa(nuoli.getAttribute('data-toggle')); }); return;
+  }
+  const krivi=ev.target.closest('.tutki-katrivi');
+  if(krivi && !ev.target.closest('.tutki-nuoli')){
+    ev.preventDefault();
+    tutkiSailyta(function(){ tutkiToggle(krivi.getAttribute('data-tkat')); }); return;
+  }
+  const trivi=ev.target.closest('.tutki-tark');
+  if(trivi){
+    ev.preventDefault();
+    tutkiSailyta(function(){ tutkiToggle(trivi.getAttribute('data-av')); }); return;
+  }
+  if(ev.target.id==='tutki-tila'){
+    ev.preventDefault();
+    TUTKI.tila=(TUTKI.tila==='stacked')?'grouped':'stacked';
+    document.getElementById('tutki-selite').textContent=
+      TUTKI.tila==='stacked'?'pinottu':'rinnakkain';
+    tutkiSailyta(tutkiPiirra); return;
+  }
+  if(ev.target.id==='tutki-tyhjaa'){
+    ev.preventDefault();
+    TUTKI.valitut=[]; TUTKI.varit={};
+    tutkiSailyta(function(){ tutkiPaivitaLamput(); tutkiPiirra(); }); return;
+  }
+});
+document.addEventListener('change',function(ev){
+  const el=ev.target;
+  if(el.id==='ol-otsikko'){
+    if(!SERVER){alert('Muokkaus vaatii selaa-tilan.');return;}
+    fetch('api/olympos',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({otsikko:el.value})})
+      .then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){alert(v.virhe||'virhe');return;}
+        paivitaSivu('yhteistalous','nimi p\u00e4ivitetty \u2713');});
+    return;
+  }
+  if(el.id==='ol-viikkotark'||el.id==='ol-palautustark'){
+    if(!SERVER){alert('Muokkaus vaatii selaa-tilan.');return;}
+    const runko={};runko[el.id==='ol-viikkotark'?'viikkojako':'palautustarkenteet']=el.value;
+    fetch('api/olympos',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(runko)})
+      .then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){alert(v.virhe||'virhe');return;}
+        paivitaSivu('yhteistalous','poiminta p\u00e4ivitetty \u2713');});
+    return;
+  }
+  if(el.id==='ol-kat'){
+    if(!SERVER){alert('Muokkaus vaatii selaa-tilan.');return;}
+    const arvo=el.value;
+    if(arvo==='__uusi__'){
+      const nimi=prompt('Poimintakategorian nimi:','');
+      if(!nimi||!nimi.trim()){paivitaSivu('yhteistalous');return;}
+      fetch('api/kategoria',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({nimi:nimi.trim()})})
+        .then(function(r){return r.json();}).then(function(v){
+          if(!v.ok){alert(v.virhe||'virhe');return;}
+          fetch('api/olympos',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({kategoria:nimi.trim()})})
+            .then(function(r){return r.json();}).then(function(w){
+              if(!w.ok){alert(w.virhe||'virhe');return;}
+              paivitaSivu('yhteistalous','kategoria luotu ja kytketty \u2713');});
+        });
+      return;
+    }
+    fetch('api/olympos',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({kategoria:arvo})})
+      .then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){alert(v.virhe||'virhe');return;}
+        paivitaSivu('yhteistalous','poimintakategoria: '+(arvo||'ei k\u00e4yt\u00f6ss\u00e4')+' \u2713');});
+    return;
+  }
+  if(el.classList&&el.classList.contains('katsel')){
+    if(el.value==='__uusi__'){
+      const nimi=prompt('Uuden kategorian nimi:');
+      if(!nimi||!nimi.trim()){el.value=el.dataset.edellinen||'';return;}
+      const n2=nimi.trim();
+      if(!SERVER){alert('Uuden kategorian luonti vaatii selaa-tilan.');el.value=el.dataset.edellinen||'';return;}
+      fetch('api/kategoria',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({nimi:n2})})
+        .then(function(r){return r.json();}).then(function(v){
+          if(!v||!v.ok){alert((v&&v.virhe)||'virhe');el.value=el.dataset.edellinen||'';return;}
+          KAT.menot.push(n2);
+          KAT.menot.sort(function(a,b){return a.toLowerCase()<b.toLowerCase()?-1:1;});
+          document.querySelectorAll('select.katsel').forEach(function(s){
+            const o=document.createElement('option');o.textContent=n2;
+            const g=s.querySelector('optgroup');if(g){g.appendChild(o);}});
+          el.value=n2;el.dataset.edellinen=n2;
+          if(el.dataset.id&&el.dataset.id.indexOf('__')!==0){tallennaRivi(el.dataset.id);}
+        });
+      return;
+    }
+    el.dataset.edellinen=el.value;
+    let inp=null;
+    if(el.dataset.id==='__saanto__'){inp=document.getElementById('sf-tark');}
+    else if(el.dataset.id==='__muok__'){inp=document.getElementById('mk-tark');}
+    else if(el.dataset.id==='__massa__'){inp=document.getElementById('massa-tark');}
+    else{inp=document.querySelector('.tarkinp[data-id="'+el.dataset.id+'"]');}
+    siivoaTarkenne(el.value,inp);
+  }
+  if(el.id==='sf-malli'){osumalaskuri(el.value,'sf-osuma',0);return;}
+  if(el.id==='mk-malli'){osumalaskuri(el.value,'mk-osuma',0);return;}
+  if(el.dataset&&el.dataset.id&&el.dataset.id.indexOf('__')!==0){tallennaRivi(el.dataset.id);}
+});
+document.addEventListener('keydown',function(ev){
+  if(ev.key==='Escape'&&ev.target&&ev.target.id==='haku'){
+    ev.target.value='';sulje();
+  }
+});
+document.addEventListener('mousedown',function(ev){
+  if(ev.shiftKey&&ev.target.closest('#paneeli tr')){ev.preventDefault();}
+});
+document.addEventListener('click',function(ev){
+  if(ev.target.id==='sf-nappi'){lisaaSaanto();return;}
+  if(ev.target.id==='massa-nappi'){massaMuuta();return;}
+  if(ev.target.id==='kumoa-linkki'){
+    ev.preventDefault();
+    if(!KUMOA){return;}
+    const jono=KUMOA;KUMOA=null;
+    if(SERVER){
+      fetch('api/muutos',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({rivit:jono})})
+        .then(function(r){return r.json();}).then(function(v){
+          if(!v.ok){alert(v.virhe||'virhe');return;}
+          jono.forEach(soveltaPalautus);
+          merkitse(null,'kumottu \u2713 \u2014 '+v.paivitetty+' rivi\u00e4 palautettu');
+        });
+    }else{
+      jono.forEach(function(rp){
+        MUUT.rivit[rp.id]={kategoria:rp.kategoria,tarkenne:rp.tarkenne};
+        soveltaPalautus(rp);
+      });
+      paivitaPalkki();
+      merkitse(null,'kumottu jonossa \u2713');
+    }
+    return;
+  }
+  if(ev.target.id==='massa-tyhjenna'){ev.preventDefault();VALINTA=[];ANKKURI=null;paivitaValinta();return;}
+  const rtr=ev.target.closest('#paneeli tr');
+  if(rtr&&rtr.id&&rtr.id.indexOf('rivi-')===0&&!ev.target.closest('select,input,a,button,.perus')){
+    const id=rtr.id.slice(5);
+    const lista=riviLista();
+    const idx=lista.indexOf(rtr);
+    if(ev.shiftKey&&ANKKURI!==null){
+      const a=Math.min(ANKKURI,idx),b=Math.max(ANKKURI,idx);
+      VALINTA=lista.slice(a,b+1).map(function(x){return x.id.slice(5);});
+    }else if(ev.ctrlKey||ev.metaKey){
+      const p=VALINTA.indexOf(id);
+      if(p>=0){VALINTA.splice(p,1);}else{VALINTA.push(id);}
+      ANKKURI=idx;
+    }else{
+      VALINTA=(VALINTA.length===1&&VALINTA[0]===id)?[]:[id];
+      ANKKURI=idx;
+    }
+    paivitaValinta();
+    return;
+  }
+  if(ev.target.id==='lataamuutokset'){lataaMuutokset();return;}
+  if(ev.target.id==='mk-peru'||ev.target.closest('#mk-peru')){
+    ev.preventDefault();
+    if(MUOKKAUS){MUOKKAUS.tr.innerHTML=MUOKKAUS.html;MUOKKAUS=null;}
+    return;}
+  if(ev.target.id==='mk-tallenna'||ev.target.closest('#mk-tallenna')){
+    ev.preventDefault();
+    if(!MUOKKAUS)return;
+    const um=document.getElementById('mk-malli').value.trim().toLowerCase();
+    const uk=document.querySelector('.katsel[data-id="__muok__"]').value;
+    const ut=document.getElementById('mk-tark').value.trim().toLowerCase();
+    const ue=document.getElementById('mk-ehto').value.trim();
+    if(!um||uk==='__uusi__'){alert('anna malli ja kategoria');return;}
+    if(!SERVER){
+      MUUT.poistot.push({malli:MUOKKAUS.vanha.malli,kategoria:MUOKKAUS.vanha.kategoria});
+      MUUT.saannot.push({malli:um,kategoria:uk,tarkenne:ut});
+      MUOKKAUS.tr.innerHTML=MUOKKAUS.html;MUOKKAUS.tr.classList.add('poistettu');
+      MUOKKAUS=null;paivitaPalkki();return;}
+    const poistaen=[{malli:MUOKKAUS.vanha.malli,kategoria:MUOKKAUS.vanha.kategoria,
+                     ehto:MUOKKAUS.vanha.ehto}];
+    fetch('api/saanto',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({malli:um,kategoria:uk,tarkenne:ut,ehto:ue,esikatselu:true,poistaen:poistaen})})
+      .then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){alert(v.virhe||'virhe');return;}
+        let m='Korvataan  '+MUOKKAUS.vanha.malli+' \u2192 '+MUOKKAUS.vanha.kategoria+
+          '  s\u00e4\u00e4nn\u00f6ll\u00e4  '+um+' \u2192 '+uk+(ut?':'+ut:'')+'.'+
+          String.fromCharCode(10)+v.muuttuu+' rivi\u00e4 luokittuu uudelleen';
+        if(v.suojattu){m+='; '+v.suojattu+' k\u00e4sin-luokiteltua ei muuteta';}
+        if(v.esimerkit&&v.esimerkit.length){m+='. Esim: '+v.esimerkit.join(' | ');}
+        if(!confirm(m+'. Toteutetaanko?')){return;}
+        const trx=MUOKKAUS.tr;
+        toteutaSaanto(um,uk,ut,ue,poistaen,'s\u00e4\u00e4nt\u00f6 korvattu \u2713',kysyPakota(v),'saannot');
+        trx.innerHTML='<td>'+esc(um)+'</td><td>'+esc(uk+(ut?':'+ut:''))+'</td><td>'+esc(ue)+
+          '</td><td class="num">\u2026</td><td class="pikkuteksti">p\u00e4ivit\u00e4 sivu</td>';
+        MUOKKAUS=null;
+      });
+    return;}
+  if(ev.target.id==='ol-lisaa'){ev.preventDefault();
+    if(!SERVER){alert('Muokkaus vaatii selaa-tilan.');return;}
+    fetch('api/olympos',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({kirjaus:{pvm:document.getElementById('ol-pvm').value,
+        kuvaus:document.getElementById('ol-kuvaus').value,
+        maksaja:document.getElementById('ol-maksaja').value,
+        summa:document.getElementById('ol-summa').value,
+        osallistujat:Array.prototype.slice.call(document.querySelectorAll('.ol-osall'))
+          .filter(function(x){return x.checked;}).map(function(x){return x.value;})}})})
+      .then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){alert(v.virhe||'virhe');return;}
+        paivitaSivu('yhteistalous','kirjaus lis\u00e4tty \u2713');});
+    return;}
+  if(ev.target.id==='ol-nayta'){ev.preventDefault();
+    if(!SERVER){alert('Muokkaus vaatii selaa-tilan.');return;}
+    fetch('api/olympos',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({nayta_alku:document.getElementById('ol-nayta-alku').value,
+        nayta_loppu:document.getElementById('ol-nayta-loppu').value})})
+      .then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){alert(v.virhe||'virhe');return;}
+        paivitaSivu('yhteistalous','jakso rajattu \u2713');});
+    return;}
+  if(ev.target.id==='ol-tasaa'){ev.preventDefault();
+    if(!SERVER){alert('Muokkaus vaatii selaa-tilan.');return;}
+    const tp=document.getElementById('ol-tasattu').value;
+    if(!tp){alert('anna p\u00e4iv\u00e4m\u00e4\u00e4r\u00e4');return;}
+    if(!confirm('Aloitetaanko uusi kausi '+tp+' alkaen? Aiempi kausi katsotaan tasatuksi.')){return;}
+    fetch('api/olympos',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({tasattu:tp})})
+      .then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){alert(v.virhe||'virhe');return;}
+        paivitaSivu('yhteistalous','uusi kausi aloitettu \u2713');});
+    return;}
+  if(ev.target.id==='ol-vk-lisaa'){ev.preventDefault();
+    if(!SERVER){alert('Muokkaus vaatii selaa-tilan.');return;}
+    fetch('api/olympos',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({hyvitys:{kuvaus:document.getElementById('ol-vk-kuvaus').value,
+        jasenelta:document.getElementById('ol-vk-jasen').value,
+        summa_kk:document.getElementById('ol-vk-summa').value,
+        kk_max:document.getElementById('ol-vk-kk').value}})})
+      .then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){alert(v.virhe||'virhe');return;}
+        paivitaSivu('yhteistalous','vakio lis\u00e4tty \u2713');});
+    return;}
+  const ops=ev.target.closest('.olpoissulje');
+  if(ops){ev.preventDefault();
+    if(!SERVER){alert('Muokkaus vaatii selaa-tilan.');return;}
+    fetch('api/olympos',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({poissulje:ops.getAttribute('data-rid')})})
+      .then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){alert(v.virhe||'virhe');return;}
+        paivitaSivu('yhteistalous','rivi suljettu pois \u2713');});
+    return;}
+  const oom=ev.target.closest('.olotamukaan');
+  if(oom){ev.preventDefault();
+    if(!SERVER){alert('Muokkaus vaatii selaa-tilan.');return;}
+    fetch('api/olympos',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ota_mukaan:oom.getAttribute('data-rid')})})
+      .then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){alert(v.virhe||'virhe');return;}
+        paivitaSivu('yhteistalous','rivi otettu mukaan \u2713');});
+    return;}
+  const ov=ev.target.closest('.olvakiopoisto');
+  if(ov){ev.preventDefault();
+    if(!SERVER){alert('Muokkaus vaatii selaa-tilan.');return;}
+    if(!confirm('Poistetaanko vakio?')){return;}
+    fetch('api/olympos',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({hyvitys_poista:parseInt(ov.getAttribute('data-i'),10)})})
+      .then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){alert(v.virhe||'virhe');return;}
+        paivitaSivu('yhteistalous','vakio poistettu \u2713');});
+    return;}
+  const op=ev.target.closest('.olpres');
+  if(op){ev.preventDefault();
+    if(!SERVER){alert('Muokkaus vaatii selaa-tilan.');return;}
+    fetch('api/olympos',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({lasna_vk:op.getAttribute('data-vk'),lasna_nimi:op.getAttribute('data-nimi'),
+        lasna_arvo:op.getAttribute('data-arvo')==='1'?0:1})})
+      .then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){alert(v.virhe||'virhe');return;}
+        paivitaSivu('yhteistalous');});
+    return;}
+  const od=ev.target.closest('.olpoisto');
+  if(od){ev.preventDefault();
+    if(!SERVER){alert('Muokkaus vaatii selaa-tilan.');return;}
+    if(!confirm('Poistetaanko kirjaus?')){return;}
+    fetch('api/olympos',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({kirjaus_poista:parseInt(od.getAttribute('data-i'),10)})})
+      .then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){alert(v.virhe||'virhe');return;}
+        paivitaSivu('yhteistalous','kirjaus poistettu \u2713');});
+    return;}
+  const kp=ev.target.closest('.katpoisto');
+  if(kp){ev.preventDefault();
+    if(!SERVER){alert('Poisto vaatii selaa-tilan.');return;}
+    const pkat=kp.getAttribute('data-kat');
+    const kd=DATA.kat[pkat]||{};let pn=0;Object.keys(kd).forEach(function(m){pn+=kd[m].length;});
+    let korvaava='';
+    if(pn>0){
+      korvaava=prompt('Kategoriassa "'+pkat+'" on '+pn+' rivi\u00e4 \u2014 anna korvaava kategoria '+
+        '(Kategoria tai Kategoria:tarkenne, tai TARKISTA = rivit avoimeksi):','TARKISTA');
+      if(korvaava===null||!korvaava.trim()){return;}
+    }else if(!confirm('Poistetaanko tyhj\u00e4 kategoria "'+pkat+'"?')){return;}
+    fetch('api/kategoria-poista',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({nimi:pkat,korvaava:korvaava.trim()})})
+      .then(function(r){return r.json();}).then(function(v){
+        if(v.tarvitaan_korvaava){alert('Kategoriassa on '+v.rivit+' rivi\u00e4 \u2014 anna korvaava kategoria.');return;}
+        if(!v.ok){alert(v.virhe||'virhe');return;}
+        try{sessionStorage.setItem('rahaputki_viesti','kategoria "'+pkat+'" poistettu \u2713'+
+          (v.siirretty?' \u2014 '+v.siirretty+' rivi\u00e4 siirretty':''));}catch(err){}
+        location.hash='';location.reload();
+      });
+    return;}
+  const sj=ev.target.closest('.saantosija');
+  const ss=ev.target.closest('.saantosiirto')||sj;
+  if(ss){ev.preventDefault();
+    if(!SERVER){alert('J\u00e4rjestely vaatii selaa-tilan (tai muokkaa saannot.csv:t\u00e4 suoraan).');return;}
+    const runko={malli:ss.getAttribute('data-malli'),kategoria:ss.getAttribute('data-kategoria'),
+      ehto:ss.getAttribute('data-ehto')};
+    const n=document.querySelectorAll('.saantorivi').length;
+    if(sj){
+      const uusiSija=prompt('Siirr\u00e4 s\u00e4\u00e4nt\u00f6 sijaintiin (1\u2013'+n+'):',
+        ss.textContent.trim());
+      if(uusiSija===null){return;}
+      const luku=parseInt(uusiSija,10);
+      if(!luku||luku<1){alert('anna numero 1\u2013'+n);return;}
+      runko.kohde=luku;
+    }else{
+      const st=ss.getAttribute('data-suunta');
+      if(st==='alkuun'){runko.kohde=1;}
+      else if(st==='loppuun'){runko.kohde=n;}
+      else{runko.suunta=parseInt(st,10);}
+    }
+    fetch('api/saanto-siirra',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(runko)})
+      .then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){alert(v.virhe||'virhe');return;}
+        try{sessionStorage.setItem('rahaputki_korosta',runko.malli);}catch(err){}
+        paivitaSivu('saannot','j\u00e4rjestys muutettu \u2713'+
+          (v.muuttui?' \u2014 '+v.muuttui+' rivi\u00e4 luokittui uudelleen':''));
+      });
+    return;}
+  const sm=ev.target.closest('.saantomuokkaus');
+  if(sm){ev.preventDefault();muokkaaRivi(sm.closest('tr'),sm);return;}
+  const sp=ev.target.closest('.saantopoisto');
+  if(sp){ev.preventDefault();
+    const malli=sp.getAttribute('data-malli'),katr=sp.getAttribute('data-kategoria'),
+      ehto=sp.getAttribute('data-ehto');
+    const kayttoja=sp.getAttribute('data-n')||'0';
+    if(!confirm('Poistetaanko s\u00e4\u00e4nt\u00f6  '+malli+' \u2192 '+katr+'  ?'+
+      String.fromCharCode(10)+'Se on perusteena '+kayttoja+' rivill\u00e4 \u2014 ne arvioidaan '+
+      'uudelleen ja voivat palata avoimiksi. K\u00e4sin luokiteltuja ei muuteta.')){return;}
+    const tr=sp.closest('tr');
+    if(SERVER){
+      fetch('api/saanto-poista',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({malli:malli,kategoria:katr,ehto:ehto})})
+        .then(function(r){return r.json();}).then(function(v){
+          if(v.ok){paivitaSivu('saannot','s\u00e4\u00e4nt\u00f6 poistettu \u2713 \u2014 '+
+            v.muuttui+' rivi\u00e4 arvioitu uudelleen, '+v.avoimeksi+' palasi avoimeksi');}
+          else{alert(v.virhe||'virhe');}
+        });
+    }else{
+      MUUT.poistot.push({malli:malli,kategoria:katr});
+      tr.classList.add('poistettu');paivitaPalkki();
+    }
+    return;}
+  const sl=ev.target.closest('.saantolinkki');
+  if(sl){ev.preventDefault();
+    const f=document.getElementById('sf-malli');
+    if(f){f.value=sl.getAttribute('data-saaja').toLowerCase();f.scrollIntoView({block:'center'});f.focus();
+      osumalaskuri(f.value,'sf-osuma',0);}
+    return;}
+  const pr=ev.target.closest('.perus');
+  if(pr){
+    const pt=pr.getAttribute('title')||'?';
+    const ptr=pr.closest('tr');
+    if(SERVER&&(pt==='k\u00e4sin'||pt==='oletus')&&ptr&&ptr.id&&ptr.id.indexOf('rivi-')===0){
+      if(confirm('peruste: '+pt+String.fromCharCode(10)+
+        'Vapautetaanko rivi s\u00e4\u00e4nn\u00f6ille? K\u00e4sin-suoja poistuu ja rivi '+
+        'luokittuu heti sen hetken s\u00e4\u00e4nt\u00f6jen mukaan (tai palaa avoimeksi).')){
+        vapautaRivi(ptr.id.slice(5));
+      }
+    }else{merkitse(null,'peruste: '+pt);}
+    return;
+  }
+  const su=ev.target.closest('#psulje');
+  if(su){ev.preventDefault();sulje();return;}
+  const kb=ev.target.closest('[data-laji]');
+  if(kb){kuukausi(kb.getAttribute('data-kkm'), kb.getAttribute('data-laji'));return;}
+  const el=ev.target.closest('[data-kat]');
+  if(!el)return;
+  if(el.closest('#tutki-details'))return;
+  if(el.tagName==='A'){ev.preventDefault();}
+  avaa(el.getAttribute('data-kat'), el.getAttribute('data-kk')||undefined,
+    el.getAttribute('data-tark')||undefined);
+});
+let HAKU_AJASTIN=null;
+document.addEventListener('input',function(ev){
+  if(ev.target.id==='haku'){
+    if(HAKU_AJASTIN){clearTimeout(HAKU_AJASTIN);}
+    const arvo=ev.target.value;
+    HAKU_AJASTIN=setTimeout(function(){haku(arvo);},400);
+    return;
+  }
+  if(ev.target.id==='sf-malli'){osumalaskuri(ev.target.value,'sf-osuma');return;}
+  if(ev.target.id==='mk-malli'){osumalaskuri(ev.target.value,'mk-osuma');return;}
+  if(ev.target.id!=='sf-suodata')return;
+  const suodatin=ev.target.value.toLowerCase();
+  document.querySelectorAll('#saantotaulu tr.saantorivi').forEach(function(tr){
+    tr.style.display=tr.textContent.toLowerCase().indexOf(suodatin)>=0?'':'none';
+  });
+});
+window.addEventListener('beforeunload',function(ev){
+  const n=Object.keys(MUUT.rivit).length+MUUT.saannot.length+MUUT.poistot.length;
+  if(!SERVER&&n){ev.preventDefault();ev.returnValue='';}
+});
+window.addEventListener('DOMContentLoaded',function(){
+  try{
+    const vm=sessionStorage.getItem('rahaputki_viesti');
+    if(vm){merkitse(null,vm);sessionStorage.removeItem('rahaputki_viesti');}
+  }catch(err){}
+  const h=location.hash.slice(1);
+  if(h==='yhteistalous'){const d=document.getElementById('yhteistalous');
+    if(d){d.open=true;if(d.scrollIntoView){d.scrollIntoView();}}}
+  if(h==='saannot'){
+    const d=document.getElementById('saannot');
+    if(d){d.open=true;
+      let km=null;
+      try{km=sessionStorage.getItem('rahaputki_korosta');sessionStorage.removeItem('rahaputki_korosta');}catch(err){}
+      let loytyi=false;
+      if(km){
+        document.querySelectorAll('.saantosija').forEach(function(a){
+          if(!loytyi&&a.getAttribute('data-malli')===km){
+            const rt=a.closest('tr');
+            if(rt){rt.classList.add('korostettu');rt.scrollIntoView({block:'center'});loytyi=true;}
+          }
+        });
+      }
+      if(!loytyi){d.scrollIntoView();}
+    }
+  }else if(h.indexOf('haku=')===0){
+    const ht=decodeURIComponent(h.slice(5));
+    const kentta=document.getElementById('haku');
+    if(kentta){kentta.value=ht;}
+    haku(ht);
+  }else if(h.indexOf('kklaji=')===0){
+    const osat=h.split('&');
+    kuukausi((osat[1]||'').slice(4), osat[0].slice(7));
+  }else if(h.indexOf('kat=')===0){
+    const osat=h.split('&');
+    const hk=decodeURIComponent(osat[0].slice(4));
+    let hkk,htark;
+    osat.slice(1).forEach(function(o){
+      if(o.slice(0,3)==='kk='){hkk=o.slice(3);}
+      else if(o.slice(0,5)==='tark='){htark=decodeURIComponent(o.slice(5));}});
+    if(DATA.kat[hk]){avaa(hk,hkk,htark);}
+  }
+  document.addEventListener('focusin',function(ev){
+    const el=ev.target;
+    if(!el.classList||!el.classList.contains('tarkinp')){return;}
+    let s=null;const ymp=el.closest?el.closest('tr'):null;
+    if(ymp){s=ymp.querySelector('select.katsel');}
+    if(!s&&el.id==='sf-tark'){s=document.querySelector('.katsel[data-id="__saanto__"]');}
+    if(!s&&el.id==='mk-tark'){s=document.querySelector('.katsel[data-id="__muok__"]');}
+    if(!s&&el.id==='massa-tark'){s=document.querySelector('.katsel[data-id="__massa__"]');}
+    if(!s&&el.dataset.id){s=document.querySelector('.katsel[data-id="'+el.dataset.id+'"]');}
+    const dl=document.getElementById('tarklist');dl.innerHTML='';
+    const kat=s?s.value:'';
+    (TARKKAT[kat]||[]).forEach(function(t){const o=document.createElement('option');o.value=t;dl.appendChild(o);});
+  });
+  fetch('api/ping').then(function(r){return r.json();}).then(function(v){
+    if(v.ok){SERVER=true;document.getElementById('tila').textContent=
+      'selaa-tila \u2713 muutokset tallentuvat heti';}
+  }).catch(function(){
+    document.getElementById('tila').textContent=
+      'tiedostotila: muokkaukset ker\u00e4t\u00e4\u00e4n ja ladataan muutokset.csv:n\u00e4';
+  });
+});
+</script>"""
+    skripti = (skripti.replace("__DATA__", data_js)
+               .replace("__KAT__", kat_js)
+               .replace("__TARKENTEET__", tarkenteet_js)
+               .replace("__TARKKAT__", tarkkat_js)
+               .replace("__SAANTOEHDOT__", saantoehdot_js))
+
+    sivu = f"""<!DOCTYPE html>
+<html lang="fi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rahaputki — kuukausiraportti</title>
+<style>
+:root {{ --muste:#26241f; --paperi:#f7f5f0; --vaalea:#eae6dd; --tulo:#2e7d5b; --meno:#b3502d; }}
+* {{ box-sizing:border-box }}
+body {{ font:15px/1.5 "Iowan Old Style","Palatino Linotype",Georgia,serif; color:var(--muste);
+       background:var(--paperi); margin:0; padding:2rem 1rem 4rem; }}
+main {{ max-width:980px; margin:0 auto }}
+h1 {{ font-size:1.7rem; margin:0 0 .2rem; letter-spacing:.01em }}
+h2 {{ font-size:1.05rem; margin:2.2rem 0 .6rem; text-transform:uppercase; letter-spacing:.09em }}
+.meta {{ color:#6b665c; margin:0 0 1.4rem }}
+svg {{ width:100%; height:auto; display:block }}
+.aks {{ font:11px ui-monospace,Menlo,monospace; fill:#6b665c }}
+table {{ border-collapse:collapse; width:100%; font-size:.92rem;
+         font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace }}
+th,td {{ padding:.3rem .55rem; text-align:left; border-bottom:1px solid var(--vaalea) }}
+td.num,th {{ text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap }}
+.pvm2 {{ white-space:nowrap; color:#6b665c }}
+.tili2 {{ color:#a39d92; font-size:.74rem; white-space:nowrap }}
+th:first-child,td:first-child {{ text-align:left; font-family:inherit }}
+tr.summa td {{ border-top:2px solid var(--muste); font-weight:700 }}
+.plus {{ color:var(--tulo) }} .miinus {{ color:var(--meno) }}
+text.plus {{ fill:var(--tulo) }} text.miinus {{ fill:var(--meno) }}
+.klik {{ cursor:pointer; text-decoration:underline dotted 1px; text-underline-offset:3px }}
+.klik:hover {{ background:#efe9df }}
+td.num.klik {{ text-decoration:none }}
+#paneeli {{ display:none; margin:1rem 0 }}
+.pkortti {{ background:#fffdf8; border:1px solid var(--vaalea); border-left:4px solid var(--meno);
+            padding:1rem 1.1rem; }}
+.privi {{ display:flex; justify-content:space-between; align-items:baseline; gap:1rem; margin-bottom:.5rem }}
+.kkots td {{ font-weight:700; background:#f1ede4 }}
+.tark {{ color:#6b665c }}
+.selite2 {{ color:#a39d92; font-size:.62rem; line-height:1.15; margin-top:.05rem }}
+.selite2.tarkselite {{ color:#4a463f; font-size:.78rem }}
+#tutki {{ display:flex; gap:1rem; align-items:flex-start; flex-wrap:wrap }}
+#tutki-puu {{ flex:0 0 15rem; height:26rem; overflow-y:auto; border:1px solid #d9d3c8;
+  border-radius:8px; padding:.5rem .6rem; background:#fbf9f5 }}
+#tutki-kuva {{ flex:1 1 26rem; min-width:22rem }}
+#tutki-svg {{ min-height:19rem }}
+#tutki-ohjaus {{ display:flex; gap:.5rem; align-items:center; margin-bottom:.4rem; flex-wrap:wrap }}
+#tutki-ohjaus button {{ font:inherit; padding:.2rem .6rem; border:1px solid #c9c3b8;
+  background:#fff; border-radius:6px; cursor:pointer }}
+#tutki-ohjaus button:hover {{ background:#f0ece4 }}
+.tutki-katrivi {{ display:flex; align-items:center; gap:.3rem; padding:.1rem 0; cursor:pointer }}
+.tutki-katrivi:hover {{ background:#f0ece4 }}
+.tutki-nuoli {{ width:1rem; color:#8a857c; user-select:none }}
+.tutki-tark {{ margin-left:1.3rem; font-size:.85em; color:#5a554c; cursor:pointer;
+  padding:.05rem 0; display:flex; align-items:center; gap:.3rem }}
+.tutki-tark:hover {{ background:#f0ece4 }}
+.tutki-lammas {{ width:.7rem; height:.7rem; border-radius:2px; display:inline-block; flex:0 0 auto }}
+#tutki-legenda {{ display:flex; flex-wrap:wrap; gap:.4rem .8rem; margin-top:.5rem; font-size:.82em }}
+#tutki-legenda span {{ display:inline-flex; align-items:center; gap:.3rem }}
+.tutki-tark.piilossa {{ display:none }}
+.palkki {{ position:relative; background:var(--vaalea); height:10px; min-width:120px; border-radius:5px }}
+.palkki .taytto {{ background:var(--tulo); height:100%; border-radius:5px }}
+.palkki .taytto.yli {{ background:var(--meno) }}
+.palkki i {{ position:absolute; top:-2px; width:2px; height:14px; background:var(--muste) }}
+.palkki.tyhja {{ opacity:.35 }}
+.huomio {{ background:#f3e3c8; padding:.6rem .9rem; border-radius:6px }}
+.pikkuteksti {{ color:#6b665c; font-size:.85rem }}
+.tyokalut {{ display:flex; gap:.8rem; align-items:baseline; flex-wrap:wrap; margin:.6rem 0 }}
+.katsel {{ font-size:.78rem; max-width:11em }}
+.spark svg {{ width:150px; height:34px; display:block }}
+.tarkinp {{ font-size:.78rem; width:7em; text-transform:lowercase }}
+.minp {{ font-size:.78rem }}
+.perus {{ color:#8a857c; cursor:help }}
+.saantolinkki {{ font-size:.78rem }}
+tr.tallennettu td {{ background:#e4efe7 }}
+tr.valittu td {{ background:#e3ddcf }}
+#massapalkki {{ display:none; gap:.5rem; align-items:center; flex-wrap:wrap;
+  margin:.5rem 0; font-size:.85rem; position:sticky; top:0; z-index:5;
+  background:#fffdf8; padding:.4rem 0; border-bottom:1px solid var(--vaalea) }}
+#massapalkki button {{ font-size:.82rem }}
+#muutospalkki {{ display:none; position:fixed; left:0; right:0; bottom:0; background:var(--muste);
+  color:var(--paperi); padding:.6rem 1rem; text-align:center; font-size:.9rem }}
+#muutospalkki button {{ font-size:.9rem; margin-left:.8rem }}
+#saannot summary, #yhteistalous summary {{ cursor:pointer; margin:2.2rem 0 .6rem }}
+#sf-suodata {{ font-size:.85rem; margin:.4rem 0 }}
+#haku {{ font-size:.85rem }}
+tr.poistettu td {{ text-decoration:line-through; opacity:.5 }}
+.sform {{ display:flex; flex-wrap:wrap; gap:.4rem; align-items:center; margin:.6rem 0;
+  font-size:.85rem }}
+.sform input,.sform select,.sform button {{ font-size:.82rem }}
+code {{ font-family:ui-monospace,Menlo,monospace }}
+</style></head><body><main>
+<h1>Rahaputki</h1>
+<p class="meta">Rahaputki {VERSIO} · päivitetty {date.today().strftime('%d.%m.%Y')} · {len(ledger)} tapahtumaa ·
+kategorian nimeä, matriisin solua tai kaavion palkkia klikkaamalla pääset katsomaan ja muokkaamaan rivejä</p>
+{huomio}
+<div class="tyokalut"><input id="haku" type="search" placeholder="hae tapahtumia… (Esc tyhjentää)" size="26"><span id="tila" class="pikkuteksti"></span></div>
+<div id="paneeli"></div>
+<h2>Tulot ja menot kuukausittain <span class="pikkuteksti">(vihreä = tulot, ruskea = menot, tumma viiva = menojen 3 kk liukuva keskiarvo, % = säästöaste)</span></h2>
+{kaavio}
+<details id="tutki-details"><summary><h2 style="display:inline">Tutki kategorioita</h2> <span class="pikkuteksti">— valitse puusta kategorioita ja tarkenteita, piirtyvät kuukausien yli omilla väreillään</span></summary>
+<div id="tutki">
+  <div id="tutki-puu"></div>
+  <div id="tutki-kuva">
+    <div id="tutki-ohjaus">
+      <button id="tutki-tila" data-tila="stacked">Pinottu ↔ Rinnakkain</button>
+      <button id="tutki-tyhjaa">Tyhjennä</button>
+      <span id="tutki-selite" class="pikkuteksti"></span>
+    </div>
+    <div id="tutki-svg"></div>
+    <div id="tutki-legenda"></div>
+  </div>
+</div>
+</details>
+<h2>Koko historia {jakso[0]} – {jakso[1]}</h2>
+<div style="overflow-x:auto"><table><tr><th>Kategoria</th><th>Kehitys</th><th>Yhteensä €</th>
+<th>Keskim. €/kk</th><th>Mediaani €/kk</th><th>Keskim. €/v</th><th>Trendi €/kk</th></tr>
+{koonti_html}</table></div>
+<p class="pikkuteksti">Keskiarvot ja mediaanit on laskettu {n_kk} täydeltä kuukaudelta (kuluva kuukausi
+ei mukana); Yhteensä-sarake sisältää kaiken. Kehitys-käyrän tumma viiva = 3 kk liukuva keskiarvo.
+Mediaani = tyypillinen kuukausi — jos keskiarvo on selvästi mediaania suurempi, kategoria elää
+piikeistä (vakuutukset, matkat) ja sitä kannattaa arvioida vuositasolla. Trendi = viimeisen 3 kk
+keskiarvo miinus edeltävän 3 kk keskiarvo. {saasto_rivi}Sama taulukko: raportit/yhteenveto_koko.csv.</p>
+<h2>{'Kuukausi ' + kohde[5:] + '/' + kohde[:4] + ' · toteuma vs. raami' if kohde else ''}</h2>
+<table><tr><th>Kategoria</th><th>Toteuma €</th><th>Raami €</th><th>Jäljellä €</th><th></th></tr>
+{''.join(rivit_html)}</table>
+<p class="pikkuteksti">Pystyviiva palkissa = raami. Raamit asetetaan tiedostossa budjetti.csv
+(ehdotus toteumasta: <code>python3 kirjanpito.py budjetti-ehdotus</code>).</p>
+{saldot_html}
+<h2>Kategoriat × kuukaudet</h2>
+<div style="overflow-x:auto"><table>{''.join(matriisi)}</table></div>
+{olympos_html}
+<details id="saannot"><summary><h2 style="display:inline">Säännöt ({saanto_n} kpl)</h2></summary>
+<p class="pikkuteksti">Poisto arvioi säännön luokittelemat rivit uudelleen (voivat palata avoimiksi tai siirtyä toiselle säännölle); käsin luokiteltuja ei kosketa.
+Uudet säännöt tehdään porautumisnäkymän lomakkeella.</p>
+<input id="sf-suodata" placeholder="suodata sääntöjä…" size="28">
+<div style="overflow-x:auto"><table id="saantotaulu"><tr><th>#</th><th>Malli</th><th>Kategoria</th><th>Ehto</th><th>Osuu</th><th>Perusteena</th><th></th></tr>
+{saannot_html}</table></div></details>
+<p class="pikkuteksti">Sama taulukko Sheets-liitosta varten: raportit/yhteenveto_kk.csv.
+Siirrot omien tilien välillä, sijoitukset ja pois-tyyppiset kategoriat eivät ole mukana luvuissa.</p>
+<datalist id="tarklist"></datalist>
+<div id="muutospalkki"><span id="muutosteksti"></span> <button id="lataamuutokset">Lataa muutokset.csv</button></div>
+</main>
+{skripti}
+</body></html>"""
+    (RAPORTIT / "raportti.html").write_text(sivu, encoding="utf-8")
+
+
+def cmd_raportti(args):
+    cfg = lue_config()
+    ledger = lue_ledger()
+    n_rev = _korjaa_revolut_selitteet(ledger)
+    if n_rev:
+        m_u, m_a = uudelleenluokittele_saantorivit(ledger, cfg)
+        print(f"Korjattu Revolut-selitteet {n_rev} riviltä; {m_u} luokiteltu uudelleen "
+              f"({m_a} palasi avoimeksi).")
+    n_per = taydenna_perusteet(ledger, cfg)
+    if n_per:
+        print(f"Täydennetty luokitteluperuste {n_per} riville.")
+    if n_rev or n_per:
+        kirjoita_ledger(ledger)
+        kirjoita_tarkistettavat(ledger)
+    rakenna_raportit(ledger, cfg, kk=(0 if args.kaikki else args.kk))
+    print(f"Raportti: {(RAPORTIT / 'raportti.html')}")
+
+
+def cmd_budjetti(args):
+    cfg = lue_config()
+    ledger = lue_ledger()
+    kuukaudet, taulu, tulot, menot = koosta(ledger, cfg)
+    tanaan = date.today().isoformat()[:7]
+    taydet = [m for m in kuukaudet if m < tanaan][-12:]
+    if len(taydet) < 2:
+        print("Tarvitaan vähintään kaksi täyttä kuukautta dataa ennen raamiehdotusta.")
+        return
+    tyypit = cfg["kategoriat"]
+    print(f"Ehdotus {len(taydet)} täyden kuukauden mediaanista ({taydet[0]}…{taydet[-1]}):\n")
+    rivit = []
+    for k in sorted((k for k in taulu if tyypit.get(k, "meno") == "meno"),
+                    key=lambda k: -statistics.median([taulu[k][m] for m in taydet])):
+        med = statistics.median([taulu[k][m] for m in taydet])
+        if med <= 0:
+            continue
+        ehdotus = round(med / 10) * 10 or 10
+        rivit.append((k, ehdotus))
+        print(f"  {k:<24} {fmt_eur(ehdotus):>10} €/kk   (mediaani {fmt_eur(med)})")
+    polku = JUURI / "budjetti_ehdotus.csv"
+    with open(polku, "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(["kategoria", "kk_raami"])
+        w.writerows(rivit)
+    print(f"\nTallennettu: {polku.name} — kopioi haluamasi rivit budjetti.csv:hen (ja muokkaa vapaasti).")
+
+
+def cmd_kurkista(args):
+    polku = Path(args.tiedosto)
+    if not polku.exists():
+        polku = INBOX / args.tiedosto
+    teksti, enc = lue_teksti(polku)
+    rivit = teksti.splitlines()
+    erotin = ";" if rivit[0].count(";") >= rivit[0].count(",") else ","
+    print(f"Tiedosto : {polku}\nEnkoodaus: {enc}\nErotin   : '{erotin}'\nOtsikot  :")
+    for o in next(csv.reader([rivit[0]], delimiter=erotin)):
+        print(f"  - {o}")
+    cfg = lue_config()
+    nimi, _ = tunnista_lahde(next(csv.reader([rivit[0]], delimiter=erotin)), cfg)
+    print(f"Tunnistettu lähde: {nimi or 'EI TUNNISTETTU — lisää lähde config.json:iin yllä olevilla sarakenimillä'}")
+    print("\nEnsimmäiset rivit:")
+    for r in rivit[1:4]:
+        print(f"  {r[:160]}")
+
+
+def cmd_luokittele(args):
+    """Aja säännöt uudelleen koko pääkirjalle (esim. saannot.csv:n käsimuokkauksen
+    jälkeen). Käsin- ja oletus-luokiteltuja ei siirretä — niiden pakottamiseen
+    käytä selaimen sääntölomaketta."""
+    cfg = lue_config()
+    ledger = lue_ledger()
+    muuttui, avoimeksi = uudelleenluokittele_saantorivit(ledger, cfg)
+    if not muuttui and not avoimeksi:
+        print("Säännöt ajettu — mikään rivi ei muuttunut (käsin/oletus-rivejä ei siirretä).")
+        return
+    kirjoita_ledger(ledger)
+    kirjoita_tarkistettavat(ledger)
+    rakenna_raportit(ledger, cfg, kk=13)
+    print(f"Säännöt ajettu: {muuttui} riviä luokittui uudelleen, {avoimeksi} palasi avoimeksi.")
+    print("Huom: käsin (✎) ja oletus (◦) -rivejä ei siirretä — pakotus selaimen sääntölomakkeella.")
+
+
+def cmd_siivoa_kopiot(args):
+    """Poista rivit, jotka tulivat tiedostonimen '(1)'-kopiosta ja joilla on
+    vastinpari alkuperäisestä lähteestä (sama tili+pvm+summa+saaja)."""
+    ledger = lue_ledger()
+    kopio_re = re.compile(r"\s\(\d+\)(?=\.\w+$|$)")
+    avaimet_alkup = Counter()
+    for r in ledger:
+        if not kopio_re.search(r.get("lahde", "")):
+            avaimet_alkup[avain(r["tili"], r["pvm"], float(r["summa"]), r["saaja"])] += 1
+    poistetaan, kaytetty = [], Counter()
+    for r in ledger:
+        if not kopio_re.search(r.get("lahde", "")):
+            continue
+        av = avain(r["tili"], r["pvm"], float(r["summa"]), r["saaja"])
+        if kaytetty[av] < avaimet_alkup[av]:
+            kaytetty[av] += 1
+            poistetaan.append(r)
+    if not poistetaan:
+        print("Kopiolähteiden tuplarivejä ei löytynyt — mitään ei muutettu.")
+        return
+    print(f"Poistetaan {len(poistetaan)} kopiolähteestä tuotua tuplariviä:")
+    kuut = Counter((r["pvm"][:7], r["tili"]) for r in poistetaan)
+    for (kk, tili), n in sorted(kuut.items()):
+        summa = sum(float(r["summa"]) for r in poistetaan if r["pvm"][:7] == kk and r["tili"] == tili)
+        print(f"  {kk} {tili:14} {n:>3} riviä {summa:>10.2f} €")
+    idt = {id(r) for r in poistetaan}
+    ledger[:] = [r for r in ledger if id(r) not in idt]
+    cfg = lue_config()
+    kirjoita_ledger(ledger)
+    kirjoita_tarkistettavat(ledger)
+    rakenna_raportit(ledger, cfg, kk=13)
+    print(f"Valmis — pääkirjassa nyt {len(ledger)} riviä (varmuuskopio kansiossa data/varmuuskopiot).")
+
+
+KORTIT_SPEC = {
+    "OP Visa": {"tili_kortti": "OP-kortti", "era_paiva": "loppu", "minimi_pct": 2,
+                "maksu_avaimet": ["vähittäisasiakkaat"]},
+    "S-Pankki Visa": {"tili_kortti": "S-Pankki Visa", "era_paiva": 15, "minimi_pct": 4,
+                      "maksu_avaimet": ["1194426", "s-pankki visa", "visa credit",
+                                        "visa-luotto", "luoton maksu", "s-pankki oyj",
+                                        "s-pankki ville",
+                                        "55843 90027", "5584390027",
+                                        "3939 0008 2005", "393900082005"]},
+}
+
+
+def kortti_summat(ledger):
+    """Kortti -> (maksut_kk, tuodut_kk) täsmäytystä varten."""
+    tulos = {}
+    for nimi, k in KORTIT_SPEC.items():
+        maksut = defaultdict(float)
+        tuodut = defaultdict(lambda: [0, 0.0])
+        for r in ledger:
+            teksti = normalisoi(f"{r['saaja']} {r['selite']}")
+            summa = float(r["summa"])
+            if (r["tili"] in ("OP-tili", "S-Pankki") and summa < 0
+                    and any(a in teksti for a in k["maksu_avaimet"])):
+                maksut[r["pvm"][:7]] += -summa
+            if r["tili"] == k["tili_kortti"]:
+                t = tuodut[r["pvm"][:7]]
+                t[0] += 1
+                t[1] += -summa
+        tulos[nimi] = (maksut, tuodut)
+    return tulos
+
+
+def cmd_tarkista_kortit(args):
+    """Täsmäytä korttilaskujen maksut tileillä vs. tuodut korttirivit."""
+    ledger = lue_ledger()
+    summat = kortti_summat(ledger)
+    kaikki_kk = sorted({r["pvm"][:7] for r in ledger})
+    for nimi, (maksut, tuodut) in summat.items():
+        print(f"\n═══ {nimi} ═══")
+        if not maksut and not tuodut:
+            print("  ei maksuja eikä tuotuja rivejä — jos kortti on käytössä, maksurivin "
+                  "nimi ei osu hakusanoihin (kerro miltä maksu näyttää tiliotteella).")
+            continue
+        m_yht = t_yht = 0.0
+        print(f"  {'kuukausi':10} {'maksettu €':>11} {'tuotu € (rivit)':>18}   huomio")
+        for m in kaikki_kk:
+            mk = maksut.get(m, 0.0)
+            tn, ts = tuodut.get(m, [0, 0.0])
+            m_yht += mk
+            t_yht += ts
+            huomio = ""
+            edell = kaikki_kk[kaikki_kk.index(m) - 1] if kaikki_kk.index(m) > 0 else ""
+            if mk > 0 and tn == 0 and tuodut.get(edell, [0, 0])[0] == 0:
+                huomio = "⚠ maksu ilman tuotuja ostoja — lasku-PDF ajamatta?"
+            elif tn > 0 and mk == 0:
+                huomio = "(ostoja tuotu; lasku maksettaneen myöhemmin)"
+            if mk or tn:
+                print(f"  {m:10} {mk:>11.2f} {ts:>10.2f} ({tn:>3})   {huomio}")
+        ero = m_yht - t_yht
+        print(f"  {'YHTEENSÄ':10} {m_yht:>11.2f} {t_yht:>14.2f}")
+        if abs(ero) > 5:
+            print(f"  → täsmäyttämättä {ero:,.2f} € — noin tämän verran laskuja on vielä "
+                  f"tuomatta (tai avointa saldoa).".replace(",", " "))
+        else:
+            print("  ✓ maksut ja tuodut rivit täsmäävät (±5 €).")
+    print("\nHuom: laskutuskausi ei ole kalenterikuukausi, joten kuukausirivit ovat "
+          "suuntaa-antavia — YHTEENSÄ-rivin erotus on luotettava mittari.")
+
+
+def cmd_selaa(args):
+    import http.server
+    import webbrowser
+
+    portti = args.portti
+
+    class Kasittelija(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **k):
+            super().__init__(*a, directory=str(RAPORTIT), **k)
+
+        def handle(self):
+            try:
+                super().handle()
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # selain katkaisi pyynnön kesken (esim. sivun automaattipäivitys) — harmiton
+
+        def end_headers(self):
+            # raportti muuttuu joka operaatiolla — välimuisti aiheuttaisi vanhentuneita näkymiä
+            self.send_header("Cache-Control", "no-store")
+            super().end_headers()
+
+        def log_message(self, *a):
+            pass
+
+        def _json(self, obj, koodi=200):
+            data = json.dumps(obj, ensure_ascii=False).encode()
+            self.send_response(koodi)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            if "If-Modified-Since" in self.headers:
+                del self.headers["If-Modified-Since"]  # aina tuore sivu, ei 304-oikotietä
+            if self.path == "/api/ping":
+                return self._json({"ok": True})
+            if self.path in ("/", "/raportti.html"):
+                rakenna_raportit(lue_ledger(), lue_config(), kk=13)
+                self.path = "/raportti.html"
+            return super().do_GET()
+
+        def do_POST(self):
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+                pyynto = json.loads(self.rfile.read(n) or b"{}")
+                cfg = lue_config()
+                if self.path == "/api/muutos":
+                    kat = siisti(pyynto.get("kategoria", ""))
+                    if kat not in cfg["kategoriat"] and not pyynto.get("rivit"):
+                        return self._json({"ok": False, "virhe": f"tuntematon kategoria {kat}"})
+                    ledger = lue_ledger()
+                    idx = {r["id"]: r for r in ledger}
+                    rivit_p = pyynto.get("rivit")
+                    if rivit_p:
+                        n = 0
+                        for rp in rivit_p:
+                            kat2 = siisti(rp.get("kategoria", ""))
+                            r = idx.get(siisti(rp.get("id", "")))
+                            if r and kat2 in cfg["kategoriat"]:
+                                r["kategoria"] = kat2
+                                r["tarkenne"] = siisti(rp.get("tarkenne", "")).lower()
+                                r["peruste"] = siisti(rp.get("peruste", "")) or "käsin"
+                                n += 1
+                        if not n:
+                            return self._json({"ok": False, "virhe": "rivejä ei löydy"})
+                        kirjoita_ledger(ledger)
+                        kirjoita_tarkistettavat(ledger)
+                        return self._json({"ok": True, "paivitetty": n})
+                    idt = pyynto.get("idt") or [siisti(pyynto.get("id", ""))]
+                    tarkenne = siisti(pyynto.get("tarkenne", "")).lower()
+                    n = 0
+                    for rid in idt:
+                        r = idx.get(siisti(rid))
+                        if r:
+                            r["kategoria"], r["tarkenne"], r["peruste"] = kat, tarkenne, "käsin"
+                            n += 1
+                    if not n:
+                        return self._json({"ok": False, "virhe": "rivejä ei löydy"})
+                    kirjoita_ledger(ledger)
+                    kirjoita_tarkistettavat(ledger)
+                    return self._json({"ok": True, "paivitetty": n})
+                if self.path == "/api/saanto":
+                    kat = siisti(pyynto.get("kategoria", ""))
+                    malli = normalisoi(pyynto.get("malli", ""))
+                    if kat not in cfg["kategoriat"] or not malli:
+                        return self._json({"ok": False, "virhe": "puuttuva malli tai kategoria"})
+                    tarkenne = siisti(pyynto.get("tarkenne", "")).lower()
+                    ehto = siisti(pyynto.get("ehto", ""))
+                    poistaen = pyynto.get("poistaen") or []
+                    kategoria_full = kat + (f":{tarkenne}" if tarkenne else "")
+                    ledger = lue_ledger()
+                    vaikutus = saanto_vaikutus(ledger, cfg, malli, kategoria_full,
+                                               ehto=ehto, poistaen=poistaen)
+                    if pyynto.get("esikatselu"):
+                        return self._json({"ok": True, **vaikutus})
+                    for p in poistaen:
+                        poista_saanto(p.get("malli", ""), p.get("kategoria", ""),
+                                      p.get("ehto", ""))
+                    lisaa_saanto(malli, kategoria_full, ehto)
+                    m_u, m_a = uudelleenluokittele_saantorivit(
+                        ledger, cfg,
+                        pakota_saannolle=(malli if pyynto.get("pakota") else None))
+                    kirjoita_ledger(ledger)
+                    kirjoita_tarkistettavat(ledger)
+                    return self._json({"ok": True, "muuttui": m_u, "avoimeksi": m_a, **vaikutus})
+                if self.path == "/api/vapauta":
+                    ledger = lue_ledger()
+                    idx = {r["id"]: r for r in ledger}
+                    r = idx.get(siisti(pyynto.get("id", "")))
+                    if not r:
+                        return self._json({"ok": False, "virhe": "riviä ei löydy"})
+                    if r.get("peruste", "") not in ("käsin", "oletus"):
+                        return self._json({"ok": False,
+                                           "virhe": "rivi ei ole käsin/oletus-luokiteltu"})
+                    saannot = lue_saannot()
+                    u, p2 = luokittele({"saaja": r["saaja"], "selite": r["selite"],
+                                        "iban": "", "summa": float(r["summa"])},
+                                       saannot, cfg.get("omat_ibanit", []))
+                    paa, _, tark = u.partition(":")
+                    r["kategoria"] = paa
+                    r["tarkenne"] = tark.strip().lower()
+                    r["peruste"] = p2 if paa != "TARKISTA" else ""
+                    kirjoita_ledger(ledger)
+                    kirjoita_tarkistettavat(ledger)
+                    return self._json({"ok": True, "kategoria": r["kategoria"],
+                                       "tarkenne": r["tarkenne"], "peruste": r["peruste"]})
+                if self.path == "/api/saanto-osuma":
+                    malli = normalisoi(pyynto.get("malli", ""))
+                    if not malli:
+                        return self._json({"ok": False, "virhe": "tyhjä malli"})
+                    try:
+                        osuu, esim = laske_osumat(lue_ledger(), malli,
+                                                  siisti(pyynto.get("ehto", "")))
+                    except re.error:
+                        return self._json({"ok": False, "virhe": "regex-virhe"})
+                    return self._json({"ok": True, "osuu": osuu, "esimerkit": esim})
+                if self.path == "/api/saanto-poista":
+                    malli = siisti(pyynto.get("malli", ""))
+                    if not malli:
+                        return self._json({"ok": False, "virhe": "tyhjä malli"})
+                    n_p = poista_saanto(malli, siisti(pyynto.get("kategoria", "")),
+                                        siisti(pyynto.get("ehto", "")))
+                    m_u = m_a = 0
+                    if n_p:
+                        ledger = lue_ledger()
+                        m_u, m_a = uudelleenluokittele_saantorivit(
+                            ledger, cfg, vain_peruste=f"sääntö: {normalisoi(malli)}")
+                        kirjoita_ledger(ledger)
+                        kirjoita_tarkistettavat(ledger)
+                    return self._json({"ok": bool(n_p), "poistettu": n_p,
+                                       "muuttui": m_u, "avoimeksi": m_a,
+                                       **({} if n_p else {"virhe": "sääntöä ei löytynyt"})})
+                if self.path == "/api/saanto-siirra":
+                    malli = siisti(pyynto.get("malli", ""))
+                    ok = siirra_saanto(malli, siisti(pyynto.get("kategoria", "")),
+                                       siisti(pyynto.get("ehto", "")),
+                                       suunta=int(pyynto.get("suunta", -1)),
+                                       kohde_sija=pyynto.get("kohde"))
+                    m_u = m_a = 0
+                    if ok:
+                        ledger = lue_ledger()
+                        m_u, m_a = uudelleenluokittele_saantorivit(ledger, cfg)
+                        kirjoita_ledger(ledger)
+                        kirjoita_tarkistettavat(ledger)
+                    return self._json({"ok": ok, "muuttui": m_u, "avoimeksi": m_a,
+                                       **({} if ok else {"virhe": "siirto ei onnistunut"})})
+                if self.path == "/api/olympos":
+                    oly = lue_olympos()
+                    if "lasna_vk" in pyynto:
+                        vk = siisti(str(pyynto.get("lasna_vk", "")))
+                        nimi = siisti(str(pyynto.get("lasna_nimi", "")))
+                        if vk and nimi:
+                            oly.setdefault("lasna", {}).setdefault(vk, {})[nimi] = \
+                                1 if pyynto.get("lasna_arvo") else 0
+                    if pyynto.get("kirjaus"):
+                        k = pyynto["kirjaus"]
+                        try:
+                            summa = float(str(k.get("summa", "")).replace(",", "."))
+                        except ValueError:
+                            return self._json({"ok": False, "virhe": "summa ei ole luku"})
+                        if not siisti(str(k.get("pvm", ""))) or summa <= 0:
+                            return self._json({"ok": False,
+                                               "virhe": "pvm ja positiivinen summa vaaditaan"})
+                        oly.setdefault("kirjaukset", []).append(
+                            {"pvm": siisti(str(k.get("pvm", ""))),
+                             "kuvaus": siisti(str(k.get("kuvaus", ""))),
+                             "maksaja": siisti(str(k.get("maksaja", ""))),
+                             "summa": summa,
+                             "jako": siisti(str(k.get("jako", "tasan"))) or "tasan",
+                             "osallistujat": [siisti(str(x)) for x in (k.get("osallistujat") or [])
+                                              if siisti(str(x))]})
+                    if pyynto.get("hyvitys"):
+                        hv = pyynto["hyvitys"]
+                        try:
+                            s_kk = float(str(hv.get("summa_kk", "")).replace(",", "."))
+                        except ValueError:
+                            return self._json({"ok": False, "virhe": "€/kk ei ole luku"})
+                        if not siisti(str(hv.get("kuvaus", ""))) or s_kk <= 0:
+                            return self._json({"ok": False,
+                                               "virhe": "kuvaus ja positiivinen €/kk vaaditaan"})
+                        uusi_h = {"kuvaus": siisti(str(hv.get("kuvaus", ""))),
+                                  "jasenelta": siisti(str(hv.get("jasenelta", ""))),
+                                  "summa_kk": s_kk}
+                        try:
+                            mx = int(str(hv.get("kk_max", "")).strip() or 0)
+                        except ValueError:
+                            return self._json({"ok": False, "virhe": "kk ei ole kokonaisluku"})
+                        if mx > 0:
+                            uusi_h["kk_max"] = mx
+                        oly.setdefault("hyvitykset", []).append(uusi_h)
+                    if "hyvitys_poista" in pyynto:
+                        i = int(pyynto["hyvitys_poista"])
+                        if 0 <= i < len(oly.get("hyvitykset", [])):
+                            oly["hyvitykset"].pop(i)
+                    if pyynto.get("poissulje"):
+                        rid = siisti(str(pyynto["poissulje"]))
+                        lista = oly.setdefault("poissuljetut", [])
+                        if rid and rid not in lista:
+                            lista.append(rid)
+                    if pyynto.get("ota_mukaan"):
+                        rid = siisti(str(pyynto["ota_mukaan"]))
+                        oly["poissuljetut"] = [x for x in oly.get("poissuljetut", [])
+                                               if str(x) != rid]
+                    if "kirjaus_poista" in pyynto:
+                        i = int(pyynto["kirjaus_poista"])
+                        if 0 <= i < len(oly.get("kirjaukset", [])):
+                            oly["kirjaukset"].pop(i)
+                    for kentta in ("viikkojako", "palautustarkenteet"):
+                        if kentta in pyynto:
+                            oly[kentta] = [siisti(str(x)).lower()
+                                           for x in str(pyynto[kentta]).split(",") if siisti(str(x))]
+                    if "otsikko" in pyynto:
+                        oly["otsikko"] = siisti(str(pyynto.get("otsikko", "")))
+                    if "kategoria" in pyynto and pyynto.get("kategoria") != "__uusi__":
+                        oly["kategoria"] = siisti(str(pyynto.get("kategoria", "")))
+                    if "nayta_alku" in pyynto or "nayta_loppu" in pyynto:
+                        oly["nayta_alku"] = siisti(str(pyynto.get("nayta_alku", "")))
+                        oly["nayta_loppu"] = siisti(str(pyynto.get("nayta_loppu", "")))
+                    if pyynto.get("tasattu"):
+                        oly["tasattu"] = siisti(str(pyynto["tasattu"]))
+                        oly["nayta_alku"] = oly["nayta_loppu"] = ""
+                    kirjoita_olympos(oly)
+                    return self._json({"ok": True})
+                if self.path == "/api/kategoria":
+                    nimi = siisti(pyynto.get("nimi", ""))
+                    if not nimi:
+                        return self._json({"ok": False, "virhe": "tyhjä nimi"})
+                    if nimi not in cfg["kategoriat"]:
+                        cfg["kategoriat"][nimi] = siisti(pyynto.get("tyyppi", "")) or "meno"
+                        with open(CONFIG, "w", encoding="utf-8") as f:
+                            json.dump(cfg, f, ensure_ascii=False, indent=2)
+                    return self._json({"ok": True})
+                if self.path == "/api/kategoria-poista":
+                    nimi = siisti(pyynto.get("nimi", ""))
+                    korvaava = siisti(pyynto.get("korvaava", ""))
+                    if nimi not in cfg["kategoriat"]:
+                        return self._json({"ok": False, "virhe": "tuntematon kategoria"})
+                    saantoja = sum(1 for s in lue_saannot_raaka()
+                                   if siisti(s["kategoria"]).partition(":")[0] == nimi)
+                    if saantoja:
+                        return self._json({"ok": False, "virhe":
+                                           f"{saantoja} sääntöä osoittaa kategoriaan '{nimi}' — "
+                                           "poista tai muokkaa ne ensin (säännöt-välilehti)"})
+                    ledger = lue_ledger()
+                    osuvat = [r for r in ledger if r["kategoria"] == nimi]
+                    if osuvat and not korvaava:
+                        return self._json({"ok": False, "tarvitaan_korvaava": True,
+                                           "rivit": len(osuvat)})
+                    siirretty = 0
+                    if osuvat:
+                        if korvaava.upper() == "TARKISTA":
+                            for r in osuvat:
+                                r["kategoria"], r["tarkenne"], r["peruste"] = "TARKISTA", "", ""
+                                siirretty += 1
+                        else:
+                            kat2, _, tark2 = korvaava.partition(":")
+                            kat2 = siisti(kat2)
+                            if kat2 not in cfg["kategoriat"] or kat2 == nimi:
+                                return self._json({"ok": False,
+                                                   "virhe": f"tuntematon korvaava kategoria '{kat2}'"})
+                            for r in osuvat:
+                                r["kategoria"], r["tarkenne"], r["peruste"] = kat2, siisti(tark2).lower(), "käsin"
+                                siirretty += 1
+                        kirjoita_ledger(ledger)
+                        kirjoita_tarkistettavat(ledger)
+                    del cfg["kategoriat"][nimi]
+                    with open(CONFIG, "w", encoding="utf-8") as f:
+                        json.dump(cfg, f, ensure_ascii=False, indent=2)
+                    return self._json({"ok": True, "siirretty": siirretty})
+                return self._json({"ok": False, "virhe": "tuntematon polku"}, 404)
+            except Exception as e:
+                return self._json({"ok": False, "virhe": str(e)}, 500)
+
+    cfg0 = lue_config()
+    ledger0 = lue_ledger()
+    n_rev = _korjaa_revolut_selitteet(ledger0)
+    if n_rev:
+        m_u, m_a = uudelleenluokittele_saantorivit(ledger0, cfg0)
+        print(f"Korjattu Revolut-selitteet {n_rev} riviltä; {m_u} luokiteltu uudelleen "
+              f"({m_a} palasi avoimeksi).")
+    n_per = taydenna_perusteet(ledger0, cfg0)
+    if n_per:
+        print(f"Täydennetty luokitteluperuste {n_per} riville.")
+    if n_rev or n_per:
+        kirjoita_ledger(ledger0)
+        kirjoita_tarkistettavat(ledger0)
+    rakenna_raportit(ledger0, cfg0, kk=13)
+    osoite = f"http://127.0.0.1:{portti}/raportti.html"
+    print(f"Selaa-tila {VERSIO}: {osoite}  (muutokset tallentuvat heti pääkirjaan; Ctrl-C lopettaa)")
+    try:
+        webbrowser.open(osoite)
+    except Exception:
+        pass
+    try:
+        with http.server.ThreadingHTTPServer(("127.0.0.1", portti), Kasittelija) as srv:
+            srv.serve_forever()
+    except KeyboardInterrupt:
+        print("\nSuljettu.")
+
+
+def main():
+    p = argparse.ArgumentParser(description="Kevyt henkilökohtainen rahaputki")
+    ala = p.add_subparsers(dest="komento", required=True)
+    aj = ala.add_parser("aja", help="lue inbox/, luokittele, raportoi")
+    aj.add_argument("--siivoa-alkaen", action="store_true", dest="siivoa_alkaen",
+                    help="poista pääkirjasta alkupäivää vanhemmat rivit (muuten vain varoitetaan)")
+    h = ala.add_parser("hae", help="nouda tilitapahtumat pankkirajapinnasta inboxiin")
+    h.add_argument("--palvelu", choices=["mock", "gocardless", "enablebanking"])
+    h.add_argument("--paivia", type=int, default=89,
+                   help="montako päivää historiaa noudetaan (oletus 89)")
+    h.add_argument("--istunto", metavar="SESSION_ID",
+                   help="listaa olemassa olevan EB-istunnon tilit ja uid:t")
+    h.add_argument("--yhdista", metavar="PANKKI",
+                   help="Enable Banking: valtuuta pankki ja tallenna tilit (sandboxissa: mock)")
+    h.add_argument("--raaka", action="store_true",
+                   help="tallenna pankin täydet raakavastaukset tiedostoon (data/raaka/) diagnoosia varten")
+    o = ala.add_parser("opi", help="lue täytetty tarkistettavat.csv")
+    o.add_argument("--oletus", help="niputa loput luokittelemattomat tähän kategoriaan (esim. Henkilömaksut)")
+    r = ala.add_parser("raportti", help="rakenna raportit uudelleen")
+    r.add_argument("--kk", type=int, default=13, help="montako kuukautta (oletus 13)")
+    r.add_argument("--kaikki", action="store_true", help="kaikki kuukaudet")
+    ala.add_parser("budjetti-ehdotus", help="ehdota raamit toteuman mediaanista")
+    ala.add_parser("tarkista-kortit", help="täsmäytä korttilaskujen maksut vs. tuodut korttirivit")
+    ala.add_parser("siivoa-kopiot", help="poista tiedostokopioista ((1).pdf) kahteen kertaan tuodut rivit")
+    ala.add_parser("luokittele", help="aja säännöt uudelleen koko pääkirjalle (saannot.csv:n käsimuokkauksen jälkeen)")
+    s = ala.add_parser("selaa", help="avaa raportti muokattavana selaimessa (paikallinen palvelin)")
+    s.add_argument("--portti", type=int, default=8765)
+    k = ala.add_parser("kurkista", help="näytä miten CSV tulkittaisiin")
+    k.add_argument("tiedosto")
+    args = p.parse_args()
+    {"aja": cmd_aja, "hae": cmd_hae, "opi": cmd_opi, "raportti": cmd_raportti,
+     "budjetti-ehdotus": cmd_budjetti, "kurkista": cmd_kurkista,
+     "selaa": cmd_selaa, "tarkista-kortit": cmd_tarkista_kortit, "siivoa-kopiot": cmd_siivoa_kopiot, "luokittele": cmd_luokittele}[args.komento](args)
+
+
+if __name__ == "__main__":
+    main()

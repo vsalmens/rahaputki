@@ -1,0 +1,12 @@
+# Salaisuudet
+.env
+
+# Oma konfiguraatio (käytä config.esimerkki.json-pohjaa)
+config.json
+config.json.backup
+
+# Kaikki data — ei koskaan repoon
+*.csv
+data/
+inbox/
+raportit/
