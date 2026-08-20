@@ -713,15 +713,31 @@ def _eb_kutsu(polku, token, runko=None):
         raise EBVirhe(e.code, teksti) from e
 
 
-def eb_riveiksi(data):
-    """Enable Bankingin tapahtumamuoto -> {pvm, summa, saaja, selite}."""
+def eb_riveiksi(data, kerro=None):
+    """Enable Bankingin tapahtumamuoto -> {pvm, summa, saaja, selite}.
+
+    Kirjautumattomat (PDNG) ja nollasummaiset ohitetaan; ks. _eb_ohita.
+    `kerro` saa yhteenvedon ohitetuista, jotta mitään ei tapahdu hiljaa."""
     ulos = []
+    ohitetut = Counter()
     for tx in data.get("transactions", []) or []:
         try:
             pvm = date.fromisoformat(str(tx.get("booking_date") or tx.get("value_date")
                                          or tx.get("transaction_date")))
             summa = round(float(tx.get("transaction_amount", {}).get("amount")), 2)
         except (TypeError, ValueError):
+            ohitetut["tulkitsematon"] += 1
+            continue
+        tila = siisti(str(tx.get("status") or "")).upper()
+        if tila and tila not in ("BOOK", "BOOKED"):
+            # Varaus, ei vielä kirjaus: summa ja päivä voivat vielä muuttua, ja
+            # kirjautuessaan se tulisi eri avaimella toiseen kertaan.
+            ohitetut["kirjautumaton"] += 1
+            continue
+        if summa == 0:
+            # Rauennut korttivaraus. Ei rahaa, mutta jäisi ikuisesti
+            # odottamaan luokittelua.
+            ohitetut["nollasumma"] += 1
             continue
         if str(tx.get("credit_debit_indicator", "")).upper() == "DBIT" and summa > 0:
             summa = -summa
@@ -731,6 +747,9 @@ def eb_riveiksi(data):
         rem = tx.get("remittance_information") or []
         if isinstance(rem, str):
             rem = [rem]
+        valuutta = siisti(str(tx.get("transaction_amount", {}).get("currency") or ""))
+        if valuutta and valuutta.upper() != "EUR":
+            ohitetut["muu_valuutta"] += 1
         btc = tx.get("bank_transaction_code")
         if isinstance(btc, dict):
             btc = "/".join(str(x) for x in (btc.get("code"), btc.get("sub_code"),
@@ -738,12 +757,16 @@ def eb_riveiksi(data):
         viite = tx.get("entry_reference") or tx.get("reference_number") or ""
         tilinro = ((tx.get("creditor_account") or {}).get("iban")
                    or (tx.get("debtor_account") or {}).get("iban") or "")
-        selite = siisti(" ".join(str(x) for x in [*rem, btc, tilinro, tx.get("note"),
-                                                  viite and f"viite {viite}"] if x))
+        selite = siisti(" ".join(str(x) for x in [
+            *rem, btc, tilinro, tx.get("note"),
+            valuutta if valuutta.upper() not in ("", "EUR") else "",
+            viite and f"viite {viite}"] if x))
         if not saaja:
             # varasaaja vain viestiosasta - koodit ja viitteet eivät kuulu nimeen
             saaja = siisti(" ".join(str(x) for x in rem))[:40] or selite[:40]
         ulos.append({"pvm": pvm, "summa": summa, "saaja": saaja, "selite": selite})
+    if kerro is not None:
+        kerro.update(ohitetut)
     return ulos
 
 
@@ -1939,7 +1962,17 @@ def cmd_hae(args):
                 json.dump(data, rf, ensure_ascii=False, indent=2)
             n = len((data or {}).get("transactions", []) or [])
             print(f"  \u2699 {tili}: raaka \u2192 data/raaka/{rpolku.name} ({n} objektia)")
-        rivit = eb_riveiksi(data) if palvelu == "enablebanking" else gc_riveiksi(data)
+        ohitetut = Counter()
+        rivit = (eb_riveiksi(data, ohitetut) if palvelu == "enablebanking"
+                 else gc_riveiksi(data))
+        for laji, teksti in (("kirjautumaton", "vielä kirjautumatonta (tulevat mukaan "
+                                               "seuraavassa haussa)"),
+                             ("nollasumma", "rauennutta 0,00 € varausta"),
+                             ("muu_valuutta", "muun valuutan kuin euron tapahtumaa "
+                                              "— summat luetaan sellaisenaan, tarkista"),
+                             ("tulkitsematon", "tapahtumaa joita ei voitu tulkita")):
+            if ohitetut.get(laji):
+                print(f"  ℹ {tili}: {ohitetut[laji]} {teksti}")
         if not rivit:
             print(f"· {tili}: ei tapahtumia")
             continue
