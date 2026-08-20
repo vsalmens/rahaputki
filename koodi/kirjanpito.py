@@ -50,7 +50,13 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 
 VERSIO = "v123"
 
-LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria", "tarkenne", "peruste", "lahde"]
+LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
+                 "tarkenne", "peruste", "lahde", "tila"]
+# tila: tyhjä = pankin kirjaama, "varaus" = vasta varattu (ei vielä kirjattu)
+VARAUS = "varaus"
+VARAUKSET = DATA / "varaukset.json"
+# Varaukset vanhenevat: jos hae ei ole käynyt hetkeen, niitä ei pidetä yllä.
+VARAUS_VANHENEE_PV = 3
 PVM_MUODOT = ["%d.%m.%Y", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y", "%d.%m.%y"]
 ENKOODAUKSET = ["utf-8-sig", "utf-8", "iso-8859-1"]
 
@@ -587,6 +593,7 @@ def kirjoita_ledger(rivit):
     for r in rivit:
         r["tarkenne"] = siisti(r.get("tarkenne", "")).lower()
         r.setdefault("peruste", "")
+        r.setdefault("tila", "")
     rivit.sort(key=lambda r: (r["pvm"], r["tili"], r["id"]))
     with open(LEDGER, "w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=LEDGER_KENTAT, delimiter=";")
@@ -713,11 +720,13 @@ def _eb_kutsu(polku, token, runko=None):
         raise EBVirhe(e.code, teksti) from e
 
 
-def eb_riveiksi(data, kerro=None):
+def eb_riveiksi(data, kerro=None, varaukset=None):
     """Enable Bankingin tapahtumamuoto -> {pvm, summa, saaja, selite}.
 
-    Kirjautumattomat (PDNG) ja nollasummaiset ohitetaan; ks. _eb_ohita.
-    `kerro` saa yhteenvedon ohitetuista, jotta mitään ei tapahdu hiljaa."""
+    Nollasummaiset (rauenneet varaukset) ohitetaan. Kirjautumattomat (PDNG)
+    eivät kelpaa pääkirjaan sellaisenaan, mutta ne kerätään `varaukset`-listaan,
+    josta aja pitää niitä yllä väliaikaisina riveinä. `kerro` saa yhteenvedon
+    ohitetuista, jotta mitään ei tapahdu hiljaa."""
     ulos = []
     ohitetut = Counter()
     for tx in data.get("transactions", []) or []:
@@ -729,7 +738,8 @@ def eb_riveiksi(data, kerro=None):
             ohitetut["tulkitsematon"] += 1
             continue
         tila = siisti(str(tx.get("status") or "")).upper()
-        if tila and tila not in ("BOOK", "BOOKED"):
+        kirjattu = not tila or tila in ("BOOK", "BOOKED")
+        if not kirjattu and varaukset is None:
             # Varaus, ei vielä kirjaus: summa ja päivä voivat vielä muuttua, ja
             # kirjautuessaan se tulisi eri avaimella toiseen kertaan.
             ohitetut["kirjautumaton"] += 1
@@ -766,8 +776,13 @@ def eb_riveiksi(data, kerro=None):
             saaja = siisti(" ".join(str(x) for x in rem))[:40] or selite[:40]
         koodi = tx.get("bank_transaction_code")
         laji = siisti(str(koodi.get("code") or "")) if isinstance(koodi, dict) else ""
-        ulos.append({"pvm": pvm, "summa": summa, "saaja": saaja, "selite": selite,
-                     "laji": laji})
+        rivi = {"pvm": pvm, "summa": summa, "saaja": saaja, "selite": selite,
+                "laji": laji}
+        if kirjattu:
+            ulos.append(rivi)
+        else:
+            ohitetut["varaus"] += 1
+            varaukset.append(rivi)
     if kerro is not None:
         kerro.update(ohitetut)
     return ulos
@@ -1938,6 +1953,7 @@ def cmd_hae(args):
                       {"tili": "Revolut", "account_id": "mock-rev"}]
     INBOX.mkdir(exist_ok=True)
     yhteensa = 0
+    varaukset = {}
     # Saman nimiset tilit (esim. Revolutin monta taskua) kirjoitetaan samaan
     # tiedostoon: yksi tiedosto per tilinimi, ei päällekirjoitusta.
     kertyma = {}
@@ -1972,9 +1988,13 @@ def cmd_hae(args):
             n = len((data or {}).get("transactions", []) or [])
             print(f"  \u2699 {tili}: raaka \u2192 data/raaka/{rpolku.name} ({n} objektia)")
         ohitetut = Counter()
-        rivit = (eb_riveiksi(data, ohitetut) if palvelu == "enablebanking"
-                 else gc_riveiksi(data))
-        for laji, teksti in (("kirjautumaton", "vielä kirjautumatonta (tulevat mukaan "
+        tilin_varaukset = []
+        rivit = (eb_riveiksi(data, ohitetut, tilin_varaukset)
+                 if palvelu == "enablebanking" else gc_riveiksi(data))
+        varaukset.setdefault(tili, []).extend(tilin_varaukset)
+        for laji, teksti in (("varaus", "odottavaa veloitusta (näkyvät raportissa "
+                                        "varauksina, tarkentuvat kun pankki kirjaa ne)"),
+                             ("kirjautumaton", "vielä kirjautumatonta (tulevat mukaan "
                                                "seuraavassa haussa)"),
                              ("nollasumma", "rauennutta 0,00 € varausta"),
                              ("muu_valuutta", "muun valuutan kuin euron tapahtumaa "
@@ -1992,14 +2012,96 @@ def cmd_hae(args):
         polku = INBOX / f"hae_{palvelu}_{tili.replace(' ', '_')}_{date.today().isoformat()}.csv"
         kirjoita_pankkicsv(tili, sorted(rivit, key=lambda r: r["pvm"]), polku)
         print(f"  → inbox/{polku.name} ({len(rivit)} riviä)")
+    if varaukset:
+        kirjoita_varaukset(varaukset)
     if yhteensa:
         print("\nSeuraavaksi: python3 kirjanpito.py aja   (dedupe ohittaa jo tuodut)")
+
+
+def kirjoita_varaukset(tilikohtaiset):
+    """Varaukset elävät pääkirjan ulkopuolella siihen asti, että aja poimii ne.
+    Tiedosto kirjoitetaan aina kokonaan uusiksi: haku on tuorein totuus."""
+    DATA.mkdir(exist_ok=True)
+    ulos = {"haettu": date.today().isoformat(), "tilit": {}}
+    for tili, rivit in tilikohtaiset.items():
+        ulos["tilit"][tili] = [{"pvm": r["pvm"].isoformat(), "summa": round(r["summa"], 2),
+                                "saaja": r["saaja"], "selite": r["selite"],
+                                "laji": r.get("laji", "")} for r in rivit]
+    with open(VARAUKSET, "w", encoding="utf-8") as f:
+        json.dump(ulos, f, ensure_ascii=False, indent=2)
+
+
+def lue_varaukset():
+    """Palauttaa (tilit, vanhentunut). Vanhentunut = haku on liian vanha, jolloin
+    varauksiin ei voi luottaa eikä niitä pidetä yllä."""
+    if not VARAUKSET.exists():
+        return {}, False
+    try:
+        with open(VARAUKSET, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}, False
+    haettu = siisti(str(data.get("haettu", "")))
+    vanhentunut = True
+    try:
+        vanhentunut = (date.today() - date.fromisoformat(haettu)).days > VARAUS_VANHENEE_PV
+    except ValueError:
+        pass
+    return (data.get("tilit") or {}), vanhentunut
+
+
+def poista_varaukset(ledger):
+    """Varausrivit pois ennen tuontia: muuten sama tapahtuma kirjautuneena
+    törmäisi omaan varaukseensa dedupessa eikä päätyisi pääkirjaan."""
+    poistettavat = {id(r) for r in ledger if r.get("tila") == VARAUS}
+    if poistettavat:
+        ledger[:] = [r for r in ledger if id(r) not in poistettavat]
+    return len(poistettavat)
+
+
+def tasmaa_varaukset(ledger, saannot, cfg):
+    """Lisää tuoreet varausrivit pääkirjaan.
+
+    Varaus on määritelmällisesti väliaikainen: summa, päivä ja saajan nimi
+    voivat vielä muuttua, ja koko veloitus voi raueta. Siksi niitä ei
+    yritetä tunnistaa yksitellen — jokainen haku kertoo, mitkä varaukset ovat
+    juuri nyt voimassa, ja loput poistetaan. Kirjautuessaan tapahtuma tulee
+    normaalina rivinä inboxin kautta.
+    """
+    tilit, vanhentunut = lue_varaukset()
+    if vanhentunut:
+        if tilit:
+            print(f"ℹ varaustieto on yli {VARAUS_VANHENEE_PV} vrk vanhaa — "
+                  "varaukset jätetään pois. Tuoreet saat komennolla 'hae'.")
+        return 0
+    lisatyt = 0
+    for tili, rivit in tilit.items():
+        for jarjestys, r in enumerate(rivit, 1):
+            try:
+                summa = round(float(r["summa"]), 2)
+            except (TypeError, ValueError):
+                continue
+            pvm = siisti(str(r.get("pvm", "")))
+            av = avain(tili, pvm, summa, r.get("saaja", ""))
+            tulos = luokittele({"saaja": r.get("saaja", ""), "selite": r.get("selite", ""),
+                                "summa": summa}, saannot, cfg.get("omat_ibanit", []))
+            kategoria, peruste = tulos
+            kategoria, _, tarkenne = kategoria.partition(":")
+            ledger.append({
+                "id": tee_id(av + "#varaus", jarjestys),
+                "pvm": pvm, "tili": tili, "summa": f"{summa:.2f}",
+                "saaja": r.get("saaja", ""), "selite": r.get("selite", ""),
+                "kategoria": kategoria, "tarkenne": tarkenne.strip().lower(),
+                "peruste": peruste, "lahde": VARAUKSET.name, "tila": VARAUS})
+            lisatyt += 1
+    return lisatyt
 
 
 def cmd_aja(args):
     cfg = lue_config()
     saannot = lue_saannot()
     ledger = lue_ledger()
+    vanhat_varaukset = poista_varaukset(ledger)
     olemassa = Counter(avain(r["tili"], r["pvm"], float(r["summa"]), r["saaja"]) for r in ledger)
 
     INBOX.mkdir(exist_ok=True)
@@ -2078,6 +2180,10 @@ def cmd_aja(args):
     n_per = taydenna_perusteet(ledger, cfg)
     if n_per:
         print(f"Täydennetty luokitteluperuste {n_per} vanhalle riville.")
+    n_var = tasmaa_varaukset(ledger, saannot, cfg)
+    if n_var or vanhat_varaukset:
+        print(f"Odottavia veloituksia {n_var} (edellisestä ajosta poistettu "
+              f"{vanhat_varaukset}).")
     kirjoita_ledger(ledger)
     kirjoita_tarkistettavat(ledger)
     rakenna_raportit(ledger, cfg, kk=13)
@@ -2090,7 +2196,9 @@ def cmd_aja(args):
 
 def kirjoita_tarkistettavat(ledger):
     RAPORTIT.mkdir(exist_ok=True)
-    rivit = [r for r in ledger if r["kategoria"] == "TARKISTA"]
+    # Varaukset ovat väliaikaisia: niiden luokittelu menisi hukkaan seuraavassa
+    # haussa, joten niitä ei pyydetä käyttäjältä.
+    rivit = [r for r in ledger if r["kategoria"] == "TARKISTA" and r.get("tila") != VARAUS]
     with open(TARKISTETTAVAT, "w", encoding="utf-8", newline="") as f:
         w = csv.writer(f, delimiter=";")
         w.writerow(["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria", "saanto"])
@@ -3123,7 +3231,7 @@ def tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit, ledg
         teksti = r["saaja"] or r["selite"][:60]
         naytto.setdefault(kat, {}).setdefault(r["pvm"][:7], []).append(
             [r["pvm"], disp, teksti, r.get("tarkenne", "").lower(), r["tili"], r["id"],
-             r.get("peruste", ""), siisti(r["selite"])[:220]])
+             r.get("peruste", ""), siisti(r["selite"])[:220], r.get("tila", "")])
     for kat in naytto.values():
         for lista in kat.values():
             lista.sort(key=lambda x: x[0], reverse=True)
@@ -3394,6 +3502,14 @@ def tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit, ledg
 
     huomio = (f'<p class="huomio">⚠ {avoimia} tapahtumaa luokittelematta (kategoria TARKISTA) — '
               f'luvut tarkentuvat kun täytät tarkistettavat.csv ja ajat <code>opi</code>.</p>') if avoimia else ""
+    varausrivit = [r for r in ledger if r.get("tila") == VARAUS]
+    if varausrivit:
+        v_summa = sum(-float(r["summa"]) for r in varausrivit)
+        summa_txt = f"{v_summa:,.2f}".replace(",", " ").replace(".", ",")
+        huomio += (f'<p class="huomio varaushuomio">⏳ {len(varausrivit)} odottavaa '
+                   f'veloitusta ({summa_txt} €) on mukana luvuissa. Pankki ei ole '
+                   f'vielä kirjannut niitä: summa tai päivä voi muuttua, ja veloitus voi '
+                   f'myös raueta. Jokainen <code>hae</code> päivittää ne.</p>')
 
     skripti = """
 <script>
@@ -3818,8 +3934,12 @@ function riviHtml(t,katR){
   const selite=(t[7]&&t[7]!==t[2])?'<div class="selite2'+(katR==='TARKISTA'?' tarkselite':'')+
     '">'+esc(t[7])+'</div>':'';
   const etu=t[1]<0?(KAT.tulot.indexOf(katR)>=0?' miinus':' plus'):'';
-  return '<tr id="rivi-'+t[5]+'"><td class="pvm2" title="'+t[0]+'">'+
-    parseInt(t[0].slice(8),10)+'.'+parseInt(t[0].slice(5,7),10)+'.</td><td>'+perus(t[6])+esc(t[2])+
+  const var_=t[8]==='varaus'?'<span class="varausmerkki" title="Pankki ei ole viel\u00e4 '+
+    'kirjannut t\u00e4t\u00e4 \u2014 summa tai p\u00e4iv\u00e4 voi viel\u00e4 muuttua, '+
+    'ja veloitus voi my\u00f6s raueta">varaus</span> ':'';
+  return '<tr id="rivi-'+t[5]+'" class="'+(t[8]==='varaus'?'varausrivi':'')+
+    '"><td class="pvm2" title="'+t[0]+'">'+
+    parseInt(t[0].slice(8),10)+'.'+parseInt(t[0].slice(5,7),10)+'.</td><td>'+var_+perus(t[6])+esc(t[2])+
     ' <a href="#" class="saantolinkki" data-saaja="'+esc(t[2])+'">s\u00e4\u00e4nt\u00f6</a>'+selite+'</td>'+
     '<td>'+katvalikko(t[5],katR)+' <input class="tarkinp" list="tarklist" data-id="'+t[5]+
     '" value="'+esc(t[3])+'" placeholder="tarkenne"></td>'+
@@ -4686,6 +4806,11 @@ td.num.klik {{ text-decoration:none }}
 .palkki i {{ position:absolute; top:-2px; width:2px; height:14px; background:var(--muste) }}
 .palkki.tyhja {{ opacity:.35 }}
 .huomio {{ background:#f3e3c8; padding:.6rem .9rem; border-radius:6px }}
+.varaushuomio {{ background:#e6eef5 }}
+.varausmerkki {{ background:#dbe6f0; color:#2c4a63; font-size:.68rem;
+                 padding:.05rem .35rem; border-radius:4px; vertical-align:.08em;
+                 letter-spacing:.02em }}
+tr.varausrivi td {{ background:#f7fafc }}
 .pikkuteksti {{ color:#6b665c; font-size:.85rem }}
 .tyokalut {{ display:flex; gap:.8rem; align-items:baseline; flex-wrap:wrap; margin:.6rem 0 }}
 .katsel {{ font-size:.78rem; max-width:11em }}

@@ -277,6 +277,42 @@ tai kaksoisklikkaa `Pankkihaku`-käynnistintä, joka tekee molemmat ja avaa
 raportin. Nouto on idempotentti: tuplahaku ei koskaan tuota tuplarivejä,
 joten hae mieluummin liikaa kuin liian vähän.
 
+### Odottavat veloitukset (varaukset)
+
+Kun maksat kortilla, pankki tekee ensin **varauksen** ja kirjaa tapahtuman
+vasta myöhemmin, kun kauppias hakee rahat. Varaus ei ole vielä totuus: summa
+voi tarkentua (juomaraha, polttoaine), päivä muuttuu kirjaushetkeksi, ja koko
+veloitus voi raueta.
+
+Rahaputki näyttää varaukset heti, mutta merkitsee ne sellaisiksi:
+
+- `hae` poimii ne omaan tiedostoonsa `data/varaukset.json`
+- `aja` vie ne pääkirjaan merkinnällä `varaus` (sarake `tila`), ja ne
+  **lasketaan mukaan lukuihin** — niin päivän kulutus näkyy oikein heti
+- raportissa rivillä on `varaus`-merkintä ja ylälaidassa lukee, montako
+  odottavaa veloitusta luvuissa on mukana
+- varauksia **ei kysytä luokiteltavaksi** (`tarkistettavat.csv`), koska työ
+  menisi hukkaan
+
+**Täsmäytys tapahtuu itsestään.** Jokainen `hae` kertoo, mitkä varaukset ovat
+juuri sillä hetkellä voimassa, ja `aja` korvaa pääkirjan varausrivit niillä.
+Siksi:
+
+- varaus, joka **kirjautui** → varausrivi katoaa ja tilalle tulee pankin
+  kirjaama rivi oikealla summalla ja päivällä
+- varaus, joka **raukesi** → rivi katoaa jäljettömiin
+
+Tämä ei nojaa siihen, että pankki antaisi tapahtumalle pysyvän tunnisteen —
+varaukset korvataan aina kokonaan, joten haamurivejä ei voi jäädä. Jos `hae`
+ei ole käynyt kolmeen vuorokauteen, varaukset jätetään pois kokonaan
+(vanhentunutta varaustietoa ei pidetä yllä), ja ne palaavat seuraavalla
+hakukerralla.
+
+Käytännössä varauksia on vähän: pankit kirjaavat korttiostot yleensä
+vuorokaudessa. Jos haluat pitää pääkirjan puhtaasti kirjatuissa tapahtumissa,
+poista `data/varaukset.json` — silloin seuraava `aja` poistaa varausrivit
+eikä lisää uusia.
+
 ### Kun jokin menee pieleen
 
 | Oire | Syy ja korjaus |
@@ -353,7 +389,7 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 | Tiedosto | Mikä |
 |---|---|
 | `inbox/` | tänne pankkien CSV:t; käsitellyt siirtyvät `inbox/arkisto/` |
-| `data/tapahtumat.csv` | pääkirja — koko totuus, pelkkää tekstiä, versioi/varmuuskopioi vapaasti |
+| `data/tapahtumat.csv` | pääkirja — koko totuus, pelkkää tekstiä, versioi/varmuuskopioi vapaasti (sarake `tila`: tyhjä = pankin kirjaama, `varaus` = odottava) |
 | `asetukset/saannot.csv` | kauppias → kategoria -säännöt (syntyy ensikäynnistyksessä mallista, karttuu käytössä) |
 | `koodi/` | **ohjelma** — päivitys korvaa tämän kansion kokonaan, muu jää koskematta |
 | `koodi/laskusta_csv.py` | korttilaskujen PDF → CSV -muunnin (`--nayta` näyttää rivien tulkinnan) |
@@ -366,6 +402,7 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 | `raportit/raportti.html` | kuukausigraafi + budjettivertailu + matriisi |
 | `raportit/yhteenveto_kk.csv` | sama matriisi Sheets-liitosta varten |
 | `raportit/yhteistalous_erittely.html` | tulostettava kotitalouserittely (selaimesta PDF) |
+| `data/varaukset.json` | odottavat korttivaraukset — `hae` kirjoittaa, `aja` täsmäyttää; poistettavissa milloin vain |
 | `data/yhteistalous.json` | yhteistalouden tila: tasauspäivä (mihin asti yhteiskulut on huomioitu), kk-vakiot, läsnäolot, kirjaukset — raportin osio ylläpitää tätä puolestasi |
 | `asetukset/pankkihaku.env` | pankkihaun tunnukset — **ei jaeta, ei versioida** |
 | `asetukset/*.pem` | pankkihaun yksityisavain (pilvisynkatussa kansiossa sen sijaan `~/.rahaputki/`) — **ei jaeta, ei versioida** |
