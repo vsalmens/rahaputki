@@ -1927,7 +1927,14 @@ def cmd_hae(args):
         if getattr(args, "raaka", False):
             raakakansio = DATA / "raaka"
             raakakansio.mkdir(parents=True, exist_ok=True)
-            rpolku = raakakansio / f"raaka_{palvelu}_{tili.replace(' ', '_')}_{date.today().isoformat()}.json"
+            # Tilin tunnus mukaan nimeen: saman nimiset tilit (esim. Revolutin
+            # taskut) eivät saa kirjoittaa toistensa raakadumppia yli.
+            # Alkuosa on luettava, tiiviste erottaa samalta näyttävät uid:t
+            # toisistaan (uid-tasku-eur / uid-tasku-sek).
+            tunnus = (re.sub(r"[^A-Za-z0-9]", "", str(aid))[:8]
+                      + hashlib.sha1(str(aid).encode()).hexdigest()[:4])
+            rpolku = (raakakansio / f"raaka_{palvelu}_{tili.replace(' ', '_')}_"
+                      f"{tunnus}_{date.today().isoformat()}.json")
             with open(rpolku, "w", encoding="utf-8") as rf:
                 json.dump(data, rf, ensure_ascii=False, indent=2)
             n = len((data or {}).get("transactions", []) or [])
