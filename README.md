@@ -15,10 +15,14 @@ Mikään ei mene rikki tauosta.
 ## Aloitus
 
 1. **Lataa** työkalu: `Code` → `Download ZIP`
-2. **Pura** ZIP ja **siirrä kansio pysyvään paikkaan** — esimerkiksi
-   Tiedostot-kansioon (`Documents`). Voit myös nimetä sen uudelleen vaikka
-   `Rahaputki`. **Älä jätä sitä Lataukset-kansioon**: kirjanpitosi jää
-   asumaan tähän kansioon, ja Lataukset on paikka, jonka ihmiset tyhjentävät.
+2. **Pura** ZIP ja siirrä kansio johonkin, missä se saa jäädä pysyvästi —
+   esimerkiksi Tiedostot-kansioon (`Documents`). Voit myös nimetä sen
+   uudelleen vaikka `Rahaputki`. Kirjanpitosi jää asumaan tähän kansioon,
+   ja Lataukset on paikka, jonka ihmiset tyhjentävät.
+
+   Kansion voi siirtää tai nimetä uudelleen myöhemminkin, milloin tahansa:
+   siirrä vain koko kansio kerralla, niin kaikki pysyy tallessa. Mitään
+   polkuja ei ole tallennettu minnekään.
 3. **Kaksoisklikkaa** käynnistintä:
    - macOS: `Aloita.command`
    - Windows: `Aloita.bat`
@@ -98,16 +102,22 @@ ei tuota ristiriitaisia kopioita.
 ## Päivittäminen
 
 Kun työkalusta ilmestyy uusi versio, **älä siirrä kirjanpitoasi uuteen
-kansioon** — tee päinvastoin. Lataa uusi ZIP, pura se, ja kopioi sieltä
-**vain nämä tiedostot** vanhan kansiosi päälle:
+kansioon** — tee päinvastoin:
 
-```
-kirjanpito.py   laskusta_csv.py   Aloita.command   Aloita.bat   OHJE.md   README.md
-```
+1. Lataa ja pura uusi ZIP
+2. Avaa purettu kansio, valitse **kaikki tiedostot** (⌘A / Ctrl+A) ja vedä ne
+   vanhan kansiosi päälle
+3. Vastaa **Korvaa** (Replace) — tämä on turvallista
+4. Poista purkamasi uusi kansio
 
-Näin datasi (`data/`, `inbox/`, `config.json`, `saannot.csv`, `budjetti.csv`)
-pysyy koskemattomana paikallaan. Voit sen jälkeen poistaa purkamasi uuden
-kansion. Kirjanpitosi ei ole koskaan noissa ohjelmatiedostoissa.
+Ladattu paketti sisältää vain ohjelmatiedostot: `kirjanpito.py`,
+`laskusta_csv.py`, käynnistimet, ohjeet ja `.esimerkki`-mallipohjat. Siinä ei
+ole `data/`-kansiota, `config.json`:ia eikä `saannot.csv`:tä, joten mikään
+omasi ei voi ylikirjoittua — ei edes vahingossa.
+
+> **Vedä tiedostot, älä kansiota.** Jos vedät koko kansion toisen kansion
+> päälle, macOS korvaa kohdekansion kokonaan sen sijaan että yhdistäisi
+> sisällöt — ja veisi datasi mennessään. Tiedostojen vetäminen on turvallista.
 
 ## Tarkemmat ohjeet
 
