@@ -767,18 +767,25 @@ def eb_riveiksi(data, kerro=None, varaukset=None):
         viite = tx.get("entry_reference") or tx.get("reference_number") or ""
         tilinro = ((tx.get("creditor_account") or {}).get("iban")
                    or (tx.get("debtor_account") or {}).get("iban") or "")
-        selite = siisti(" ".join(str(x) for x in [
-            *rem, btc, tilinro, tx.get("note"),
-            valuutta if valuutta.upper() not in ("", "EUR") else "",
-            viite and f"viite {viite}"] if x))
+        osat = [siisti(str(x)) for x in rem if siisti(str(x))]
         if not saaja:
             # Varasaaja viestiosasta. Revolut kertoo vastapuolen muodossa
             # "To <saaja>" / "From <maksaja>" omana viestirivinään — se on
             # oleellisin tieto, kun creditor/debtor puuttuu kokonaan.
-            osat = [siisti(str(x)) for x in rem if siisti(str(x))]
             vastapuoli = next((o.split(" ", 1)[1] for o in osat
                                if o[:3].lower() == "to " or o[:5].lower() == "from "), "")
-            saaja = (vastapuoli or " ".join(osat))[:40] or selite[:40]
+            saaja = (vastapuoli or " ".join(osat))[:40]
+        # Viestiosa, joka vain toistaa saajan nimen, ei kerro selitteessä mitään
+        # uutta ("Billa 137" + "Billa 137 CARD_PAYMENT") — jätetään pois.
+        nimi = normalisoi(saaja)
+        jaljelle = [o for o in osat
+                    if nimi and normalisoi(o) not in (nimi, f"to {nimi}", f"from {nimi}")]
+        selite = siisti(" ".join(str(x) for x in [
+            *(jaljelle if nimi else osat), btc, tilinro, tx.get("note"),
+            valuutta if valuutta.upper() not in ("", "EUR") else "",
+            viite and f"viite {viite}"] if x))
+        if not saaja:
+            saaja = selite[:40]
         koodi = tx.get("bank_transaction_code")
         laji = siisti(str(koodi.get("code") or "")) if isinstance(koodi, dict) else ""
         rivi = {"pvm": pvm, "summa": summa, "saaja": saaja, "selite": selite,
@@ -4806,6 +4813,13 @@ td.num.klik {{ text-decoration:none }}
 .palkki i {{ position:absolute; top:-2px; width:2px; height:14px; background:var(--muste) }}
 .palkki.tyhja {{ opacity:.35 }}
 .huomio {{ background:#f3e3c8; padding:.6rem .9rem; border-radius:6px }}
+/* Sääntötaulu: toimintosarake yhdelle riville, pitkä regex katkeaa —
+   muuten rivi venyy kolmen tekstirivin korkuiseksi ja taulu vaakavieritykseen. */
+#saantotaulu td:nth-child(2) {{ word-break:break-word; max-width:24rem }}
+#saantotaulu td:last-child {{ white-space:nowrap }}
+#saantotaulu td:last-child a {{ text-decoration:none }}
+#saantotaulu td:last-child a.saantopoisto,
+#saantotaulu td:last-child a.saantomuokkaus {{ text-decoration:underline }}
 .varaushuomio {{ background:#e6eef5 }}
 .varausmerkki {{ background:#dbe6f0; color:#2c4a63; font-size:.68rem;
                  padding:.05rem .35rem; border-radius:4px; vertical-align:.08em;
