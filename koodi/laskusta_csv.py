@@ -27,7 +27,9 @@ from pathlib import Path
 
 MUUNNIN_VERSIO = "v5"
 
-JUURI = Path(__file__).resolve().parent
+# Sama sijaintisääntö kuin kirjanpito.py:ssä: koodi/ alla data on yläpuolella.
+KOODI = Path(__file__).resolve().parent
+JUURI = KOODI.parent if KOODI.name == "koodi" else KOODI
 INBOX = JUURI / "inbox"
 
 # Tapahtumarivi: pvm [pvm2] teksti summa[-]

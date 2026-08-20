@@ -29,7 +29,11 @@ from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-JUURI = Path(__file__).resolve().parent
+# Ohjelmatiedostot asuvat koodi/-alihakemistossa ja data sen yläpuolella, jotta
+# päivitys on yhden kansion korvaaminen. Vanha litteä asennus (kaikki samassa
+# kansiossa) toimii edelleen sellaisenaan.
+KOODI = Path(__file__).resolve().parent
+JUURI = KOODI.parent if KOODI.name == "koodi" else KOODI
 INBOX = JUURI / "inbox"
 ARKISTO = INBOX / "arkisto"
 DATA = JUURI / "data"
@@ -86,26 +90,29 @@ def varmista_aloitus():
     for nimi in ALOITUSKANSIOT:
         (JUURI / nimi).mkdir(parents=True, exist_ok=True)
     for kohde_nimi, malli_nimi in ALOITUSMALLIT:
-        kohde, malli = JUURI / kohde_nimi, JUURI / malli_nimi
+        kohde, malli = JUURI / kohde_nimi, KOODI / malli_nimi
         if not kohde.exists() and malli.exists():
             shutil.copyfile(malli, kohde)
             print(f"Luotu {kohde_nimi} tiedostosta {malli_nimi} — muokkaa omaksesi kun haluat.")
     if not CONFIG.exists():
-        print(f"config.json puuttuu kansiosta {JUURI}, eikä mallia "
-              "(config.esimerkki.json) löydy sen vierestä.\n"
-              "Lataa työkalu uudelleen kokonaisena kansiona — kaikki tiedostot "
-              "kuuluvat samaan kansioon.")
+        print(f"config.json puuttuu kansiosta {JUURI}, eikä mallipohjaa "
+              f"(config.esimerkki.json) löydy kansiosta {KOODI}.\n"
+              "Lataa työkalu uudelleen kokonaisena pakettina.")
         sys.exit(1)
     if ensikerta:
+        erillinen = KOODI != JUURI
+        koodirivi = ("  koodi/      <- ohjelma; päivitys korvaa vain tämän kansion\n"
+                     if erillinen else "")
+        ohje = "koodi/OHJE.md" if erillinen else "OHJE.md"
         print(f"""
 Tervetuloa. Kansio {JUURI.name} on nyt valmis:
 
   inbox/      <- vie pankkiesi CSV-tiedostot tänne
   data/       <- kirjanpitosi kertyy tänne (tapahtumat.csv on koko totuus)
   raportit/   <- raportti.html syntyy tänne
-
+{koodirivi}
 Seuraava askel: vie tiliotteet verkkopankista CSV-muodossa kansioon inbox/
-ja käynnistä uudelleen. Tarkemmat ohjeet: OHJE.md
+ja käynnistä uudelleen. Tarkemmat ohjeet: {ohje}
 """)
 
 

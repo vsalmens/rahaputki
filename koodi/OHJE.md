@@ -18,8 +18,14 @@ PDF-laskujen muunnin `pdfplumber`. Asenna aina saman tulkin kautta jolla ajat:
 **Käyttöjärjestelmät.** Putki toimii macOS:llä, Windowsissa ja Linuxissa —
 se on pelkkää Pythonin standardikirjastoa, eikä kutsu käyttöjärjestelmän
 komentoja. Tässä ohjeessa komennot on kirjoitettu muodossa `python3 …`;
-**Windowsissa käytä sen sijaan `py …`** (esim. `py kirjanpito.py aja`).
+**Windowsissa käytä sen sijaan `py …`** (esim. `py koodi/kirjanpito.py aja`).
 Polut kirjoitetaan kauttaviivalla myös Windowsissa.
+
+**Kansiorakenne.** Ohjelma asuu `koodi/`-alihakemistossa ja kaikki sinun
+tavarasi (`data/`, `inbox/`, `config.json`, `saannot.csv`, `.env`) sen
+yläpuolella. Siksi päivitys on yhden kansion korvaaminen, eikä sillä voi
+vahingossa hävittää dataa. Komennot ajetaan ylemmästä kansiosta muodossa
+`python3 koodi/kirjanpito.py …`.
 
 **Et tarvitse komentoriviä lainkaan**, jos et halua: kaksoisklikkaa
 `Aloita.command` (macOS) tai `Aloita.bat` (Windows) — se lukee inboxin ja avaa
@@ -39,7 +45,7 @@ on koko kartta.
    - **Luottokortit (OP & S-Pankki Visa)**: korttitapahtumia ei saa CSV:nä,
      joten historia tuodaan kuukausilaskujen PDF:istä muuntimella
      (jatkuvaan käyttöön kortitkin saa automaattihaulla, ks. oma lukunsa):
-     `python3 laskusta_csv.py laskut/*.pdf` → tapahtumat ilmestyvät
+     `python3 koodi/laskusta_csv.py laskut/*.pdf` → tapahtumat ilmestyvät
      `inbox/`-kansioon CSV:nä. Muunnin tunnistaa kortin (OP / S-Pankki)
      laskun tekstistä, hoitaa vuodenvaihteen, kirjaa hyvitykset oikein ja
      ohittaa laskun maksusuoritukset. **Aja ensin `--nayta`-tilassa yhtä
@@ -63,7 +69,7 @@ on koko kartta.
      kirjanpidon puolelle. Tuo sen CSV vain jos haluat silmäillä myös
      yrityksen rahavirtaa.
 
-2. Aja: `python3 kirjanpito.py aja`
+2. Aja: `python3 koodi/kirjanpito.py aja`
 
 3. Avaa `raportit/tarkistettavat.csv` (Sheets/Excel/editori kelpaa). Täytä
    `kategoria`-sarake tuntemattomille riveille. Jos sama kauppias toistuu,
@@ -72,19 +78,19 @@ on koko kartta.
    **Ensimmäinen kierros on työläin** (ehkä 30–60 min vuoden datalle); sen
    jälkeen säännöt kattavat tyypillisesti ~90 % riveistä.
 
-4. Aja: `python3 kirjanpito.py opi` — ja avaa `raportit/raportti.html`.
+4. Aja: `python3 koodi/kirjanpito.py opi` — ja avaa `raportit/raportti.html`.
 
-5. Kun täysiä kuukausia on kertynyt: `python3 kirjanpito.py budjetti-ehdotus`
+5. Kun täysiä kuukausia on kertynyt: `python3 koodi/kirjanpito.py budjetti-ehdotus`
    ehdottaa raamit toteuman mediaanista. Kopioi/muokkaa haluamasi rivit
    tiedostoon `budjetti.csv`, niin raportti alkaa näyttää toteuma vs. raami.
 
 ## Rituaali jatkossa (~15–30 min, milloin huvittaa)
 
 1. Vie tuoreet otteet `inbox/`-kansioon — tai jos pankkihaku on käytössä,
-   pelkkä `python3 kirjanpito.py hae` (päällekkäisyys ei haittaa — vie
+   pelkkä `python3 koodi/kirjanpito.py hae` (päällekkäisyys ei haittaa — vie
    mieluummin liikaa kuin liian vähän)
-2. `python3 kirjanpito.py aja`
-3. Täytä tarkistettavat → `python3 kirjanpito.py opi`
+2. `python3 koodi/kirjanpito.py aja`
+3. Täytä tarkistettavat → `python3 koodi/kirjanpito.py opi`
 4. Katso `raportti.html`. Halutessasi liitä `raportit/yhteenveto_kk.csv`
    taulukkolaskentaan uudelle välilehdelle (suomalainen puolipiste+pilkku-
    muoto, liimautuu suoraan).
@@ -92,7 +98,7 @@ on koko kartta.
 ## Automaattinen pankkihaku (`hae`)
 
 CSV-vientien sijaan tapahtumat voi noutaa suoraan pankeista PSD2-rajapinnan
-kautta (Enable Banking): `python3 kirjanpito.py hae` kirjoittaa tuoreet
+kautta (Enable Banking): `python3 koodi/kirjanpito.py hae` kirjoittaa tuoreet
 tapahtumat inboxiin pankkinatiiveina CSV:inä, ja `aja` hoitaa loput samalla
 putkella — dedupe tekee noudosta idempotentin, eli tuplahaku ei koskaan
 tuota tuplarivejä.
@@ -131,7 +137,7 @@ päivitys. Rituaali kevenee muotoon: `hae` → `aja` → avoimien kuittaus.
 
 Kaksi tapaa, sama näkymä:
 
-1. **`python3 kirjanpito.py selaa`** käynnistää paikallisen palvelimen ja avaa
+1. **`python3 koodi/kirjanpito.py selaa`** käynnistää paikallisen palvelimen ja avaa
    raportin selaimeen. Jokaisen tapahtuman rivillä on kategoriavalikko ja
    tarkenne-kenttä — muutos **tallentuu pääkirjaan heti**. Rivin
    "sääntö"-linkki esitäyttää sääntölomakkeen (malli → kategoria:tarkenne);
@@ -140,7 +146,7 @@ Kaksi tapaa, sama näkymä:
    Taulukot ja käyrät päivittyvät kun lataat sivun uudelleen. Ctrl-C sammuttaa.
 2. **Pelkkä raportti.html avattuna** (ilman palvelinta): samat muokkaukset
    kerätään muistiin ja alapalkin nappi lataa ne muutokset.csv-tiedostona.
-   `python3 kirjanpito.py opi` etsii muutokset*.csv:t automaattisesti myös
+   `python3 koodi/kirjanpito.py opi` etsii muutokset*.csv:t automaattisesti myös
    Downloads-kansiosta, vie ne pääkirjaan ja merkitsee käsitellyiksi.
 
 ### Säännöt raportissa
@@ -173,10 +179,11 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 | `inbox/` | tänne pankkien CSV:t; käsitellyt siirtyvät `inbox/arkisto/` |
 | `data/tapahtumat.csv` | pääkirja — koko totuus, pelkkää tekstiä, versioi/varmuuskopioi vapaasti |
 | `saannot.csv` | kauppias → kategoria -säännöt (syntyy ensikäynnistyksessä mallista, karttuu käytössä) |
-| `laskusta_csv.py` | korttilaskujen PDF → CSV -muunnin (`--nayta` näyttää rivien tulkinnan) |
-| `Aloita.command` / `Aloita.bat` | kaksoisklikattava käynnistin (macOS / Windows) — ajaa `aja`:n ja avaa raportin |
+| `koodi/` | **ohjelma** — päivitys korvaa tämän kansion kokonaan, muu jää koskematta |
+| `koodi/laskusta_csv.py` | korttilaskujen PDF → CSV -muunnin (`--nayta` näyttää rivien tulkinnan) |
+| `Aloita.command` / `Aloita.bat` | kaksoisklikattava käynnistin (macOS / Windows) — tynkä, joka käynnistää `koodi/`-kansion logiikan |
 | `config.json` | lähteiden sarakekartat, kategoriat, omat IBANit |
-| `config.esimerkki.json`, `saannot.esimerkki.csv` | riisutut aloituspohjat — kopioi ilman .esimerkki-päätettä ja muokkaa omiksesi |
+| `koodi/config.esimerkki.json`, `koodi/saannot.esimerkki.csv` | riisutut aloituspohjat, joista ensikäynnistys tekee omasi juureen |
 | `budjetti.csv` | kk-raamit (täytetään vasta kun toteumaa on) |
 | `raportit/raportti.html` | kuukausigraafi + budjettivertailu + matriisi |
 | `raportit/yhteenveto_kk.csv` | sama matriisi Sheets-liitosta varten |
@@ -200,7 +207,7 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   `maarit;Päivittäistavarat;max=50` ja perään `maarit;TARKISTA` → pienet
   ruokarahat luokittuvat itsestään, isommat jäävät aina käsin katsottaviksi.
 - **Loppujen niputus**: kun tarkistettavat on käyty läpi, jäljelle jääneet voi
-  niputtaa oletuskategoriaan: `python3 kirjanpito.py opi --oletus Henkilömaksut`.
+  niputtaa oletuskategoriaan: `python3 koodi/kirjanpito.py opi --oletus Henkilömaksut`.
   Aja tämä vasta viimeisenä — se vie KAIKKI jäljellä olevat, myös ne jotka
   säännöt jättivät tahallaan listalle (esim. yli 50 € henkilömaksut).
 - **Omat IBANit** `config.json`:iin → siirrot omille tileille tunnistetaan
@@ -210,7 +217,7 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   halua ottaa mukaan koko historiaa. Tuonti kertoo aina montako riviä rajaus
   pudotti. Tyhjä arvo (oletus) tarkoittaa, ettei mitään rajata pois.
 - **Uusi pankki / muuttunut CSV-muoto**: aja
-  `python3 kirjanpito.py kurkista tiedosto.csv` — se näyttää enkoodauksen,
+  `python3 koodi/kirjanpito.py kurkista tiedosto.csv` — se näyttää enkoodauksen,
   erottimen ja otsikot. Lisää/korjaa lähde `config.json`:iin niillä
   sarakenimillä. Sarakenimet voi antaa listana vaihtoehtoja, ensimmäinen
   löytyvä voittaa. *(Pankit muuttavat vientimuotojaan aika ajoin — tämä on

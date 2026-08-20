@@ -86,11 +86,18 @@ säännöt kattavat tyypillisesti noin 90 % riveistä.
 
 ## Mitä kansiossa on
 
-Kansiossa on kahdenlaista tavaraa, ja jako ratkaisee kaiken päivittämisessä:
-**ohjelma tulee paketista ja on korvattavissa, kaikki muu on sinun eikä ole
-missään muualla.**
+Kansio jakautuu kahtia, ja jako on koko päivitysmallin perusta:
 
-| Sinun — älä koskaan korvaa | Mikä |
+```
+Rahaputki/
+  Aloita.command  Aloita.bat   käynnistimet (kaksoisklikkaa)
+  koodi/                       OHJELMA — päivitys korvaa tämän
+  config.json  saannot.csv     SINUN — asetuksesi ja sääntösi
+  budjetti.csv  .env
+  data/  inbox/  raportit/     SINUN — kirjanpitosi ja aineistosi
+```
+
+| Sinun — ei ole missään muualla | Mikä |
 |---|---|
 | `data/tapahtumat.csv` | kirjanpitosi — koko totuus, pelkkää tekstiä |
 | `data/` muuten | varmuuskopiot, yhteistalouden tila |
@@ -103,10 +110,8 @@ missään muualla.**
 
 | Ohjelma — tulee paketista | Mikä |
 |---|---|
-| `kirjanpito.py`, `laskusta_csv.py` | itse työkalu |
-| `Aloita.command`, `Aloita.bat` | käynnistimet |
-| `OHJE.md`, `README.md` | ohjeet |
-| `config.esimerkki.json`, `saannot.esimerkki.csv` | mallipohjat, joista ensikäynnistys tekee omasi |
+| `koodi/` | koko ohjelma: molemmat skriptit, ohje ja mallipohjat |
+| `Aloita.command`, `Aloita.bat` | käynnistimet — muutaman rivin tyngät, jotka vain käynnistävät `koodi/`-kansion. Näitä ei tarvitse päivittää. |
 
 Varmuuskopiointi on kansion kopioimista. Jos haluat kirjanpitosi useammalle
 koneelle, pidä kansio pilvitallennuksessa (esim. iCloud, OneDrive, Google
@@ -115,46 +120,22 @@ ei tuota ristiriitaisia kopioita.
 
 ## Päivittäminen
 
-Kun työkalusta ilmestyy uusi versio, **älä siirrä kirjanpitoasi uuteen
-kansioon** — tee päinvastoin:
-
 1. Lataa ja pura uusi ZIP
-2. Avaa purettu kansio, valitse **kaikki tiedostot** (⌘A / Ctrl+A) ja vedä ne
-   vanhan kansiosi päälle
-3. Vastaa **Korvaa** (Replace) — tämä on turvallista
-4. Poista purkamasi uusi kansio
+2. Vedä sen **`koodi`-kansio** oman Rahaputki-kansiosi päälle
+3. Vastaa **Korvaa** (Replace)
+4. Poista purkamasi paketti
 
-Ladattu paketti sisältää vain ohjelmatiedostot: `kirjanpito.py`,
-`laskusta_csv.py`, käynnistimet, ohjeet ja `.esimerkki`-mallipohjat. Siinä ei
-ole `data/`-kansiota, `config.json`:ia eikä `saannot.csv`:tä, joten mikään
-omasi ei voi ylikirjoittua — ei edes vahingossa.
+Siinä kaikki. `koodi/`-kansiossa ei ole yhtään sinun tiedostoasi, joten sen
+korvaaminen kokonaan on turvallista — se on itse asiassa toivottavaa, koska
+näin vanhat tiedostot eivät jää roikkumaan. Kirjanpitosi, sääntösi ja
+asetuksesi ovat kansiossa ylempänä, eikä päivitys kosketa niitä.
 
-> **Vedä tiedostot, älä kansiota.** Jos vedät koko kansion toisen kansion
-> päälle, macOS korvaa kohdekansion kokonaan sen sijaan että yhdistäisi
-> sisällöt — ja veisi datasi mennessään. Tiedostojen vetäminen on turvallista.
-
-### Miksi näin päin
-
-Toinen suunta — purkaa uusi paketti tyhjäksi kansioksi ja siirtää oma data
-sinne — kuulostaa siistimmältä, mutta on selvästi vaarallisempi:
-
-- **`.env` on piilotiedosto.** Se ei näy Finderissa ilman erillistä
-  näppäinyhdistelmää (⌘⇧.), joten pankkihaun tunnukset jäisivät helposti
-  siirtämättä — ja huomaisit sen vasta kun haku lakkaa toimimasta.
-- **Uusi kansio näyttää toimivalta myös tyhjänä.** Jos käynnistät sen ennen
-  datan siirtoa, se luo mallipohjista uuden `config.json`:in ja tyhjän
-  kirjanpidon eikä valita mistään. Sinulla olisi kaksi kansiota, joista
-  kumpikin näyttää oikealta, ja vain toisessa on tapahtumasi.
-- **Väärin menemisen hinta on eri.** Jos tässä suunnassa unohdat kopioida
-  jonkin ohjelmatiedoston, jäät vanhaan versioon — se korjaantuu kopioimalla
-  uudelleen. Toisessa suunnassa unohdus tarkoittaa, että kirjanpitosi jää
-  toiseen kansioon.
-
-Nyrkkisääntö: **data pysyy paikallaan, ohjelma vaihtuu sen ympärillä.**
+Käynnistimiä `Aloita.command` ja `Aloita.bat` ei tarvitse päivittää: ne ovat
+muutaman rivin tynkiä, jotka vain käynnistävät `koodi/`-kansion sisällön.
 
 ## Tarkemmat ohjeet
 
-[**OHJE.md**](OHJE.md) kertoo kaiken muun: pankkikohtaiset vientiohjeet,
+[**koodi/OHJE.md**](koodi/OHJE.md) kertoo kaiken muun: pankkikohtaiset vientiohjeet,
 korttilaskujen PDF-muunnin, automaattinen pankkihaku PSD2-rajapinnan kautta,
 budjetti, yhteistalouden kulujenjako, sääntöjen hienosäätö ja tunnetut
 sudenkuopat.
@@ -164,9 +145,9 @@ sudenkuopat.
 Käynnistin riittää useimpiin tarpeisiin, mutta kaikki toimii myös suoraan:
 
 ```
-python3 kirjanpito.py aja        # lue inbox/, luokittele, raportoi
-python3 kirjanpito.py selaa      # avaa raportti muokattavana selaimeen
-python3 kirjanpito.py opi        # lue täytetty tarkistettavat.csv takaisin
+python3 koodi/kirjanpito.py aja        # lue inbox/, luokittele, raportoi
+python3 koodi/kirjanpito.py selaa      # avaa raportti muokattavana selaimeen
+python3 koodi/kirjanpito.py opi        # lue täytetty tarkistettavat.csv takaisin
 ```
 
 Windowsissa komento on `py` eikä `python3`.
