@@ -150,8 +150,11 @@ Velho kysyy mistä lähdetään liikkeelle:
   3) Luon sovelluksen itse portaalin lomakkeella
 ```
 
-Jos koneelta löytyy .pem-tiedosto, kohta 2 on oletus ja tiedoston nimi
-näkyy valinnassa. Tämä on se reitti, jota tarvitset esimerkiksi silloin, kun
+Jos avaintiedosto löytyy, kohta 2 on oletus ja tiedoston nimi näkyy
+valinnassa. Velho etsii sitä vain kahdesta paikasta — tämän asennuksen
+`asetukset/` ensin, sitten `~/.rahaputki/` — eikä kahlaa Lataukset-kansiota
+tai työpöytää läpi. Muualla olevan avaimen saat käyttöön raahaamalla
+tiedoston terminaali-ikkunaan. Tämä on se reitti, jota tarvitset esimerkiksi silloin, kun
 otat Rahaputken käyttöön toisella koneella tai uudessa kansiossa: samaa
 sovellusta voi käyttää monesta paikasta, eikä avainta silloin siirretä
 paikaltaan — se voi olla toisenkin asennuksen käytössä.
@@ -224,11 +227,11 @@ Lataukset- ja Työpöytä-kansiosta ja lukee sovelluksesi tunnuksen suoraan
 tiedostonimestä (Enable Banking nimeää avaimen sillä). Tunnukset kirjoitetaan
 tiedostoon `asetukset/pankkihaku.env`.
 
-**Minne avain menee.** Jos avain on jo koneella järkevässä paikassa (esim.
-`~/.rahaputki/` tai toisen asennuksen `asetukset/`), se jätetään sinne ja
-asetuksiin kirjoitetaan vain polku — näin sama avain palvelee useaa
-asennusta. Latauskansiosta löytynyt avain sen sijaan siirretään pois sieltä:
-oletuksena kansioon `asetukset/`, muiden asetustesi viereen: silloin kaikki on yhdessä paikassa ja seuraa mukana, jos siirrät tai
+**Minne avain menee.** Jos avain on jo järkevässä paikassa (`asetukset/` tai
+`~/.rahaputki/`), se jätetään sinne ja asetuksiin kirjoitetaan vain polku —
+näin sama avain palvelee useaa asennusta. Latauskansiosta raahattu avain sen
+sijaan siirretään pois sieltä: oletuksena kansioon `asetukset/`, muiden
+asetustesi viereen: silloin kaikki on yhdessä paikassa ja seuraa mukana, jos siirrät tai
 nimeät kansion uudelleen (polku tallennetaan suhteellisena, joten se ei mene
 rikki). Avain on kuitenkin lukupääsy tileihisi, joten **jos Rahaputken kansio
 on pilvitallennuksessa** (Google Drive, iCloud, OneDrive, Dropbox), velho

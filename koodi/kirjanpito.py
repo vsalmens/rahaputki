@@ -1021,26 +1021,27 @@ def _varmista_kirjastot():
     return False
 
 
+AVAINKANSIOT_VIHJE = "asetukset/ tai ~/.rahaputki/"
+
+
 def _etsi_avaimet():
-    """Etsi mahdolliset yksityisavaimet. Enable Banking nimeää selaimessa
-    luodun avaimen sovelluksen id:llä (<uuid>.pem), joten sellainen kertoo
-    myös EB_APP_ID:n — siksi ne ovat listan kärjessä. Muutkin .pem-tiedostot
-    kelpaavat (esim. aiemmin itse nimetty avain), tunnus kysytään erikseen."""
-    koti = Path.home()
-    kansiot = [ASETUKSET, koti / "Downloads", koti / "Lataukset", koti / "Desktop",
-               koti / "Työpöytä", koti / "Documents", JUURI, koti,
-               koti / ".rahaputki", koti / ".avaimet"]
-    loydot = {}
-    for kansio in kansiot:
+    """Etsi yksityisavain vain paikoista, joihin se kuuluu: tämän asennuksen
+    asetukset/ ensin, sitten ~/.rahaputki/. Latauskansiota ja työpöytää ei
+    kahlata läpi — siellä voi olla muiden palveluiden avaimia, eikä käyttäjän
+    salaisuuksia ole syytä skannata. Muualta tulevan avaimen saa raahaamalla.
+
+    Enable Banking nimeää selaimessa luodun avaimen sovelluksen id:llä
+    (<uuid>.pem), joten sellainen kertoo myös EB_APP_ID:n — siksi ne ovat
+    kansionsa sisällä kärjessä."""
+    loydot = []
+    for kansio in (ASETUKSET, Path.home() / ".rahaputki"):
         try:
-            for polku in kansio.glob("*.pem"):
-                if polku.is_file():
-                    loydot[polku.resolve()] = polku.stat().st_mtime
+            osumat = [p.resolve() for p in kansio.glob("*.pem") if p.is_file()]
         except OSError:
             continue
-    return [p for p, _ in sorted(loydot.items(),
-                                 key=lambda kv: (not UUID_KUVIO.match(kv[0].stem),
-                                                 -kv[1]))]
+        osumat.sort(key=lambda p: (not UUID_KUVIO.match(p.stem), p.name))
+        loydot += [p for p in osumat if p not in loydot]
+    return loydot
 
 
 def _kirjoita_env(arvot):
@@ -1308,6 +1309,8 @@ Sovelluksen luonti lomakkeella (portaalin sivu API applications):
   7. Klikkaa "Register". Selain lataa tiedoston, jonka nimi on pitkä
      tunnus ja pääte .pem — se on sovelluksesi salainen avain.
      Älä avaa sitä äläkä lähetä sitä kenellekään.
+  8. Siirrä ladattu tiedosto kansioon  {ASETUKSET}
+     (tai raahaa se hetken päästä tähän ikkunaan).
 """)
     _odota_enter("Paina Enter, kun .pem-tiedosto on latautunut...")
     return _ota_avain_kayttoon(kerro_lomake=True)
@@ -1316,8 +1319,9 @@ Sovelluksen luonti lomakkeella (portaalin sivu API applications):
 def _ota_avain_kayttoon(kerro_lomake=True):
     """Etsi ja ota käyttöön olemassa oleva .pem-avain sovelluksineen."""
     if not kerro_lomake:
-        print("\nEtsitään avaintiedostoa koneelta. Se on se .pem-tiedosto, jonka "
-              "\nsait sovellusta luodessasi (tai jonka Rahaputki tallensi aiemmin).")
+        print(f"\nEtsitään avaintiedostoa kansiosta {AVAINKANSIOT_VIHJE}. Se on se "
+              "\n.pem-tiedosto, jonka sait sovellusta luodessasi. Jos se on muualla, "
+              "\nvoit raahata sen tähän ikkunaan.")
     pem = None
     for _ in range(3):
         loydot = _etsi_avaimet()
@@ -1332,7 +1336,7 @@ def _ota_avain_kayttoon(kerro_lomake=True):
             else:
                 pem = Path(_siivoa_polku(valinta)).expanduser()
         else:
-            print("\nEn löytänyt .pem-tiedostoa Lataukset- tai Työpöytä-kansiosta.")
+            print(f"\nEn löytänyt .pem-tiedostoa kansiosta {AVAINKANSIOT_VIHJE}.")
             annettu = _siivoa_polku(_kysy("Raahaa tiedosto tähän ikkunaan ja "
                                           "paina Enter (tai Enter = etsi uudelleen): "))
             if not annettu:
