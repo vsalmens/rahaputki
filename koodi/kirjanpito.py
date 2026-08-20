@@ -1599,6 +1599,23 @@ def _eb_pankit(tok, maa="FI"):
     return [nimet[n] for n in sorted(nimet) if n]
 
 
+def _psu_tyypit(aspsp):
+    """Pankki kertoo, kelpaako sille henkilö- vai yritystunnistautuminen.
+    Väärä tyyppi kaatuu virheeseen 422 (WRONG_ASPSP_PROVIDED)."""
+    tyypit = [siisti(str(t)).lower() for t in (aspsp.get("psu_types") or []) if siisti(str(t))]
+    return tyypit or ["personal"]
+
+
+def _psu_valinta(aspsp):
+    """Valitse psu_type: yksikäsitteinen menee suoraan, muuten kysytään."""
+    tyypit = _psu_tyypit(aspsp)
+    if len(tyypit) == 1:
+        if tyypit[0] != "personal":
+            print(f"  ({aspsp.get('name', '')} tunnistaa vain yritystilit)")
+        return tyypit[0]
+    return "business" if _kylla("  Onko kyseessä yritystili?", oletus=False) else "personal"
+
+
 def _valitse_pankki(pankit, hakusana=""):
     if hakusana:
         osuvat = [a for a in pankit if normalisoi(hakusana) in normalisoi(a.get("name", ""))]
@@ -1610,7 +1627,9 @@ def _valitse_pankki(pankit, hakusana=""):
         pankit = osuvat
     print("\nPankit:")
     for i, a in enumerate(pankit, 1):
-        print(f"  {i:2}) {a.get('name', '')}")
+        tyypit = _psu_tyypit(a)
+        merkki = "  (yritystilit)" if tyypit == ["business"] else ""
+        print(f"  {i:2}) {a.get('name', '')}{merkki}")
     valinta = _kysy("Valitse numero (tai kirjoita osa pankin nimestä, "
                     "Enter = peruuta): ")
     if not valinta:
@@ -1749,10 +1768,17 @@ def eb_valtuuta(cfg, hakusana="", app=None):
             "access": {"valid_until": (datetime.now().astimezone()
                                        + timedelta(days=90)).isoformat()},
             "aspsp": {"name": a["name"], "country": a.get("country", maa)},
-            "psu_type": "personal",
+            "psu_type": _psu_valinta(a),
             "state": str(uuid.uuid4()),
             "redirect_url": redirect})
     except EBVirhe as e:
+        if e.koodi == 422 and "ASPSP" in str(e.runko).upper():
+            print(f"⚠ Enable Banking ei hyväksynyt pankkivalintaa (422): {e.runko}")
+            print(f"  Pankki: {a.get('name', '')} ({a.get('country', maa)}), "
+                  f"tunnistautumistyypit: {', '.join(_psu_tyypit(a))}")
+            print("  Yleisin syy on väärä tilityyppi (henkilö vs. yritys). "
+                  "Yritä uudelleen ja vastaa tilityyppikysymykseen toisin.")
+            return False
         if e.koodi == 400:
             print(f"⚠ Enable Banking hylkäsi valtuutuspyynnön (400): {e.runko}")
             print(f"  Käytetty paluuosoite: {redirect}")
@@ -1808,9 +1834,21 @@ komennosta — tehty ei katoa.""")
     app = _velho_tarkista()
     if app is None:
         return
-    print("\nVAIHE 3/4 — pankkien valtuutus")
-    print("Valtuutus tehdään pankin omilla tunnuksilla, ja se on voimassa")
-    print("pankista riippuen 90–180 päivää. Toista tämä jokaiselle pankille.")
+    print("""
+VAIHE 3/4 — pankkien valtuutus
+
+Kyllä, pankki valitaan ja tunnistaudutaan toistamiseen. Vaiheet tekevät eri
+asian, ja Enable Banking vaatii molemmat:
+
+  vaihe 2 (portaalissa)  kertoo MITÄ TILEJÄ sovellus ylipäätään saa koskea
+  vaihe 3 (tässä)        antaa sille LUVAN HAKEA niiltä tapahtumia
+
+Liittäminen ei siis valtuuta hakua eikä valtuutus liitä tiliä. Tämä koskee
+ilmaista, omiin tileihin rajattua tuotantosovellusta; rajoituksen poisto
+vaatisi sopimuksen ja yritystaustojen tarkistuksen Enable Bankingin kanssa.
+
+Valtuutus on voimassa pankista riippuen 90–180 päivää, ja vain se uusitaan
+jatkossa — vaihetta 2 ei tarvitse toistaa.""")
     yhdistetty = False
     while True:
         try:

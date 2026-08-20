@@ -242,6 +242,12 @@ lähes aina tässä.
 Velho listaa Suomen pankit numeroituna. Valitse numero ja tunnistaudu
 avautuvassa selaimessa pankkitunnuksillasi.
 
+Osa pankeista tunnistaa vain **yritystilejä** (esim. Holvi, Finom, Finductive
+— Suomen 39 pankista 11) ja osa vain henkilötilejä. Velho lukee tämän
+pankilta ja merkitsee yritystilipankit listaan; jos pankki tukee molempia, se
+kysyy kummasta on kyse. Väärä valinta kaatuu virheeseen `422 Wrong ASPSP
+name provided`, joka ei siis kerro nimestä vaan tilityypistä.
+
 Tunnistautumisen jälkeen selain palaa Enable Bankingin paluusivulle, joka
 näyttää **tyhjältä lomakkeelta** — se on kunnossa, äläkä klikkaa sen
 nappia. Tarvittava koodi on selaimen **osoiterivillä** (`…?code=…`).
@@ -249,10 +255,17 @@ Kopioi osoiterivi kokonaan (macOS: Cmd-L, Cmd-C — Windows: Ctrl-L, Ctrl-C),
 palaa Rahaputkeen ja paina Enter: velho lukee sen leikepöydältä. Voit myös
 liittää osoitteen suoraan kysymykseen. Toista jokaiselle pankille.
 
-Tämä valtuutus on eri asia kuin vaiheen 2 liittäminen: liittäminen kertoo
-*mitä tilejä sovellus saa ylipäätään koskea*, valtuutus antaa sille
-*luvan hakea niiltä tapahtumia*. Valtuutus vanhenee pankista riippuen
-90–180 päivän välein, ja silloin ajat velhon uudelleen.
+**Miksi pankki valitaan ja tunnistaudutaan toiseen kertaan?** Koska vaiheet
+tekevät eri asian ja Enable Banking vaatii molemmat: vaiheen 2 liittäminen
+kertoo *mitä tilejä sovellus saa ylipäätään koskea*, tämä valtuutus antaa
+sille *luvan hakea niiltä tapahtumia*. Liittäminen ei valtuuta hakua eikä
+valtuutus liitä tiliä. Kaksivaiheisuus koskee ilmaista, omiin tileihin
+rajattua tuotantosovellusta; rajoituksen poisto (jolloin liittämistä ei
+tarvita) vaatii sopimuksen ja yritystaustojen tarkistuksen Enable Bankingin
+kanssa.
+
+Jatkossa vain valtuutus uusitaan: se vanhenee pankista riippuen 90–180 päivän
+välein, ja silloin ajat velhon uudelleen. Vaihetta 2 ei toisteta.
 
 **Vaihe 4 — tilien nimeäminen (~1 min)**
 
@@ -322,6 +335,7 @@ eikä lisää uusia.
 |---|---|
 | `istunto syntyi, mutta siinä ei ole yhtään tiliä` | Tiliä ei ole liitetty sovellukseen (vaihe 2). Käy portaalissa klikkaamassa *Link accounts* juuri sille tilille. |
 | `Enable Banking ei hyväksynyt tunnuksia (401)` | Avaintiedosto ja sovelluksen tunnus eivät ole samasta sovelluksesta. Aja `pankkihaku --uusi-sovellus` ja valitse oikea `.pem`. |
+| `422 Wrong ASPSP name provided` | Nimi on oikein, tilityyppi ei: pankki tunnistaa vain henkilö- tai vain yritystilejä. Aja uudelleen ja vastaa tilityyppikysymykseen toisin. |
 | `EB hylkäsi valtuutuspyynnön (400)` | Paluuosoite ei ole sovelluksen *Allowed redirect URLs* -listalla. Lisää se portaalissa täsmälleen samassa muodossa. |
 | Paluusivu näyttää tyhjältä lomakkeelta | Näin sen kuuluukin näyttää: se on Enable Bankingin testisivu. Koodi on selaimen osoiterivillä, ei sivulla. |
 | `tuo ei näytä valtuutuskoodilta` | Leikepöydällä oli jotain muuta. Kopioi selaimen osoiterivi kokonaan (Cmd-L / Ctrl-L, sitten Cmd-C / Ctrl-C). |
