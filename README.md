@@ -25,14 +25,36 @@ tehdä seuraavaksi. Vie sitten verkkopankeistasi tiliotteet CSV-muodossa
 kansioon `inbox/` ja kaksoisklikkaa käynnistintä uudelleen — raportti aukeaa
 selaimeen, ja voit luokitella tapahtumat suoraan siinä.
 
-### Ensimmäisellä kerralla käyttöjärjestelmä varoittaa
+### Ensimmäisellä kerralla käyttöjärjestelmä estää käynnistimen
 
-Molemmat suojaavat internetistä ladatuilta tiedostoilta. Tämä on normaalia:
+Tämä on normaalia eikä tarkoita, että jokin olisi vialla: käyttöjärjestelmät
+estävät oletuksena kaikki internetistä ladatut ohjelmat, joita ei ole
+allekirjoitettu maksullisella kehittäjätunnuksella. Sallit sen kerran, ja
+jatkossa käynnistin toimii kaksoisklikkauksella.
 
-- **macOS**: jos kaksoisklikkaus ei avaa mitään, klikkaa `Aloita.command`
-  hiiren oikealla → **Avaa** → **Avaa**. Tämä tarvitaan vain kerran.
-- **Windows**: jos näet "Windows protected your PC", klikkaa **Lisätietoja** →
-  **Suorita silti**.
+**macOS** näyttää ilmoituksen *"Apple could not verify 'Aloita.command' is free
+of malware…"*. Vanha kikka (oikea klikkaus → Avaa) **ei enää toimi** macOS
+Sequoiassa (15) ja sitä uudemmissa. Tee näin:
+
+1. Klikkaa ilmoituksesta **Done** / **Valmis** — älä valitse "Move to Bin"
+2. Avaa **Järjestelmäasetukset** → **Tietosuoja ja turvallisuus**
+   (System Settings → Privacy & Security)
+3. Vieritä alas kohtaan **Turvallisuus**. Siellä lukee, että
+   `Aloita.command` estettiin — klikkaa vieressä olevaa **Avaa silti**
+   (Open Anyway) ja vahvista salasanalla tai Touch ID:llä
+4. Kaksoisklikkaa `Aloita.command` uudelleen ja valitse **Avaa**
+
+Jos "Avaa silti" ei jostain syystä näy, sama onnistuu Terminalissa yhdellä
+rivillä. Avaa **Terminal** (Spotlight-haku: `terminal`), kirjoita `xattr -dr
+com.apple.quarantine ` — **välilyönti perään** — vedä sitten purettu
+rahaputki-kansio ikkunaan ja paina Enter:
+
+```
+xattr -dr com.apple.quarantine /polku/rahaputki-kansioon
+```
+
+**Windows** näyttää sinisen "Windows protected your PC" -ikkunan: klikkaa
+**Lisätietoja** (More info) → **Suorita silti** (Run anyway).
 
 ### Vaatimukset
 

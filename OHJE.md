@@ -1,6 +1,6 @@
 # Rahaputki — kevyt, pankkiriippumaton kulutusseuranta
 
-Suunnitteluperiaate on sama, joka piti Netto-välilehtesi hengissä 18 vuotta:
+Suunnitteluperiaate on se, joka pitää kirjanpidon hengissä vuosia:
 **ei vakiopäivää, ei pakkoa, aina voi palata.** Putki on idempotentti — saman
 tiliotteen voi tuoda vaikka kolmesti, päällekkäiset rivit ohitetaan
 automaattisesti. Jos pidät kolmen kuukauden tauon, viet vain kolmen kuukauden
@@ -24,13 +24,17 @@ Polut kirjoitetaan kauttaviivalla myös Windowsissa.
 **Et tarvitse komentoriviä lainkaan**, jos et halua: kaksoisklikkaa
 `Aloita.command` (macOS) tai `Aloita.bat` (Windows) — se lukee inboxin ja avaa
 raportin selaimeen. Ensimmäinen käynnistys luo kansiot ja mallitiedostot
-puolestasi. Lyhyt aloitusopas on `README.md`; tämä tiedosto on koko kartta.
+puolestasi. Jos latasit työkalun ZIP-pakettina, käyttöjärjestelmä estää
+käynnistimen ensimmäisellä kerralla; `README.md` kertoo miten se sallitaan
+kerralla kuntoon. Lyhyt aloitusopas on niin ikään `README.md`; tämä tiedosto
+on koko kartta.
 
 ## Pikastartti: vuosi taaksepäin
 
-1. Vie verkkopankeista CSV:t ajalta **1.7.2025 → tänään** kansioon `inbox/`
-   (huomaa: sama alkupäivä kuin Netto-taulukkosi rivillä 1.7.2025 — voit
-   ristiintarkistaa säästösumman nettovarallisuuden muutosta vasten):
+1. Vie verkkopankeista CSV:t **vuosi taaksepäin tästä päivästä** kansioon
+   `inbox/` (jos seuraat nettovarallisuuttasi muualla, valitse alkupäiväksi
+   sama päivä — silloin voit ristiintarkistaa säästösumman varallisuuden
+   muutosta vasten):
    - **OP-tili**: op.fi → tili → tapahtumat → lataa/vie CSV (aikaväli valittavissa)
    - **Luottokortit (OP & S-Pankki Visa)**: korttitapahtumia ei saa CSV:nä,
      joten historia tuodaan kuukausilaskujen PDF:istä muuntimella
@@ -80,8 +84,8 @@ puolestasi. Lyhyt aloitusopas on `README.md`; tämä tiedosto on koko kartta.
 2. `python3 kirjanpito.py aja`
 3. Täytä tarkistettavat → `python3 kirjanpito.py opi`
 4. Katso `raportti.html`. Halutessasi liitä `raportit/yhteenveto_kk.csv`
-   Kirjanpito-sheetin uudelle välilehdelle (suomalainen puolipiste+pilkku-
-   muoto, liimautuu suoraan). Kvartaaleittain: päivitä samalla Netto.
+   taulukkolaskentaan uudelle välilehdelle (suomalainen puolipiste+pilkku-
+   muoto, liimautuu suoraan).
 
 ## Automaattinen pankkihaku (`hae`)
 
@@ -216,7 +220,8 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   nostohetkellä — käteisen jälkikäteisseuranta ei toimi käytännössä
   kenelläkään. Valitse kategoria oman käytäntösi mukaan `saannot.csv`:ssä.
 - **Sijoitukset ja siirrot** eivät kuulu kulutuslukuihin (muuten "menot"
-  pomppaa aina kun siirrät rahaa Seligsoniin). Ne elävät Netto-välilehdellä.
+  pomppaa aina kun siirrät rahaa rahastoon). Ne kuuluvat varallisuuden
+  seurantaan, eivät kulutusseurantaan.
 - **TARKISTA-rivit** lasketaan menoihin ja raportti varoittaa niistä — luvut
   eivät siis koskaan hiljaa valehtele alakanttiin.
 
