@@ -46,6 +46,69 @@ LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria", "
 PVM_MUODOT = ["%d.%m.%Y", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y", "%d.%m.%y"]
 ENKOODAUKSET = ["utf-8-sig", "utf-8", "iso-8859-1"]
 
+MIN_PYTHON = (3, 9)
+
+# Kansiot ja mallitiedostot, jotka ensikäynnistys luo puolestasi.
+ALOITUSKANSIOT = ("inbox", "data", "raportit")
+ALOITUSMALLIT = (("config.json", "config.esimerkki.json"),
+                 ("saannot.csv", "saannot.esimerkki.csv"))
+
+
+# ------------------------------------------------------- ensikäynnistys
+
+def _varmista_python():
+    """Vanha Python antaisi myöhemmin hämärän virheen — kerrotaan se heti selvästi."""
+    if sys.version_info < MIN_PYTHON:
+        vaadittu = ".".join(str(o) for o in MIN_PYTHON)
+        nyt = ".".join(str(o) for o in sys.version_info[:3])
+        print(f"Rahaputki vaatii Pythonin version {vaadittu} tai uudemman "
+              f"(käytössä {nyt}).\n"
+              "Lataa uudempi osoitteesta https://www.python.org/downloads/ "
+              "ja käynnistä uudelleen.")
+        sys.exit(1)
+
+
+def _siisti_konsoli():
+    """Windowsin konsoli on oletuksena cp1252/cp850, jolloin ä, ✓ ja — kaatuisivat
+    UnicodeEncodeError-virheeseen heti kun tuloste ohjataan putkeen tai tiedostoon."""
+    for virta in (sys.stdout, sys.stderr):
+        try:
+            virta.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
+def varmista_aloitus():
+    """Luo puuttuvat kansiot ja mallitiedostot. Uusi käyttäjä ei saa törmätä
+    traceback-tulosteeseen ennen kuin on edes päässyt alkuun. Olemassa olevaa
+    ei kosketa koskaan, joten tämän voi ajaa turvallisesti joka kerta."""
+    ensikerta = not CONFIG.exists()
+    for nimi in ALOITUSKANSIOT:
+        (JUURI / nimi).mkdir(parents=True, exist_ok=True)
+    for kohde_nimi, malli_nimi in ALOITUSMALLIT:
+        kohde, malli = JUURI / kohde_nimi, JUURI / malli_nimi
+        if not kohde.exists() and malli.exists():
+            shutil.copyfile(malli, kohde)
+            print(f"Luotu {kohde_nimi} tiedostosta {malli_nimi} — muokkaa omaksesi kun haluat.")
+    if not CONFIG.exists():
+        print(f"config.json puuttuu kansiosta {JUURI}, eikä mallia "
+              "(config.esimerkki.json) löydy sen vierestä.\n"
+              "Lataa työkalu uudelleen kokonaisena kansiona — kaikki tiedostot "
+              "kuuluvat samaan kansioon.")
+        sys.exit(1)
+    if ensikerta:
+        print(f"""
+Tervetuloa. Kansio {JUURI.name} on nyt valmis:
+
+  inbox/      <- vie pankkiesi CSV-tiedostot tänne
+  data/       <- kirjanpitosi kertyy tänne (tapahtumat.csv on koko totuus)
+  raportit/   <- raportti.html syntyy tänne
+
+Seuraava askel: vie tiliotteet verkkopankista CSV-muodossa kansioon inbox/
+ja käynnistä uudelleen. Tarkemmat ohjeet: OHJE.md
+""")
+
+
 
 # ---------------------------------------------------------------- apurit
 
@@ -228,9 +291,16 @@ def lisaa_saanto(malli, kategoria, ehto=""):
     rivi_uusi = ";".join([malli, kategoria] + ([ehto] if ehto else []))
     if not SAANNOT.exists():
         SAANNOT.write_text("malli;kategoria\n" + rivi_uusi + "\n", encoding="utf-8")
-        return
+        return True
     teksti, _ = lue_teksti(SAANNOT)
     rivit = teksti.splitlines()
+    # Täsmälleen sama sääntö jo olemassa? Ei kahdennnusta.
+    m_uusi, k_uusi, e_uusi = normalisoi(malli), siisti(kategoria).lower(), siisti(ehto).lower()
+    for _, osat in _saanto_fyysiset(teksti):
+        if (normalisoi(osat[0]) == m_uusi
+                and siisti(osat[1] if len(osat) > 1 else "").lower() == k_uusi
+                and siisti(osat[2] if len(osat) > 2 else "").lower() == e_uusi):
+            return False
     saanto_rivit = []  # (rivinumero, malli)
     for i, rv in enumerate(rivit):
         if not rv.strip() or rv.startswith("#"):
@@ -244,6 +314,7 @@ def lisaa_saanto(malli, kategoria, ehto=""):
     else:
         rivit.insert(saanto_rivit[kohta][0], rivi_uusi)
     SAANNOT.write_text("\n".join(rivit) + "\n", encoding="utf-8")
+    return True
 
 
 def siirra_saanto(malli, kategoria="", ehto="", suunta=-1, kohde_sija=None):
@@ -904,6 +975,10 @@ def cmd_aja(args):
                        and p.suffix.lower() in (".csv", ".txt") and p.name != "LUE.txt")
     if not tiedostot:
         print(f"inbox/ on tyhjä — vie tiliotteet CSV:nä kansioon {INBOX}")
+        if not ledger:
+            print("Pääkirja on vielä tyhjä, joten raporttia ei ole mistä rakentaa.\n"
+                  "Vie tiliotteet inbox-kansioon ja aja uudelleen.")
+            return
     alkaen = siisti(cfg.get("alkaen", ""))
     uudet, tarkistettavia, varoitukset = [], 0, []
     aiemmat = Counter()  # tässä ajossa AIEMMISTA tiedostoista jo lisätyt
@@ -1027,8 +1102,8 @@ def cmd_opi(args):
                 paivitetty += 1
             malli = normalisoi(rivi.get("saanto", ""))
             if malli:
-                lisaa_saanto(malli, kat + (f":{tarkenne.lower()}" if tarkenne else ""))
-                uusia_saantoja += 1
+                if lisaa_saanto(malli, kat + (f":{tarkenne.lower()}" if tarkenne else "")):
+                    uusia_saantoja += 1
     # uudet säännöt kiinni myös muihin vielä avoimiin riveihin
     saannot = lue_saannot()
     for r in ledger:
@@ -1081,13 +1156,13 @@ def cmd_opi(args):
                     idx[rid]["peruste"] = "käsin"
                     n_m += 1
                 elif malli:
-                    lisaa_saanto(malli, kat + (f":{tarkenne.lower()}" if tarkenne else ""))
-                    n_s += 1
+                    if lisaa_saanto(malli, kat + (f":{tarkenne.lower()}" if tarkenne else "")):
+                        n_s += 1
             paivitetty += n_m
             uusia_saantoja += n_s
             uusi_nimi = polku_m.with_name(polku_m.stem + ".kasitelty.csv")
             try:
-                polku_m.rename(uusi_nimi)
+                os.replace(polku_m, uusi_nimi)
             except OSError:
                 pass
             print(f"✓ {polku_m} luettu: {n_m} riviä, {n_s} sääntöä (→ {uusi_nimi.name})")
@@ -1955,7 +2030,7 @@ def rakenna_raportit(ledger, cfg, kk=13):
 
     def rivi_koonti(nimi, sarja_kk, yht, tyyppi):
         arvot = [sarja_kk.get(m, 0.0) for m in taydet]
-        ka = sum(arvot) / n_kk
+        ka = sum(arvot) / n_kk if n_kk else 0.0
         med = statistics.median(arvot) if arvot else 0.0
         delta = _trendi3(arvot)
         hyva = None if delta is None else (delta > 0 if tyyppi == "tulo" else delta < 0)
@@ -4195,10 +4270,13 @@ def main():
     k = ala.add_parser("kurkista", help="näytä miten CSV tulkittaisiin")
     k.add_argument("tiedosto")
     args = p.parse_args()
+    varmista_aloitus()
     {"aja": cmd_aja, "hae": cmd_hae, "opi": cmd_opi, "raportti": cmd_raportti,
      "budjetti-ehdotus": cmd_budjetti, "kurkista": cmd_kurkista,
      "selaa": cmd_selaa, "tarkista-kortit": cmd_tarkista_kortit, "siivoa-kopiot": cmd_siivoa_kopiot, "luokittele": cmd_luokittele}[args.komento](args)
 
 
 if __name__ == "__main__":
+    _varmista_python()
+    _siisti_konsoli()
     main()

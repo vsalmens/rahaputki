@@ -9,9 +9,22 @@ otteet ja jatkat siitä mihin jäit. Mikään ei "mene rikki" tauosta.
 Vaatimukset: Python 3.9+. Perusputki toimii ilman asennettavia kirjastoja;
 lisäosat tarvitsevat omansa: automaattinen pankkihaku `pyjwt` + `cryptography`,
 PDF-laskujen muunnin `pdfplumber`. Asenna aina saman tulkin kautta jolla ajat:
-`python3 -m pip install pyjwt cryptography pdfplumber --break-system-packages`
-(Homebrew-Python vaatii tuon lipun; `python3 -m pip` takaa ettei paketti
-eksy toisen Python-asennuksen hyllyyn).
+
+- **macOS/Linux**: `python3 -m pip install pyjwt cryptography pdfplumber --break-system-packages`
+  (Homebrew-Python vaatii tuon lipun; `python3 -m pip` takaa ettei paketti
+  eksy toisen Python-asennuksen hyllyyn)
+- **Windows**: `py -m pip install pyjwt cryptography pdfplumber`
+
+**Käyttöjärjestelmät.** Putki toimii macOS:llä, Windowsissa ja Linuxissa —
+se on pelkkää Pythonin standardikirjastoa, eikä kutsu käyttöjärjestelmän
+komentoja. Tässä ohjeessa komennot on kirjoitettu muodossa `python3 …`;
+**Windowsissa käytä sen sijaan `py …`** (esim. `py kirjanpito.py aja`).
+Polut kirjoitetaan kauttaviivalla myös Windowsissa.
+
+**Et tarvitse komentoriviä lainkaan**, jos et halua: kaksoisklikkaa
+`Aloita.command` (macOS) tai `Aloita.bat` (Windows) — se lukee inboxin ja avaa
+raportin selaimeen. Ensimmäinen käynnistys luo kansiot ja mallitiedostot
+puolestasi. Lyhyt aloitusopas on `README.md`; tämä tiedosto on koko kartta.
 
 ## Pikastartti: vuosi taaksepäin
 
@@ -153,8 +166,9 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 |---|---|
 | `inbox/` | tänne pankkien CSV:t; käsitellyt siirtyvät `inbox/arkisto/` |
 | `data/tapahtumat.csv` | pääkirja — koko totuus, pelkkää tekstiä, versioi/varmuuskopioi vapaasti |
-| `saannot.csv` | kauppias → kategoria -säännöt (esisiemennetty omista 2018–2020 luokistasi) |
+| `saannot.csv` | kauppias → kategoria -säännöt (syntyy ensikäynnistyksessä mallista, karttuu käytössä) |
 | `laskusta_csv.py` | korttilaskujen PDF → CSV -muunnin (`--nayta` näyttää rivien tulkinnan) |
+| `Aloita.command` / `Aloita.bat` | kaksoisklikattava käynnistin (macOS / Windows) — ajaa `aja`:n ja avaa raportin |
 | `config.json` | lähteiden sarakekartat, kategoriat, omat IBANit |
 | `config.esimerkki.json`, `saannot.esimerkki.csv` | riisutut aloituspohjat — kopioi ilman .esimerkki-päätettä ja muokkaa omiksesi |
 | `budjetti.csv` | kk-raamit (täytetään vasta kun toteumaa on) |

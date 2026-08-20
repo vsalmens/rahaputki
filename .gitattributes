@@ -1,0 +1,4 @@
+# Windowsin komentotulkki vaatii CRLF:n; muut tiedostot LF.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.command text eol=lf

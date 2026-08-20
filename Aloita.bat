@@ -1,0 +1,43 @@
+@echo off
+chcp 65001 >nul
+cd /d "%~dp0"
+
+rem Rahaputki - kaksoisklikkaa tata tiedostoa.
+rem Etsii Pythonin, lukee inbox-kansion ja avaa raportin selaimeen.
+
+set "PY="
+where py >nul 2>nul
+if %errorlevel%==0 set "PY=py -3"
+if defined PY goto tarkista
+where python >nul 2>nul
+if %errorlevel%==0 set "PY=python"
+
+:tarkista
+if not defined PY goto ei_pythonia
+%PY% -c "import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)" 2>nul
+if errorlevel 1 goto ei_pythonia
+
+%PY% kirjanpito.py aja
+echo.
+
+%PY% -c "import pathlib, sys; p = pathlib.Path('data/tapahtumat.csv'); sys.exit(0 if p.exists() and len(p.read_text(encoding='utf-8').splitlines()) > 1 else 1)"
+if errorlevel 1 goto tyhja
+
+echo Avataan raportti selaimeen. Sulje tama ikkuna kun olet valmis.
+echo.
+%PY% kirjanpito.py selaa
+goto loppu
+
+:tyhja
+echo.
+pause
+goto loppu
+
+:ei_pythonia
+echo Python 3.9 tai uudempi puuttuu.
+echo Asenna se osoitteesta https://www.python.org/downloads/
+echo Muista valita asennuksessa "Add python.exe to PATH".
+echo.
+pause
+
+:loppu
