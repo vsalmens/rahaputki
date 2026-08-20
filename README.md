@@ -15,7 +15,10 @@ Mikään ei mene rikki tauosta.
 ## Aloitus
 
 1. **Lataa** työkalu: `Code` → `Download ZIP`
-2. **Pura** ZIP haluamaasi kansioon (esim. Tiedostot tai Työpöytä)
+2. **Pura** ZIP ja **siirrä kansio pysyvään paikkaan** — esimerkiksi
+   Tiedostot-kansioon (`Documents`). Voit myös nimetä sen uudelleen vaikka
+   `Rahaputki`. **Älä jätä sitä Lataukset-kansioon**: kirjanpitosi jää
+   asumaan tähän kansioon, ja Lataukset on paikka, jonka ihmiset tyhjentävät.
 3. **Kaksoisklikkaa** käynnistintä:
    - macOS: `Aloita.command`
    - Windows: `Aloita.bat`
@@ -91,6 +94,20 @@ Varmuuskopiointi on kansion kopioimista. Jos haluat kirjanpitosi useammalle
 koneelle, pidä kansio pilvitallennuksessa (esim. iCloud, OneDrive, Google
 Drive) — mutta aja putki vain yhdellä koneella kerrallaan, jotta synkronointi
 ei tuota ristiriitaisia kopioita.
+
+## Päivittäminen
+
+Kun työkalusta ilmestyy uusi versio, **älä siirrä kirjanpitoasi uuteen
+kansioon** — tee päinvastoin. Lataa uusi ZIP, pura se, ja kopioi sieltä
+**vain nämä tiedostot** vanhan kansiosi päälle:
+
+```
+kirjanpito.py   laskusta_csv.py   Aloita.command   Aloita.bat   OHJE.md   README.md
+```
+
+Näin datasi (`data/`, `inbox/`, `config.json`, `saannot.csv`, `budjetti.csv`)
+pysyy koskemattomana paikallaan. Voit sen jälkeen poistaa purkamasi uuden
+kansion. Kirjanpitosi ei ole koskaan noissa ohjelmatiedostoissa.
 
 ## Tarkemmat ohjeet
 
