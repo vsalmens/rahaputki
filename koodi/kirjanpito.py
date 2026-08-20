@@ -902,6 +902,18 @@ def _kysy(kysymys, oletus=""):
     return vastaus or oletus
 
 
+def _valikko(otsikko, vaihtoehdot, oletus=1):
+    """Numeroitu valinta. Palauttaa valitun avaimen; Enter ottaa oletuksen."""
+    print(f"\n{otsikko}")
+    for i, (_, teksti) in enumerate(vaihtoehdot, 1):
+        merkki = " (oletus)" if i == oletus else ""
+        print(f"  {i}) {teksti}{merkki}")
+    vastaus = _kysy(f"Valitse numero [{oletus}] ", str(oletus))
+    if vastaus.isdigit() and 1 <= int(vastaus) <= len(vaihtoehdot):
+        return vaihtoehdot[int(vastaus) - 1][0]
+    return vaihtoehdot[oletus - 1][0]
+
+
 def _kylla(kysymys, oletus=True):
     vastaus = _kysy(f"{kysymys} [{'K/e' if oletus else 'k/E'}] ").lower()
     return oletus if not vastaus else vastaus[0] in "kyj1"
@@ -1101,13 +1113,24 @@ def _avaimen_kohde(pem):
     return ASETUKSET / pem.name, False
 
 
+LATAUSKANSIOT = ("downloads", "lataukset", "desktop", "työpöytä", "tyopoyta")
+
+
 def _talleta_avain(pem):
     """Siirrä avain pois Lataukset-kansiosta (jonka ihmiset tyhjentävät)
-    sinne, minne se tässä asennuksessa kuuluu."""
+    sinne, minne se tässä asennuksessa kuuluu.
+
+    Jos avain jo asuu järkevässä paikassa, se jätetään sinne: sama avain voi
+    olla toisenkin asennuksen käytössä, eikä sitä saa siirtää sen alta."""
     kohde, pilvessa = _avaimen_kohde(pem)
     if pem.resolve() == kohde.resolve():
         return kohde
-    if pilvessa and not _pilvisynkassa(pem) and pem.parent != Path.home() / "Downloads":
+    lataus = normalisoi(pem.parent.name) in LATAUSKANSIOT
+    if not lataus and not _pilvisynkassa(pem):
+        print(f"\n✓ avain on jo turvallisessa paikassa, käytetään sitä sieltä:")
+        print(f"  {pem}")
+        return pem
+    if pilvessa and not _pilvisynkassa(pem) and not lataus:
         print(f"\n✓ avain on jo pilvisynkan ulkopuolella: {pem}")
         return pem
     print(f"\nAvain on nyt: {pem}")
@@ -1233,18 +1256,27 @@ kautta suoraan koneellesi eikä välissä ole muita palveluita.
 Jos sinulla ei vielä ole tunnusta: selain avautuu osoitteeseen
 {EB_KIRJAUTUMINEN} — anna sähköpostiosoitteesi ja klikkaa linkkiä, jonka saat
 sähköpostiisi. Salasanaa ei ole.""")
-    if _kylla("\nOnko sinulla jo Enable Banking -tunnus (olet kirjautunut portaaliin)?",
-              oletus=False):
+    # Sovellus on voitu luoda jo aiemmin (toinen kansio, aiempi yritys,
+    # portaalin lomake). Silloin ei pidä luoda uutta vaan ottaa se käyttöön.
+    loydot = _etsi_avaimet()
+    vaihtoehdot = [
+        ("uusi", "Luo minulle uusi sovellus (nopein — avain syntyy tällä koneella)"),
+        ("olemassa", "Minulla on jo sovellus ja sen .pem-avaintiedosto"
+         + (f" — löysin tiedoston {loydot[0].name}" if loydot else "")),
+        ("lomake", "Luon sovelluksen itse portaalin lomakkeella"),
+    ]
+    valinta = _valikko("Mistä lähdetään liikkeelle?", vaihtoehdot,
+                       oletus=2 if loydot else 1)
+    if valinta == "uusi":
+        if not _kylla("\nOletko kirjautunut Enable Bankingin portaaliin?", oletus=True):
+            _avaa_selain(EB_KIRJAUTUMINEN)
+            _odota_enter("Paina Enter kun olet kirjautunut portaaliin...")
         if _velho_rekisterointi():
             return True
         print("\nJatketaan lomakkeella.")
-    else:
-        _avaa_selain(EB_KIRJAUTUMINEN)
-        _odota_enter("Paina Enter kun olet kirjautunut portaaliin...")
-        if _kylla("\nLuodaanko sovellus automaattisesti (nopein tapa)?"):
-            if _velho_rekisterointi():
-                return True
-            print("\nJatketaan lomakkeella.")
+        valinta = "lomake"
+    if valinta == "olemassa":
+        return _ota_avain_kayttoon(kerro_lomake=False)
     _avaa_selain(EB_PORTAALI)
     print(f"""
 Sovelluksen luonti lomakkeella (portaalin sivu API applications):
@@ -1277,8 +1309,15 @@ Sovelluksen luonti lomakkeella (portaalin sivu API applications):
      tunnus ja pääte .pem — se on sovelluksesi salainen avain.
      Älä avaa sitä äläkä lähetä sitä kenellekään.
 """)
-    _avaa_selain(EB_KIRJAUTUMINEN)
     _odota_enter("Paina Enter, kun .pem-tiedosto on latautunut...")
+    return _ota_avain_kayttoon(kerro_lomake=True)
+
+
+def _ota_avain_kayttoon(kerro_lomake=True):
+    """Etsi ja ota käyttöön olemassa oleva .pem-avain sovelluksineen."""
+    if not kerro_lomake:
+        print("\nEtsitään avaintiedostoa koneelta. Se on se .pem-tiedosto, jonka "
+              "\nsait sovellusta luodessasi (tai jonka Rahaputki tallensi aiemmin).")
     pem = None
     for _ in range(3):
         loydot = _etsi_avaimet()

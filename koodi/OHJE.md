@@ -141,8 +141,20 @@ Ensin tarvitset tunnuksen: velho avaa selaimeen osoitteen
 `https://enablebanking.com/sign-in/`, jossa annat sähköpostiosoitteesi ja
 klikkaat sähköpostiin tulevaa linkkiä. Salasanaa ei ole.
 
-Sitten sovellus luodaan. Siihen on kaksi tapaa, ja velho tarjoaa
-ensimmäistä.
+Sitten sovellus luodaan — tai otetaan käyttöön se, joka sinulla jo on.
+Velho kysyy mistä lähdetään liikkeelle:
+
+```
+  1) Luo minulle uusi sovellus (nopein — avain syntyy tällä koneella)
+  2) Minulla on jo sovellus ja sen .pem-avaintiedosto
+  3) Luon sovelluksen itse portaalin lomakkeella
+```
+
+Jos koneelta löytyy .pem-tiedosto, kohta 2 on oletus ja tiedoston nimi
+näkyy valinnassa. Tämä on se reitti, jota tarvitset esimerkiksi silloin, kun
+otat Rahaputken käyttöön toisella koneella tai uudessa kansiossa: samaa
+sovellusta voi käyttää monesta paikasta, eikä avainta silloin siirretä
+paikaltaan — se voi olla toisenkin asennuksen käytössä.
 
 ### Tapa A: automaattinen (suositus)
 
@@ -212,8 +224,11 @@ Lataukset- ja Työpöytä-kansiosta ja lukee sovelluksesi tunnuksen suoraan
 tiedostonimestä (Enable Banking nimeää avaimen sillä). Tunnukset kirjoitetaan
 tiedostoon `asetukset/pankkihaku.env`.
 
-**Minne avain menee.** Oletuksena kansioon `asetukset/`, muiden asetustesi
-viereen: silloin kaikki on yhdessä paikassa ja seuraa mukana, jos siirrät tai
+**Minne avain menee.** Jos avain on jo koneella järkevässä paikassa (esim.
+`~/.rahaputki/` tai toisen asennuksen `asetukset/`), se jätetään sinne ja
+asetuksiin kirjoitetaan vain polku — näin sama avain palvelee useaa
+asennusta. Latauskansiosta löytynyt avain sen sijaan siirretään pois sieltä:
+oletuksena kansioon `asetukset/`, muiden asetustesi viereen: silloin kaikki on yhdessä paikassa ja seuraa mukana, jos siirrät tai
 nimeät kansion uudelleen (polku tallennetaan suhteellisena, joten se ei mene
 rikki). Avain on kuitenkin lukupääsy tileihisi, joten **jos Rahaputken kansio
 on pilvitallennuksessa** (Google Drive, iCloud, OneDrive, Dropbox), velho
