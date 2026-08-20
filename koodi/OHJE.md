@@ -357,6 +357,12 @@ Kaksi tapaa, sama näkymä:
    tarkenne-kenttä — muutos **tallentuu pääkirjaan heti**. Rivin
    "sääntö"-linkki esitäyttää sääntölomakkeen (malli → kategoria:tarkenne);
    sääntö tallentuu asetukset/saannot.csv:hen ja luokittelee samalla avoimet rivit.
+   Rivin alussa oleva **§-merkki** kertoo, että rivin luokitteli sääntö —
+   klikkaa sitä, niin juuri se sääntö avautuu samaan lomakkeeseen
+   muokattavaksi (malli, kategoria, tarkenne, summaehto). Tallennus korvaa
+   vanhan säännön sen omalla paikalla listassa, joten järjestys säilyy, ja
+   kertoo etukäteen montako riviä luokittuu uudelleen. "Peru muokkaus"
+   palauttaa lomakkeen uuden säännön tilaan.
    Valikon "+ uusi kategoria…" lisää kategorian asetukset/config.json:iin lennossa.
    Taulukot ja käyrät päivittyvät kun lataat sivun uudelleen. Ctrl-C sammuttaa.
 2. **Pelkkä raportti.html avattuna** (ilman palvelinta): samat muokkaukset
