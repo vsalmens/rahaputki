@@ -86,13 +86,27 @@ säännöt kattavat tyypillisesti noin 90 % riveistä.
 
 ## Mitä kansiossa on
 
-| Tiedosto | Mikä |
+Kansiossa on kahdenlaista tavaraa, ja jako ratkaisee kaiken päivittämisessä:
+**ohjelma tulee paketista ja on korvattavissa, kaikki muu on sinun eikä ole
+missään muualla.**
+
+| Sinun — älä koskaan korvaa | Mikä |
 |---|---|
-| `inbox/` | tänne pankkien CSV:t; käsitellyt siirtyvät `inbox/arkisto/` |
 | `data/tapahtumat.csv` | kirjanpitosi — koko totuus, pelkkää tekstiä |
-| `saannot.csv` | kauppias → kategoria -säännöt |
+| `data/` muuten | varmuuskopiot, yhteistalouden tila |
+| `saannot.csv` | kauppias → kategoria -säännöt, karttuu käytössä |
 | `config.json` | kategoriat, lähteiden sarakekartat, omat IBANit |
-| `raportit/raportti.html` | kuukausigraafi, budjettivertailu, matriisi |
+| `budjetti.csv` | kuukausiraamit |
+| `inbox/` | pankkien CSV:t; käsitellyt siirtyvät `inbox/arkisto/` |
+| `.env` | pankkihaun tunnukset — **piilotiedosto**, ei näy Finderissa |
+| `raportit/` | syntyy uudelleen joka ajolla; ei tarvitse varjella |
+
+| Ohjelma — tulee paketista | Mikä |
+|---|---|
+| `kirjanpito.py`, `laskusta_csv.py` | itse työkalu |
+| `Aloita.command`, `Aloita.bat` | käynnistimet |
+| `OHJE.md`, `README.md` | ohjeet |
+| `config.esimerkki.json`, `saannot.esimerkki.csv` | mallipohjat, joista ensikäynnistys tekee omasi |
 
 Varmuuskopiointi on kansion kopioimista. Jos haluat kirjanpitosi useammalle
 koneelle, pidä kansio pilvitallennuksessa (esim. iCloud, OneDrive, Google
@@ -118,6 +132,25 @@ omasi ei voi ylikirjoittua — ei edes vahingossa.
 > **Vedä tiedostot, älä kansiota.** Jos vedät koko kansion toisen kansion
 > päälle, macOS korvaa kohdekansion kokonaan sen sijaan että yhdistäisi
 > sisällöt — ja veisi datasi mennessään. Tiedostojen vetäminen on turvallista.
+
+### Miksi näin päin
+
+Toinen suunta — purkaa uusi paketti tyhjäksi kansioksi ja siirtää oma data
+sinne — kuulostaa siistimmältä, mutta on selvästi vaarallisempi:
+
+- **`.env` on piilotiedosto.** Se ei näy Finderissa ilman erillistä
+  näppäinyhdistelmää (⌘⇧.), joten pankkihaun tunnukset jäisivät helposti
+  siirtämättä — ja huomaisit sen vasta kun haku lakkaa toimimasta.
+- **Uusi kansio näyttää toimivalta myös tyhjänä.** Jos käynnistät sen ennen
+  datan siirtoa, se luo mallipohjista uuden `config.json`:in ja tyhjän
+  kirjanpidon eikä valita mistään. Sinulla olisi kaksi kansiota, joista
+  kumpikin näyttää oikealta, ja vain toisessa on tapahtumasi.
+- **Väärin menemisen hinta on eri.** Jos tässä suunnassa unohdat kopioida
+  jonkin ohjelmatiedoston, jäät vanhaan versioon — se korjaantuu kopioimalla
+  uudelleen. Toisessa suunnassa unohdus tarkoittaa, että kirjanpitosi jää
+  toiseen kansioon.
+
+Nyrkkisääntö: **data pysyy paikallaan, ohjelma vaihtuu sen ympärillä.**
 
 ## Tarkemmat ohjeet
 
