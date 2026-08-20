@@ -254,10 +254,10 @@ Tämä valtuutus on eri asia kuin vaiheen 2 liittäminen: liittäminen kertoo
 **Vaihe 4 — tilien nimeäminen (~1 min)**
 
 Velho näyttää löytyneet tilit ja ehdottaa jokaiselle nimeä. Enter hyväksyy
-ehdotuksen. Nimi ohjaa CSV-muodon, joten vakionimet kannattaa pitää:
-`OP-tili`, `S-Pankki` ja `Revolut` kirjoitetaan kunkin pankin omassa
-muodossa, ja kaikki muut (luottokortit ym.) korttimuodossa, jossa tilin
-nimi kulkee pääkirjaan asti. Sama nimi useammalla tilillä on sallittua —
+ehdotuksen. Nimi ohjaa CSV-muodon, joten vakionimet kannattaa pitää: `OP-tili` ja
+`S-Pankki` kirjoitetaan pankin omassa muodossa, ja kaikki muut (Revolut,
+luottokortit ym.) yleisessä muodossa, jossa tilin nimi kulkee pääkirjaan
+asti. Sama nimi useammalla tilillä on sallittua —
 esimerkiksi Revolutin taskut päätyvät silloin yhteen tiedostoon.
 
 Jos pääkirjassa on jo rivejä samalle tilinimelle, velho asettaa noudon

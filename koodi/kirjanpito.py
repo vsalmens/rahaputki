@@ -1664,8 +1664,8 @@ def _tallenna_tilit(cfg, pankki, tilit):
     lista[:] = [t for t in lista if not _on_paikanpitaja(t.get("account_id"))]
     print(f"\nValtuutus onnistui: {len(tilit)} tiliä. Nimeä ne niin kuin haluat "
           "niiden näkyvän raportissa.")
-    print("Vakionimet OP-tili / S-Pankki / Revolut osaavat pankin oman "
-          "CSV-muodon; muut nimet käsitellään korttimuodossa.")
+    print("Nimet OP-tili ja S-Pankki kirjoitetaan pankin omassa CSV-muodossa; "
+          "muut (Revolut, kortit) yleisessä muodossa.")
     # Käsin asetettu alkupäivä ei saa kadota, kun vanha rivi korvautuu.
     vanhat_alkaen = {t.get("tili"): t.get("alkaen") for t in lista if t.get("alkaen")}
     nahdyt, uusia = [], 0
@@ -1876,8 +1876,13 @@ def gc_riveiksi(data):
 
 
 def kirjoita_pankkicsv(tili, rivit, polku):
-    """Kirjoittaa noudetut tapahtumat samassa muodossa kuin pankin oma CSV, jotta
-    aja-putki (lähteen tunnistus, dedupe-avaimet, säännöt) toimii identtisesti."""
+    """Kirjoittaa noudetut tapahtumat CSV:ksi, jonka aja-putki lukee samoilla
+    lähdemäärittelyillä kuin verkkopankista viedyt tiedostot.
+
+    OP ja S-Pankki kirjoitetaan pankin omassa muodossa, jossa on viestikenttä.
+    Revolut ja kortit käyttävät yleistä muotoa (Ostopäivä;Summa;Ostopaikka;
+    Selite;Tili): Revolutin oma vientimuoto ei kanna viestiä lainkaan, ja
+    juuri viestissä on usein ainoa tieto vastapuolesta."""
     with open(polku, "w", encoding="utf-8", newline="") as f:
         if tili == "S-Pankki":
             w = csv.writer(f, delimiter=";")
