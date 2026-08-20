@@ -764,7 +764,10 @@ def eb_riveiksi(data, kerro=None):
         if not saaja:
             # varasaaja vain viestiosasta - koodit ja viitteet eivät kuulu nimeen
             saaja = siisti(" ".join(str(x) for x in rem))[:40] or selite[:40]
-        ulos.append({"pvm": pvm, "summa": summa, "saaja": saaja, "selite": selite})
+        koodi = tx.get("bank_transaction_code")
+        laji = siisti(str(koodi.get("code") or "")) if isinstance(koodi, dict) else ""
+        ulos.append({"pvm": pvm, "summa": summa, "saaja": saaja, "selite": selite,
+                     "laji": laji})
     if kerro is not None:
         kerro.update(ohitetut)
     return ulos
@@ -1861,7 +1864,13 @@ def kirjoita_pankkicsv(tili, rivit, polku):
             w.writerow(["Type", "Product", "Started Date", "Completed Date",
                         "Description", "Amount", "Fee", "Currency", "State", "Balance"])
             for r in rivit:
-                w.writerow(["Merchant" if r["summa"] < 0 else "Transfer",
+                # Type kantaa pankin oman tapahtumalajin (CARD_PAYMENT, TOPUP,
+                # ATM, TRANSFER…) — se päätyy selitteeseen, jolloin siitä voi
+                # tehdä säännön. Aiemmin tähän kirjoitettiin itse keksitty
+                # "Merchant"/"Transfer", ja pankin tieto katosi.
+                laji = (r.get("laji") or "").strip() or (
+                    "Merchant" if r["summa"] < 0 else "Transfer")
+                w.writerow([laji,
                             "Personal Account (EUR)",
                             f"{r['pvm']} 00:00:00", f"{r['pvm']} 00:00:00",
                             r["saaja"], f"{r['summa']:.2f}", "0.00", "EUR", "COMPLETED", ""])
