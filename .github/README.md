@@ -72,7 +72,34 @@ asennuksessa "Add python.exe to PATH"**.
 
 Perustoiminnot eivät tarvitse mitään asennettavia kirjastoja. Lisäosat kyllä:
 automaattinen pankkihaku (`pyjwt`, `cryptography`) ja korttilaskujen
-PDF-muunnin (`pdfplumber`).
+PDF-muunnin (`pdfplumber`). Pankkihaun kirjastot asentaa ohjattu käyttöönotto
+puolestasi, joten niistä ei tarvitse tietää mitään.
+
+## Tapahtumat suoraan pankista (valinnainen)
+
+CSV-vientien sijaan tapahtumat voi noutaa suoraan pankeistasi PSD2-rajapinnan
+kautta — myös luottokorteilta, joiden tapahtumia ei saa CSV:nä lainkaan.
+Käyttöönotto on ohjattu ja vie noin 15 minuuttia:
+
+- macOS: kaksoisklikkaa `Pankkihaku.command`
+- Windows: kaksoisklikkaa `Pankkihaku.bat`
+- tai komentoriviltä: `python3 koodi/kirjanpito.py pankkihaku`
+
+Velho hoitaa kaiken teknisen puolestasi: asentaa puuttuvat kirjastot, etsii
+latautuneen avaintiedoston, avaa oikeat sivut selaimeen, nappaa pankista
+palaavan tunnistautumiskoodin ja kirjoittaa asetukset. Sinä teet vain sen,
+mitä kukaan ei voi tehdä puolestasi: luot ilmaisen kehittäjätunnuksen
+[Enable Bankingiin](https://enablebanking.com/) (suomalainen,
+Finanssivalvonnan valvoma) ja tunnistaudut pankkiisi.
+
+Tilitietosi kulkevat silloin sinun oman sovelluksesi kautta suoraan
+koneellesi — ei kuukausimaksua eikä välikäsiä. Sama on ostettavissa myös
+valmiina palveluna (esim. [Syncbank](https://syncbank.app)), jos et halua
+tehdä tunnusta itse.
+
+Jatkossa sama `Pankkihaku`-käynnistin noutaa tuoreet tapahtumat, luokittelee
+ne ja avaa raportin yhdellä kaksoisklikkauksella. Rautalankaohje kaikista
+vaiheista on [koodi/OHJE.md](koodi/OHJE.md).
 
 ## Rituaali jatkossa (~15–30 min, milloin huvittaa)
 
@@ -90,7 +117,8 @@ Juuressa on vain käynnistimet ja neljä kansiota. Jokaisella on yksi tehtävä:
 
 ```
 Rahaputki/
-  Aloita.command  Aloita.bat    kaksoisklikkaa nailla
+  Aloita.command  Aloita.bat        kaksoisklikkaa nailla
+  Pankkihaku.command  .bat          sama, mutta hakee tapahtumat pankista
   inbox/          ← TÄNNE pankkien CSV-tiedostot
   koodi/          ohjelma — päivitys korvaa vain tämän
   asetukset/      config.json, saannot.csv, budjetti.csv, pankkihaku.env
@@ -126,8 +154,19 @@ korvaaminen kokonaan on turvallista — se on itse asiassa toivottavaa, koska
 näin vanhat tiedostot eivät jää roikkumaan. Kaikki omasi on kansioissa
 `asetukset/`, `data/` ja `inbox/`, eikä päivitys kosketa niitä.
 
-Käynnistimiä `Aloita.command` ja `Aloita.bat` ei tarvitse päivittää: ne ovat
+Juuren käynnistimiä (`Aloita…`, `Pankkihaku…`) ei tarvitse päivittää: ne ovat
 muutaman rivin tynkiä, jotka vain käynnistävät `koodi/`-kansion sisällön.
+Jos päivität vanhasta versiosta, kopioi `Pankkihaku.command` /
+`Pankkihaku.bat` paketista juureen kerran — tai aja pankkihaku komentoriviltä.
+
+## Lisenssi ja ehdot
+
+MIT-lisenssi ([`LICENSE`](LICENSE)) — käytä, muokkaa ja jaa vapaasti.
+[Tietosuojaseloste](koodi/ehdot/tietosuoja.md) ja
+[käyttöehdot](koodi/ehdot/kayttoehdot.md) kertovat lyhyesti sen, mikä tässä
+on olennaista: ohjelmalla ei ole palvelinta, eikä sen tekijä näe tilitietojasi.
+Samat osoitteet kelpaavat Enable Bankingin rekisteröintilomakkeen
+Privacy- ja Terms-kenttiin.
 
 ## Tarkemmat ohjeet
 
@@ -141,6 +180,8 @@ sudenkuopat.
 Käynnistin riittää useimpiin tarpeisiin, mutta kaikki toimii myös suoraan:
 
 ```
+python3 koodi/kirjanpito.py pankkihaku # ohjattu käyttöönotto: haku suoraan pankista
+python3 koodi/kirjanpito.py hae        # nouda tuoreet tapahtumat pankeista
 python3 koodi/kirjanpito.py aja        # lue inbox/, luokittele, raportoi
 python3 koodi/kirjanpito.py selaa      # avaa raportti muokattavana selaimeen
 python3 koodi/kirjanpito.py opi        # lue täytetty tarkistettavat.csv takaisin

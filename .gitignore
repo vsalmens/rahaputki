@@ -13,3 +13,7 @@ config.json.backup
 # Kaikki data — ei koskaan repoon. Mallipohja on ainoa poikkeus.
 *.csv
 !koodi/saannot.esimerkki.csv
+
+# Pythonin välimuisti
+__pycache__/
+*.pyc

@@ -195,7 +195,7 @@
   "alkaen": "",
   "pankkihaku": {
     "palvelu": "enablebanking",
-    "redirect_url": "https://SOVELLUKSELLESI-REKISTERÖITY-OSOITE",
+    "redirect_url": "https://enablebanking.com/auth_redirect",
     "tilit": [
       {
         "tili": "OP-tili",

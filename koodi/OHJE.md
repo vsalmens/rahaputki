@@ -8,7 +8,9 @@ otteet ja jatkat siitä mihin jäit. Mikään ei "mene rikki" tauosta.
 
 Vaatimukset: Python 3.9+. Perusputki toimii ilman asennettavia kirjastoja;
 lisäosat tarvitsevat omansa: automaattinen pankkihaku `pyjwt` + `cryptography`,
-PDF-laskujen muunnin `pdfplumber`. Asenna aina saman tulkin kautta jolla ajat:
+PDF-laskujen muunnin `pdfplumber`. Pankkihaun kirjastot asentuvat halutessasi
+itsestään ohjatussa käyttöönotossa (`pankkihaku`), joten alla olevaa ei
+tarvitse osata. Jos asennat käsin, tee se aina saman tulkin kautta jolla ajat:
 
 - **macOS/Linux**: `python3 -m pip install pyjwt cryptography pdfplumber --break-system-packages`
   (Homebrew-Python vaatii tuon lipun; `python3 -m pip` takaa ettei paketti
@@ -30,11 +32,12 @@ muodossa `python3 koodi/kirjanpito.py …`.
 
 **Et tarvitse komentoriviä lainkaan**, jos et halua: kaksoisklikkaa
 `Aloita.command` (macOS) tai `Aloita.bat` (Windows) — se lukee inboxin ja avaa
-raportin selaimeen. Ensimmäinen käynnistys luo kansiot ja mallitiedostot
-puolestasi. Jos latasit työkalun ZIP-pakettina, käyttöjärjestelmä estää
-käynnistimen ensimmäisellä kerralla; `README.md` kertoo miten se sallitaan
-kerralla kuntoon. Lyhyt aloitusopas on niin ikään `README.md`; tämä tiedosto
-on koko kartta.
+raportin selaimeen. `Pankkihaku.command` / `Pankkihaku.bat` tekee saman, mutta
+noutaa tapahtumat ensin suoraan pankeista (ks. oma lukunsa). Ensimmäinen
+käynnistys luo kansiot ja mallitiedostot puolestasi. Jos latasit työkalun
+ZIP-pakettina, käyttöjärjestelmä estää käynnistimen ensimmäisellä kerralla;
+`README.md` kertoo miten se sallitaan kerralla kuntoon. Lyhyt aloitusopas on
+niin ikään `README.md`; tämä tiedosto on koko kartta.
 
 ## Pikastartti: vuosi taaksepäin
 
@@ -87,52 +90,186 @@ on koko kartta.
 
 ## Rituaali jatkossa (~15–30 min, milloin huvittaa)
 
-1. Vie tuoreet otteet `inbox/`-kansioon — tai jos pankkihaku on käytössä,
-   pelkkä `python3 koodi/kirjanpito.py hae` (päällekkäisyys ei haittaa — vie
-   mieluummin liikaa kuin liian vähän)
+1. Vie tuoreet otteet `inbox/`-kansioon — tai jos automaattinen pankkihaku on
+   käytössä, pelkkä `python3 koodi/kirjanpito.py hae` (tai kaksoisklikkaus
+   `Pankkihaku`-käynnistimestä, joka tekee kohdat 1–2 kerralla). Päällekkäisyys
+   ei haittaa — hae mieluummin liikaa kuin liian vähän.
 2. `python3 koodi/kirjanpito.py aja`
 3. Täytä tarkistettavat → `python3 koodi/kirjanpito.py opi`
 4. Katso `raportti.html`. Halutessasi liitä `raportit/yhteenveto_kk.csv`
    taulukkolaskentaan uudelle välilehdelle (suomalainen puolipiste+pilkku-
    muoto, liimautuu suoraan).
 
-## Automaattinen pankkihaku (`hae`)
+## Automaattinen pankkihaku — tapahtumat ilman CSV-vientejä
 
 CSV-vientien sijaan tapahtumat voi noutaa suoraan pankeista PSD2-rajapinnan
-kautta (Enable Banking): `python3 koodi/kirjanpito.py hae` kirjoittaa tuoreet
-tapahtumat inboxiin pankkinatiiveina CSV:inä, ja `aja` hoitaa loput samalla
-putkella — dedupe tekee noudosta idempotentin, eli tuplahaku ei koskaan
-tuota tuplarivejä.
+kautta. Välissä on Enable Banking, suomalainen Finanssivalvonnan valvoma
+palvelu, jonka kautta pankit luovuttavat tilitietosi. Teet sinne oman
+kehittäjätunnuksen — silloin tilitietosi kulkevat *sinun* sovelluksesi kautta
+suoraan koneellesi eikä välissä ole muita palveluita eikä kuukausimaksuja.
 
-Käyttöönotto kerran:
+Omien tilien katselu on maksutonta: tuotantosovellus aktivoidaan
+"rajoitettuna" (restricted) liittämällä siihen omat tilisi, ja vain ne tilit
+ovat sen kautta luettavissa. Vaihtoehto on ostaa sama valmiina palveluna
+(esim. [Syncbank](https://syncbank.app), kuukausi- tai vuosimaksu) — silloin
+et tarvitse tätä lukua lainkaan, mutta tilitietosi kulkevat sen palvelun
+kautta.
 
-1. Luo Enable Banking -sovellus (app_id + RS256-yksityisavain `.pem`).
-   Säilytä avain pilvisynkan **ulkopuolella** (esim. `~/.avaimet/`,
-   `chmod 600`) — se on lukupääsy tileihisi.
-2. `asetukset/pankkihaku.env`-tiedosto: `EB_APP_ID=…` ja `EB_KEY_PATH=…`.
-   Älä jaa äläkä versioi tätä tiedostoa.
-3. `asetukset/config.json` → `pankkihaku`: `palvelu`, sovellukselle rekisteröity
-   `redirect_url`, ja `tilit`-lista muotoa
-   `{"tili": "OP-tili", "account_id": "<uid>", "alkaen": "YYYY-MM-DD"}`.
-   Tilin nimi ohjaa CSV-muodon: `OP-tili` / `S-Pankki` / `Revolut`
-   kirjoitetaan tiliformaateissa, kaikki muut (luottokortit ym.)
-   kortti-muodossa jossa Tili-sarake kantaa nimen pääkirjaan asti.
-4. Pankkien valtuutus: `hae --yhdista PANKKI` avaa velhon (linkki →
-   pankin oma vahva tunnistautuminen → liitä paluuosoitteen `?code=`).
-   `hae --istunto SESSION_ID` listaa olemassa olevan istunnon tilit
-   uid:einesi, jos valtuutus on jo tehty muualla samalla sovelluksella.
+**Kaikki alla oleva on automatisoitu yhteen komentoon.** Velho asentaa
+puuttuvat kirjastot, etsii avaintiedoston Lataukset-kansiosta, lukee
+sovelluksen tunnuksen tiedostonimestä, avaa oikeat sivut selaimeen, nappaa
+pankista palaavan tunnistautumiskoodin ja kirjoittaa asetukset puolestasi.
+Sinä teet vain sen, mitä kukaan muu ei voi tehdä puolestasi: kirjaudut
+pankkiisi.
 
-Katkopäiväsääntö reittiä vaihdettaessa: tilikohtainen `alkaen` asetetaan
-viimeisen muulla reitillä tuodun päivän **päälle**, ei sen jälkeiselle
-päivälle — limitys on samalla lähteellä ilmaista, mutta tunninkin aukko on
-äänetön reikä. Reittien sauma tarkistetaan silmin kerran; sen jälkeen
-API-rivit deduplikoituvat keskenään täydellisesti.
+```
+python3 koodi/kirjanpito.py pankkihaku
+```
 
-Hyvä tietää: pankit rajaavat noudot ilman asiakkaan läsnäoloa (~4/vrk/tili;
-`429`-vastaus = kiintiö täynnä, yritä huomenna) ja historian ~90 päivään
-(`--paivia` säätää, oletus 89). Suostumukset erääntyvät pankeittain
-~90–180 päivän välein — silloin yksi `--yhdista`-kierros ja uid:ien
-päivitys. Rituaali kevenee muotoon: `hae` → `aja` → avoimien kuittaus.
+Tai ilman komentoriviä: kaksoisklikkaa **`Pankkihaku.command`** (macOS) tai
+**`Pankkihaku.bat`** (Windows). Sama käynnistin hoitaa jatkossa koko
+rituaalin: nouto → luokittelu → raportti auki.
+
+### Rautalankaversio: mitä ruudulla tapahtuu ja mitä sinä teet
+
+**Vaihe 1 — Enable Banking -tunnus ja sovellus (~5 min, kerran)**
+
+Velho avaa selaimeen osoitteen `https://enablebanking.com/sign-in/`.
+
+1. Anna sähköpostiosoitteesi. Saat sähköpostiin kirjautumislinkin —
+   salasanaa ei ole. Klikkaa linkkiä.
+2. Valitse ylhäältä **API applications** ja vieritä alas kohtaan
+   **Add a new application**.
+3. **Environment: Production.** (Sandbox on kehittäjien leikkikenttä,
+   siinä ei ole sinun rahojasi.)
+4. Avaimen luonti: jätä **ensimmäinen** vaihtoehto valituksi
+   (*Generate in the browser … and export private key*).
+5. **Application name:** `Rahaputki`
+6. **Allowed redirect URLs:** kopioi tämä rivi:
+
+   ```
+   https://enablebanking.com/auth_redirect
+   ```
+
+   Tähän osoitteeseen pankki palauttaa sinut tunnistautumisen jälkeen.
+   Enable Banking hyväksyy vain `https`-osoitteita (`http://localhost/…`
+   torjutaan viestillä *"uses unsupported scheme"*), joten paluukoodi
+   kopioidaan kerran per pankki — ks. vaihe 3.
+7. Muut kentät ovat vapaaehtoisia, mutta kannattaa täyttää. Valmiit arvot:
+
+   | Kenttä | Arvo |
+   |---|---|
+   | Application description | `Rahaputki - personal spending tracker running on the user's own computer` |
+   | Email for data protection matters | **oma sähköpostiosoitteesi** — sovellus on sinun, ei kenenkään muun |
+   | Privacy URL of the application | `https://github.com/vsalmens/rahaputki/blob/main/koodi/ehdot/tietosuoja.md` |
+   | Terms URL of the application | `https://github.com/vsalmens/rahaputki/blob/main/koodi/ehdot/kayttoehdot.md` |
+
+   Tietosuojaseloste ja käyttöehdot kuvaavat sitä, mikä tekee Rahaputkesta
+   poikkeuksellisen: ohjelmalla ei ole palvelinta, eikä sen tekijä näe
+   tilitietojasi. Voit halutessasi osoittaa kentät omaan kopioosi.
+
+8. Klikkaa **Register**.
+9. Selain lataa tiedoston, jonka nimi on pitkä tunnus ja pääte `.pem`.
+   **Tämä on sovelluksesi salainen avain** — se on lukupääsy tileihisi.
+   Älä avaa sitä äläkä lähetä sitä kenellekään.
+
+Palaa Rahaputken ikkunaan ja paina Enter. Velho etsii `.pem`-tiedoston
+Lataukset- ja Työpöytä-kansiosta, lukee sovelluksesi tunnuksen suoraan
+tiedostonimestä (Enable Banking nimeää avaimen sillä) ja tarjoutuu
+siirtämään avaimen turvaan hakemistoon `~/.rahaputki/` — pois
+Lataukset-kansiosta ja pilvisynkan ulottumattomista. Tunnukset kirjoitetaan
+tiedostoon `asetukset/pankkihaku.env`.
+
+**Vaihe 2 — omien tilien liittäminen sovellukseen (~5 min, kerran)**
+
+Velho tarkistaa yhteyden ja kertoo, onko sovellus jo aktiivinen. Jos ei,
+se avaa selaimeen sovelluslistan:
+
+1. Klikkaa sovelluksesi kohdalta **Activate by linking accounts**
+   (tai **Link accounts**).
+2. Valitse pankki ja tunnistaudu pankkitunnuksillasi.
+3. **Toista jokaiselle tilille ja kortille, jonka haluat mukaan** — myös
+   jokaiselle pankille erikseen.
+
+Tämä on koko käyttöönoton tärkein kohta. Liittämätöntä tiliä ei saa mukaan
+myöhemminkään: rajapinta palauttaa siitä yksinkertaisesti tyhjän listan,
+ilman virheilmoitusta. Jos tilien listaus jää myöhemmin tyhjäksi, syy on
+lähes aina tässä.
+
+**Vaihe 3 — pankin valtuutus (~2 min per pankki)**
+
+Velho listaa Suomen pankit numeroituna. Valitse numero ja tunnistaudu
+avautuvassa selaimessa pankkitunnuksillasi.
+
+Tunnistautumisen jälkeen selain palaa Enable Bankingin paluusivulle, joka
+näyttää **tyhjältä lomakkeelta** — se on kunnossa, äläkä klikkaa sen
+nappia. Tarvittava koodi on selaimen **osoiterivillä** (`…?code=…`).
+Kopioi osoiterivi kokonaan (macOS: Cmd-L, Cmd-C — Windows: Ctrl-L, Ctrl-C),
+palaa Rahaputkeen ja paina Enter: velho lukee sen leikepöydältä. Voit myös
+liittää osoitteen suoraan kysymykseen. Toista jokaiselle pankille.
+
+Tämä valtuutus on eri asia kuin vaiheen 2 liittäminen: liittäminen kertoo
+*mitä tilejä sovellus saa ylipäätään koskea*, valtuutus antaa sille
+*luvan hakea niiltä tapahtumia*. Valtuutus vanhenee pankista riippuen
+90–180 päivän välein, ja silloin ajat velhon uudelleen.
+
+**Vaihe 4 — tilien nimeäminen (~1 min)**
+
+Velho näyttää löytyneet tilit ja ehdottaa jokaiselle nimeä. Enter hyväksyy
+ehdotuksen. Nimi ohjaa CSV-muodon, joten vakionimet kannattaa pitää:
+`OP-tili`, `S-Pankki` ja `Revolut` kirjoitetaan kunkin pankin omassa
+muodossa, ja kaikki muut (luottokortit ym.) korttimuodossa, jossa tilin
+nimi kulkee pääkirjaan asti. Sama nimi useammalla tilillä on sallittua —
+esimerkiksi Revolutin taskut päätyvät silloin yhteen tiedostoon.
+
+Jos pääkirjassa on jo rivejä samalle tilinimelle, velho asettaa noudon
+alkupäiväksi viimeisen tuodun päivän. **Katkopäiväsääntö:** alkupäivä
+asetetaan viimeisen muulla reitillä tuodun päivän *päälle*, ei sen
+jälkeiselle päivälle — limitys on samalla lähteellä ilmaista (dedupe hoitaa
+sen), mutta tunninkin aukko on äänetön reikä kirjanpidossa.
+
+### Jatkossa
+
+```
+python3 koodi/kirjanpito.py hae     # tuoreet tapahtumat inboxiin
+python3 koodi/kirjanpito.py aja     # luokittelu ja raportti
+```
+
+tai kaksoisklikkaa `Pankkihaku`-käynnistintä, joka tekee molemmat ja avaa
+raportin. Nouto on idempotentti: tuplahaku ei koskaan tuota tuplarivejä,
+joten hae mieluummin liikaa kuin liian vähän.
+
+### Kun jokin menee pieleen
+
+| Oire | Syy ja korjaus |
+|---|---|
+| `istunto syntyi, mutta siinä ei ole yhtään tiliä` | Tiliä ei ole liitetty sovellukseen (vaihe 2). Käy portaalissa klikkaamassa *Link accounts* juuri sille tilille. |
+| `Enable Banking ei hyväksynyt tunnuksia (401)` | Avaintiedosto ja sovelluksen tunnus eivät ole samasta sovelluksesta. Aja `pankkihaku --uusi-sovellus` ja valitse oikea `.pem`. |
+| `EB hylkäsi valtuutuspyynnön (400)` | Paluuosoite ei ole sovelluksen *Allowed redirect URLs* -listalla. Lisää se portaalissa täsmälleen samassa muodossa. |
+| Paluusivu näyttää tyhjältä lomakkeelta | Näin sen kuuluukin näyttää: se on Enable Bankingin testisivu. Koodi on selaimen osoiterivillä, ei sivulla. |
+| `tuo ei näytä valtuutuskoodilta` | Leikepöydällä oli jotain muuta. Kopioi selaimen osoiterivi kokonaan (Cmd-L / Ctrl-L, sitten Cmd-C / Ctrl-C). |
+| `429` noudossa | Pankin kiintiö täynnä (tyypillisesti ~4 noutoa/vrk/tili ilman läsnäoloasi). Yritä huomenna. |
+| `422` noudossa | Yli 90 päivän historiaa pyydetään ilman tuoretta tunnistautumista. `--paivia` pienemmäksi (oletus 89). |
+| Tapahtumat loppuvat tiettyyn päivään | Suostumus on erääntynyt. Aja `pankkihaku` uudelleen ja valtuuta pankki uudestaan. |
+
+Historiaa saa rajapinnasta noin 90 päivää taaksepäin. Sitä vanhempi
+kirjanpito rakennetaan CSV-vienneillä ja korttilaskujen PDF-muuntimella,
+kertaalleen — reitit deduplikoituvat keskenään.
+
+### Asetukset käsin
+
+Velho kirjoittaa nämä puolestasi, mutta ne ovat tavallista tekstiä ja
+muokattavissa:
+
+- `asetukset/pankkihaku.env`: `EB_APP_ID=…` ja `EB_KEY_PATH=…`
+  (**ei jaeta, ei versioida**)
+- `asetukset/config.json` → `pankkihaku`: `palvelu`, `redirect_url`, ja
+  `tilit`-lista muotoa
+  `{"tili": "OP-tili", "account_id": "<uid>", "alkaen": "YYYY-MM-DD"}`
+
+Vanhat komennot toimivat yhä: `hae --yhdista PANKKI` valtuuttaa yhden pankin,
+`hae --istunto SESSION_ID` listaa olemassa olevan istunnon tilit uid:einesi,
+`hae --raaka` tallentaa pankin täydet vastaukset diagnoosia varten.
 
 ## Muokkaus suoraan raportista
 
@@ -182,7 +319,9 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 | `asetukset/saannot.csv` | kauppias → kategoria -säännöt (syntyy ensikäynnistyksessä mallista, karttuu käytössä) |
 | `koodi/` | **ohjelma** — päivitys korvaa tämän kansion kokonaan, muu jää koskematta |
 | `koodi/laskusta_csv.py` | korttilaskujen PDF → CSV -muunnin (`--nayta` näyttää rivien tulkinnan) |
+| `koodi/ehdot/` | tietosuojaseloste ja käyttöehdot — näihin osoitetaan Enable Bankingin lomakkeen URL-kentät |
 | `Aloita.command` / `Aloita.bat` | kaksoisklikattava käynnistin (macOS / Windows) — tynkä, joka käynnistää `koodi/`-kansion logiikan |
+| `Pankkihaku.command` / `Pankkihaku.bat` | sama, mutta noutaa tapahtumat ensin pankeista; ensimmäisellä kerralla ohjattu käyttöönotto |
 | `asetukset/config.json` | lähteiden sarakekartat, kategoriat, omat IBANit |
 | `koodi/config.esimerkki.json`, `koodi/saannot.esimerkki.csv` | riisutut aloituspohjat, joista ensikäynnistys tekee omasi juureen |
 | `asetukset/budjetti.csv` | kk-raamit (täytetään vasta kun toteumaa on) |

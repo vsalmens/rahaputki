@@ -12,6 +12,7 @@ Komennot:
   python3 kirjanpito.py raportti [--kk N] # rakenna raportit uudelleen
   python3 kirjanpito.py budjetti-ehdotus  # ehdota raamit toteuman mediaanista
   python3 kirjanpito.py kurkista TIEDOSTO # näytä miten tiedosto tulkittaisiin
+  python3 kirjanpito.py pankkihaku        # ohjattu käyttöönotto: automaattinen pankkihaku
 """
 
 import argparse
@@ -47,7 +48,7 @@ BUDJETTI = ASETUKSET / "budjetti.csv"
 ENV = ASETUKSET / "pankkihaku.env"
 TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 
-VERSIO = "v122"
+VERSIO = "v123"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria", "tarkenne", "peruste", "lahde"]
 PVM_MUODOT = ["%d.%m.%Y", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y", "%d.%m.%y"]
@@ -677,12 +678,14 @@ def eb_token():
     a = _eb_asetukset()
     env = _env_polku()
     if not a["EB_APP_ID"] or not a["EB_KEY_PATH"]:
-        raise ValueError(f"EB_APP_ID ja/tai EB_KEY_PATH puuttuvat — lisää ne tiedostoon {env}")
+        raise ValueError(f"EB_APP_ID ja/tai EB_KEY_PATH puuttuvat tiedostosta {env} — "
+                         f"ohjattu käyttöönotto: {_komentorivi()} pankkihaku")
     polku = Path(a["EB_KEY_PATH"]).expanduser()
     if not polku.exists():
         raise ValueError(f"yksityisavainta ei löydy polusta {polku} — "
                          f"tarkista EB_KEY_PATH tiedostossa {env} "
-                         "(avain on koneella jolla valtuutus tehtiin)")
+                         "(avain on koneella jolla valtuutus tehtiin), tai aja "
+                         f"'{_komentorivi()} pankkihaku --uusi-sovellus'")
     return eb_jwt(a["EB_APP_ID"], polku.read_text(encoding="utf-8"))
 
 
@@ -820,53 +823,739 @@ def eb_istunto(session_id):
     print('Lisää config.jsonin pankkihaku.tilit-listaan: {"tili": "…", "account_id": "<uid>", "alkaen": "…"}')
 
 
-def eb_yhdista(nimi, cfg):
-    """Yhdistämisvelho: etsii pankin, avaa valtuutuslinkin, tallentaa tilit configiin.
+# ------------------------------------------- ohjattu käyttöönotto (velho)
+
+EB_KIRJAUTUMINEN = "https://enablebanking.com/sign-in/"
+EB_PORTAALI = "https://enablebanking.com/cp/applications"
+EB_TESTIPALUU = "https://enablebanking.com/auth_redirect"
+EHDOT = "https://github.com/vsalmens/rahaputki/blob/main/koodi/ehdot"
+EB_KUVAUS = "Rahaputki - personal spending tracker running on the user's own computer"
+UUID_KUVIO = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+                        r"[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+
+def _komentorivi():
+    """Ohjeissa näytettävä komento sen mukaan, millä koneella ollaan."""
+    return "py koodi\\kirjanpito.py" if os.name == "nt" else "python3 koodi/kirjanpito.py"
+
+
+def _kysy(kysymys, oletus=""):
+    """input(), joka ei kaadu putkitettuun tyhjään syötteeseen."""
+    try:
+        vastaus = siisti(input(kysymys))
+    except EOFError:
+        return oletus
+    return vastaus or oletus
+
+
+def _kylla(kysymys, oletus=True):
+    vastaus = _kysy(f"{kysymys} [{'K/e' if oletus else 'k/E'}] ").lower()
+    return oletus if not vastaus else vastaus[0] in "kyj1"
+
+
+def _odota_enter(teksti="Paina Enter kun olet valmis..."):
+    _kysy(f"\n{teksti} ")
+
+
+def _siivoa_polku(s):
+    """Ikkunaan raahattu tiedosto tulee lainausmerkeissä tai kenoviivoin."""
+    s = (s or "").strip()
+    if len(s) > 1 and s[0] == s[-1] and s[0] in "\"'":
+        s = s[1:-1]
+    return s.replace("\\ ", " ").strip()
+
+
+def _leikepoydalta():
+    """Konsoliin liittäminen on monelle hankalaa (etenkin Windowsissa), joten
+    luetaan mieluummin itse. Palauttaa None, jos leikepöytää ei saada auki
+    lainkaan — silloin kysytään liittämistä eikä luvata mitään turhaan.
+
+    tkinter kuuluu standardikirjastoon, mutta esim. Homebrew-Pythonista se
+    puuttuu; siksi perässä on käyttöjärjestelmän oma komento."""
+    try:
+        import tkinter
+        ikkuna = tkinter.Tk()
+        ikkuna.withdraw()
+        arvo = ikkuna.clipboard_get()
+        ikkuna.destroy()
+        return siisti(str(arvo))
+    except ImportError:
+        pass
+    except Exception:
+        return ""
+    import subprocess
+    komento = (["powershell", "-NoProfile", "-Command", "Get-Clipboard"]
+               if os.name == "nt" else ["pbpaste"] if sys.platform == "darwin"
+               else ["xclip", "-selection", "clipboard", "-o"])
+    try:
+        tulos = subprocess.run(komento, capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return siisti(tulos.stdout) if tulos.returncode == 0 else None
+
+
+def _avaa_selain(url):
+    try:
+        import webbrowser
+        if webbrowser.open(url):
+            return True
+    except (ImportError, OSError):
+        pass
+    return False
+
+
+def _varmista_kirjastot():
+    """pyjwt + cryptography ovat pankkihaun ainoa asennettava osa. Asennus
+    ajetaan samalla tulkilla jolla ohjelma pyörii, jottei paketti eksy toiseen
+    Python-asennukseen. Ei-tekninen käyttäjä ei osaa tehdä tätä käsin."""
+    def _loytyy():
+        try:
+            import jwt  # noqa: F401
+            import cryptography  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    if _loytyy():
+        return True
+    print("\nPankkihaku tarvitsee kaksi lisäkirjastoa (pyjwt ja cryptography).")
+    if not _kylla("Asennetaanko ne nyt puolestasi?"):
+        print("  Voit asentaa ne itse komennolla:")
+        print(f"  {Path(sys.executable).name} -m pip install pyjwt cryptography")
+        return False
+    import subprocess
+    for lisa in ([], ["--user"], ["--user", "--break-system-packages"]):
+        komento = [sys.executable, "-m", "pip", "install", "--quiet",
+                   *lisa, "pyjwt", "cryptography"]
+        try:
+            tulos = subprocess.run(komento, capture_output=True, text=True, timeout=300)
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"⚠ asennus ei käynnistynyt: {e}")
+            break
+        if tulos.returncode == 0:
+            import importlib
+            import site
+            try:
+                omat = site.getusersitepackages()
+            except AttributeError:
+                omat = ""
+            for polku in ([omat] if isinstance(omat, str) else list(omat or [])):
+                if polku and polku not in sys.path:
+                    sys.path.append(polku)
+            importlib.invalidate_caches()
+            if _loytyy():
+                print("✓ kirjastot asennettu")
+                return True
+            print("✓ kirjastot asennettu — käynnistä Rahaputki uudelleen, "
+                  "niin ne otetaan käyttöön")
+            return False
+    print("⚠ automaattinen asennus ei onnistunut. Asenna käsin:")
+    print(f"  {Path(sys.executable).name} -m pip install pyjwt cryptography "
+          "--break-system-packages")
+    return False
+
+
+def _etsi_avaimet():
+    """Enable Banking nimeää selaimessa luodun avaimen sovelluksen id:llä
+    (<uuid>.pem), joten tiedostonimi kertoo suoraan EB_APP_ID:n."""
+    koti = Path.home()
+    kansiot = [koti / "Downloads", koti / "Lataukset", koti / "Desktop",
+               koti / "Työpöytä", koti / "Documents", JUURI, koti]
+    loydot = {}
+    for kansio in kansiot:
+        try:
+            for polku in kansio.glob("*.pem"):
+                if polku.is_file() and UUID_KUVIO.match(polku.stem):
+                    loydot[polku.resolve()] = polku.stat().st_mtime
+        except OSError:
+            continue
+    return [p for p, _ in sorted(loydot.items(), key=lambda kv: -kv[1])]
+
+
+def _kirjoita_env(arvot):
+    """Päivitä avain=arvo-rivit pankkihaku.env:iin muuta sisältöä rikkomatta."""
+    polku = _env_polku()
+    rivit = polku.read_text(encoding="utf-8").splitlines() if polku.exists() else []
+    jaljella = dict(arvot)
+    ulos = []
+    for rivi in rivit:
+        avain = rivi.partition("=")[0].strip()
+        if avain in jaljella and not rivi.lstrip().startswith("#"):
+            ulos.append(f"{avain}={jaljella.pop(avain)}")
+        else:
+            ulos.append(rivi)
+    if not ulos:
+        ulos = ["# Rahaputki: pankkihaun tunnukset. Ei jaeta, ei versioida."]
+    ulos += [f"{k}={v}" for k, v in jaljella.items()]
+    polku.parent.mkdir(parents=True, exist_ok=True)
+    polku.write_text("\n".join(ulos) + "\n", encoding="utf-8")
+    try:
+        os.chmod(polku, 0o600)
+    except OSError:
+        pass
+    return polku
+
+
+def _lyhenna_koti(polku):
+    """~/... on siirrettävä ja lyhyt; _eb_asetukset laajentaa sen takaisin."""
+    try:
+        return "~/" + str(Path(polku).relative_to(Path.home())).replace(os.sep, "/")
+    except ValueError:
+        return str(polku)
+
+
+def _talleta_avain(pem):
+    """Avain pois pilvisynkasta ja pois latauskansiosta: se on lukupääsy
+    tileihisi, ja Lataukset on kansio jonka ihmiset tyhjentävät."""
+    kohde = Path.home() / ".rahaputki" / pem.name
+    if pem.resolve() == kohde.resolve():
+        return kohde
+    print(f"\nAvain on nyt: {pem}")
+    print(f"Turvallisempi paikka on {kohde} — pilvisynkan ja Lataukset-kansion")
+    print("ulkopuolella, vain sinun luettavissasi.")
+    if not _kylla("Siirretäänkö avain sinne?"):
+        return pem
+    try:
+        kohde.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(pem, kohde)
+        os.chmod(kohde, 0o600)
+    except OSError as e:
+        print(f"⚠ siirto ei onnistunut ({e}) — jätetään avain paikalleen")
+        return pem
+    try:
+        os.remove(pem)
+    except OSError:
+        print(f"ℹ alkuperäistä ei voitu poistaa — poista se itse: {pem}")
+    print(f"✓ avain siirretty: {kohde}")
+    return kohde
+
+
+def _velho_tunnukset(pakota=False):
+    """Vaihe 1: sovellus Enable Bankingiin ja sen avain koneelle."""
+    nyt = _eb_asetukset()
+    if nyt["EB_APP_ID"] and nyt["EB_KEY_PATH"] and not pakota:
+        polku = Path(nyt["EB_KEY_PATH"]).expanduser()
+        if polku.exists():
+            print(f"✓ tunnukset ovat jo tallessa ({_env_polku()})")
+            print(f"  sovellus {nyt['EB_APP_ID']}, avain {polku}")
+            if not _kylla("Vaihdetaanko ne toiseen sovellukseen?", oletus=False):
+                return True
+        else:
+            print(f"⚠ avainta ei löydy polusta {polku} — etsitään uusi")
+    print(f"""
+VAIHE 1/4 — Enable Banking -sovellus (kerran, noin 5 minuuttia)
+
+Enable Banking on suomalainen, Finanssivalvonnan valvoma yritys, jonka
+rajapinnan kautta pankit luovuttavat sinulle omat tapahtumasi. Teet sinne
+oman kehittäjätunnuksen: silloin tilitietosi kulkevat sinun sovelluksesi
+kautta suoraan koneellesi eikä välissä ole muita palveluita.
+
+Selain avautuu osoitteeseen {EB_KIRJAUTUMINEN}
+
+  1. Anna sähköpostiosoitteesi. Saat sähköpostiin kirjautumislinkin —
+     salasanaa ei ole. Klikkaa linkkiä.
+  2. Valitse ylhäältä "API applications" ja vieritä alas kohtaan
+     "Add a new application".
+  3. Environment: valitse "Production" (oikea pankki, oikeat tapahtumat).
+  4. Avaimen luonti: jätä ensimmäinen vaihtoehto valituksi
+     ("Generate in the browser ... and export private key").
+  5. Application name: kirjoita  Rahaputki
+  6. Allowed redirect URLs: kopioi tämä rivi sellaisenaan:
+
+        {EB_TESTIPALUU}
+
+     Tänne pankki palauttaa sinut tunnistautumisen jälkeen. Sivu näyttää
+     tyhjältä lomakkeelta — se on kunnossa: koodi on selaimen
+     osoiterivillä, ja Rahaputki kysyy sen sinulta.
+  7. Loput kentät ovat vapaaehtoisia, mutta kannattaa täyttää:
+
+        Application description:
+          {EB_KUVAUS}
+        Email for data protection matters:
+          oma sähköpostiosoitteesi (sovellus on sinun, ei kenenkään muun)
+        Privacy URL of the application:
+          {EHDOT}/tietosuoja.md
+        Terms URL of the application:
+          {EHDOT}/kayttoehdot.md
+
+  8. Klikkaa "Register". Selain lataa tiedoston, jonka nimi on pitkä
+     tunnus ja pääte .pem — se on sovelluksesi salainen avain.
+     Älä avaa sitä äläkä lähetä sitä kenellekään.
+""")
+    _avaa_selain(EB_KIRJAUTUMINEN)
+    _odota_enter("Paina Enter, kun .pem-tiedosto on latautunut...")
+    pem = None
+    for _ in range(3):
+        loydot = _etsi_avaimet()
+        if loydot:
+            print("\nLöytyi avaintiedosto:")
+            for i, p in enumerate(loydot[:5], 1):
+                print(f"  {i}) {p}")
+            valinta = _kysy("Valitse numero, tai raahaa oikea tiedosto tähän "
+                            "ikkunaan ja paina Enter [1] ", "1")
+            if valinta.isdigit() and 1 <= int(valinta) <= len(loydot[:5]):
+                pem = loydot[int(valinta) - 1]
+            else:
+                pem = Path(_siivoa_polku(valinta)).expanduser()
+        else:
+            print("\nEn löytänyt .pem-tiedostoa Lataukset- tai Työpöytä-kansiosta.")
+            annettu = _siivoa_polku(_kysy("Raahaa tiedosto tähän ikkunaan ja "
+                                          "paina Enter (tai Enter = etsi uudelleen): "))
+            if not annettu:
+                continue
+            pem = Path(annettu).expanduser()
+        if pem and pem.is_file():
+            break
+        print(f"⚠ tiedostoa ei löydy: {pem}")
+        pem = None
+    if not pem:
+        print("Avainta ei löytynyt. Aja komento uudelleen, kun tiedosto on koneella.")
+        return False
+    if not UUID_KUVIO.match(pem.stem):
+        print(f"\nℹ tiedoston nimi ei ole sovelluksen tunnus ({pem.name}).")
+        app_id = _kysy("Kopioi sovelluksen tunnus (Application ID) portaalista tähän: ")
+        if not app_id:
+            return False
+    else:
+        app_id = pem.stem
+    pem = _talleta_avain(pem)
+    env = _kirjoita_env({"EB_APP_ID": app_id, "EB_KEY_PATH": _lyhenna_koti(pem)})
+    print(f"✓ tunnukset tallennettu tiedostoon {env.parent.name}/{env.name}")
+    return True
+
+
+def eb_sovellus():
+    """GET /application — sovelluksen nimi, ympäristö, tila ja paluuosoitteet."""
+    return _eb_kutsu("/application", eb_token())
+
+
+def _kentta(data, *nimet):
+    for nimi in nimet:
+        if isinstance(data, dict) and data.get(nimi) not in (None, ""):
+            return data[nimi]
+    return None
+
+
+def _velho_tarkista():
+    """Vaihe 2: toimiiko avain, ja onko sovellus aktivoitu omilla tileillä."""
+    print("\nVAIHE 2/4 — yhteyden ja sovelluksen tarkistus")
+    try:
+        app = eb_sovellus()
+    except EBVirhe as e:
+        print(f"⚠ Enable Banking ei hyväksynyt tunnuksia (virhe {e.koodi}).")
+        if e.koodi == 404:
+            print("  Vanhempi rajapintaversio ei tunne /application-kutsua — "
+                  "jatketaan ilman tarkistusta.")
+            return {}
+        if e.koodi in (401, 403):
+            print("  Yleisin syy: avaintiedosto ja sovelluksen tunnus eivät ole")
+            print("  samasta sovelluksesta. Aja komento uudelleen valitsemalla")
+            print("  'vaihdetaanko toiseen sovellukseen' ja valitse oikea .pem.")
+        else:
+            print(f"  {e.runko}")
+        return None
+    except (OSError, ValueError) as e:
+        print(f"⚠ yhteys ei toiminut: {e}")
+        return None
+    except Exception as e:  # avaintiedosto voi olla rikki tai väärää tyyppiä
+        print(f"⚠ avainta ei voitu käyttää: {e}")
+        print("  Tarkista, että valitsit Enable Bankingin lataaman .pem-tiedoston.")
+        return None
+    nimi = _kentta(app, "name") or "(nimetön)"
+    ymparisto = str(_kentta(app, "environment") or "?").upper()
+    aktiivinen = _kentta(app, "active")
+    paluut = _kentta(app, "redirect_urls", "redirectUrls") or []
+    print(f"✓ yhteys toimii — sovellus: {nimi} ({ymparisto})")
+    if paluut:
+        print("  paluuosoitteet: " + ", ".join(str(u) for u in paluut))
+    if aktiivinen is False:
+        print("""
+Sovellus ei ole vielä aktiivinen. Se aktivoituu, kun liität siihen omat
+tilisi — henkilökäytössä tämä on ilmainen tapa saada tuotantoyhteys.
+
+  1. Selain avautuu sovelluslistaan.
+  2. Klikkaa sovelluksesi kohdalta "Activate by linking accounts"
+     (tai "Link accounts").
+  3. Valitse pankki ja tunnistaudu pankkitunnuksillasi.
+  4. TOISTA kohdat 2–3 jokaiselle tilille ja kortille, jonka haluat mukaan —
+     myös eri pankeille erikseen. Liittämättömästä tilistä ei saa
+     tapahtumia myöhemminkään; rajapinta palauttaa siitä tyhjää.
+""")
+        _avaa_selain(EB_PORTAALI)
+        _odota_enter("Paina Enter, kun tilit on liitetty...")
+        try:
+            app = eb_sovellus()
+        except (EBVirhe, OSError, ValueError):
+            pass
+        if _kentta(app, "active") is False:
+            print("ℹ sovellus näkyy yhä ei-aktiivisena. Voit jatkaa silti, "
+                  "mutta valtuutus todennäköisesti palauttaa tyhjän tililistan.")
+    return app
+
+
+def _valitse_paluuosoite(app, cfg):
+    """Paikallinen paluuosoite on paras: koodi napataan selaimesta itsestään.
+    Muussa tapauksessa käytetään sovellukselle rekisteröityä osoitetta."""
+    paluut = [siisti(str(u)) for u in (_kentta(app, "redirect_urls", "redirectUrls") or [])]
+    nykyinen = siisti((cfg.get("pankkihaku") or {}).get("redirect_url", ""))
+    # Enable Banking hylkää http-skeeman ("uses unsupported scheme"), joten
+    # paikallinen kuuntelija on käytettävissä vain jos sellainen on jostain
+    # syystä rekisteröity — https://localhost ei kelpaa, koska emme tarjoile TLS:ää.
+    paikallinen = next((u for u in paluut if u.lower().startswith("http://")
+                        and ("localhost" in u or "127.0.0.1" in u)), "")
+    if paikallinen:
+        return paikallinen
+    if nykyinen and (not paluut or nykyinen in paluut):
+        return nykyinen
+    if paluut:
+        return paluut[0]
+    return EB_TESTIPALUU
+
+
+def _odota_koodi(redirect, aikaraja=300):
+    """Kuuntelee paikallista paluuosoitetta ja nappaa ?code=-arvon selaimesta,
+    jottei käyttäjän tarvitse kopioida mitään."""
+    import http.server
+    import urllib.parse
+    osat = urllib.parse.urlsplit(redirect)
+    if osat.scheme != "http" or osat.hostname not in ("localhost", "127.0.0.1"):
+        return ""
+    saalis = {}
+
+    class Kasittelija(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            kysely = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            saalis["code"] = (kysely.get("code") or [""])[0]
+            saalis["error"] = (kysely.get("error") or [""])[0]
+            onnistui = bool(saalis["code"])
+            runko = ("<!doctype html><meta charset=\"utf-8\">"
+                     "<body style=\"font-family:system-ui,sans-serif;padding:3em;"
+                     "max-width:32em;margin:auto\">"
+                     + ("<h2>Valmis ✓</h2><p>Pankki on valtuutettu."
+                        if onnistui else
+                        "<h2>Valtuutus keskeytyi</h2><p>Palaa Rahaputkeen ja "
+                        "yritä uudelleen.")
+                     + "</p><p>Voit sulkea tämän välilehden ja palata "
+                       "Rahaputken ikkunaan.</p>").encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(runko)))
+            self.end_headers()
+            self.wfile.write(runko)
+
+        def log_message(self, *a):
+            pass
+
+    portti = osat.port or 80
+    try:
+        palvelin = http.server.HTTPServer(("127.0.0.1", portti), Kasittelija)
+    except OSError as e:
+        print(f"⚠ porttia {portti} ei voitu avata ({e}) — käytetään kopiointitapaa")
+        return ""
+    palvelin.timeout = 1.0
+    loppuu = time.time() + aikaraja
+    try:
+        while not saalis and time.time() < loppuu:
+            palvelin.handle_request()
+    except KeyboardInterrupt:
+        return ""
+    finally:
+        palvelin.server_close()
+    if saalis.get("error"):
+        print(f"⚠ pankki palautti virheen: {saalis['error']}")
+    return saalis.get("code", "")
+
+
+def _koodi_kelpaa(syote, koodi):
+    """Osoiteliitos tunnistetaan 'code=' -osasta; paljas liitos hyväksytään
+    vain jos se näyttää koodilta (pitkä, yhtenäinen) eikä sekalaiselta
+    leikepöydän sisällöltä."""
+    if not koodi:
+        return False
+    return "code=" in syote or (len(koodi) >= 16 and " " not in koodi)
+
+
+def _kysy_koodi(redirect):
+    """Pankista palataan osoitteeseen, jonka perässä koodi on. Sivu itse voi
+    näyttää tyhjältä lomakkeelta — koodi on osoiterivillä, ei sivulla."""
+    print("\nKun olet tunnistautunut, selain palaa osoitteeseen")
+    print(f"  {redirect}?code=…")
+    print("Sivu voi näyttää tyhjältä tai oudolta — se ei haittaa. Tarvittava")
+    print("koodi on selaimen OSOITERIVILLÄ. Kopioi osoiterivi kokonaan")
+    print("(macOS: Cmd-L, Cmd-C — Windows: Ctrl-L, Ctrl-C).")
+    leikepoyta = True
+    for _ in range(3):
+        vastaus = _kysy("\nPaina Enter kun olet kopioinut (luen leikepöydän), "
+                        "tai liitä osoite tähän: " if leikepoyta
+                        else "\nLiitä kopioitu osoite tähän: ")
+        if not vastaus:
+            leike = _leikepoydalta()
+            if leike is None:
+                leikepoyta = False
+                print("⚠ leikepöytää ei saada luettua tällä koneella — "
+                      "liitä osoite alle (macOS: Cmd-V, Windows: Ctrl-V "
+                      "tai hiiren oikea nappi)")
+                continue
+            if "code=" not in leike:
+                print("⚠ leikepöydällä ei ole valtuutusosoitetta — "
+                      "kopioi selaimen osoiterivi ja yritä uudelleen")
+                continue
+            vastaus = leike
+        koodi = _siivoa_koodi(vastaus)
+        if _koodi_kelpaa(vastaus, koodi):
+            return koodi
+        print("⚠ tuo ei näytä valtuutuskoodilta — odotin osoitetta, jossa on "
+              "'?code=' -osa")
+    return ""
+
+
+def _eb_pankit(tok, maa="FI"):
+    kaikki = _eb_kutsu(f"/aspsps?country={maa}", tok).get("aspsps", [])
+    nimet = {}
+    for a in kaikki:
+        nimet.setdefault(siisti(a.get("name", "")), a)
+    return [nimet[n] for n in sorted(nimet) if n]
+
+
+def _valitse_pankki(pankit, hakusana=""):
+    if hakusana:
+        osuvat = [a for a in pankit if normalisoi(hakusana) in normalisoi(a.get("name", ""))]
+        if len(osuvat) == 1:
+            return osuvat[0]
+        if not osuvat:
+            print(f"⚠ pankkia '{hakusana}' ei löytynyt")
+            osuvat = pankit
+        pankit = osuvat
+    print("\nPankit:")
+    for i, a in enumerate(pankit, 1):
+        print(f"  {i:2}) {a.get('name', '')}")
+    valinta = _kysy("Valitse numero (tai kirjoita osa pankin nimestä, "
+                    "Enter = peruuta): ")
+    if not valinta:
+        return None
+    if valinta.isdigit() and 1 <= int(valinta) <= len(pankit):
+        return pankit[int(valinta) - 1]
+    return _valitse_pankki(pankit, valinta)
+
+
+def _ehdota_tilinimi(pankki, acc):
+    """Tilin nimi ohjaa CSV-muodon, joten se kannattaa osua vakionimiin."""
+    aid = acc.get("account_id") or {}
+    iban = siisti(aid.get("iban") or "")
+    p = normalisoi(pankki)
+    if "revolut" in p:
+        return "Revolut"
+    if "s-pankki" in p or "s pankki" in p or "spankki" in p:
+        perus, kortti = "S-Pankki", "S-Pankki kortti"
+    elif p.startswith("op") or "osuuspankki" in p or "pohjola" in p:
+        perus, kortti = "OP-tili", "OP-kortti"
+    else:
+        perus = siisti(pankki) or "Pankki"
+        kortti = f"{perus} kortti"
+    return perus if iban else kortti
+
+
+def _on_paikanpitaja(account_id):
+    """config.esimerkki.json:in mallirivi ei ole tili — sitä ei haeta eikä
+    säilytetä, kun velho kirjoittaa oikeat tunnukset tilalle."""
+    aid = siisti(str(account_id or "")).upper()
+    return not aid or "VELHOLTA" in aid or aid.startswith("TILIN-UID")
+
+
+def _viimeinen_pvm(tilinimi):
+    """Katkopäiväsääntö: uusi reitti aloitetaan viimeisen tuodun päivän
+    PÄÄLTÄ, ei sen jälkeen — limitys on ilmaista, aukko on äänetön."""
+    paivat = [siisti(r.get("pvm", "")) for r in lue_ledger()
+              if siisti(r.get("tili", "")) == tilinimi]
+    return max((p for p in paivat if p), default="")
+
+
+def _tunniste(acc):
+    """Tilin pysyvä tunniste: IBAN, tai kortin kohdalla sen oma tunnus."""
+    aid = acc.get("account_id") or {}
+    return siisti(aid.get("iban") or (aid.get("other") or {}).get("identification") or "")
+
+
+def _tallenna_tilit(cfg, pankki, tilit):
+    """Nimeä noudetut tilit ja kirjoita ne config.jsoniin.
+
+    Suostumus uusitaan pankeittain 90–180 päivän välein, ja tilin uid voi
+    vaihtua sen mukana. Rivi tunnistetaan siksi ensisijaisesti IBANista:
+    uusinta päivittää vanhan rivin sen sijaan että kasvattaisi listaa
+    kuolleilla tunnuksilla."""
+    ph = cfg.setdefault("pankkihaku", {})
+    ph["palvelu"] = "enablebanking"
+    lista = ph.setdefault("tilit", [])
+    lista[:] = [t for t in lista if not _on_paikanpitaja(t.get("account_id"))]
+    print(f"\nValtuutus onnistui: {len(tilit)} tiliä. Nimeä ne niin kuin haluat "
+          "niiden näkyvän raportissa.")
+    print("Vakionimet OP-tili / S-Pankki / Revolut osaavat pankin oman "
+          "CSV-muodon; muut nimet käsitellään korttimuodossa.")
+    # Käsin asetettu alkupäivä ei saa kadota, kun vanha rivi korvautuu.
+    vanhat_alkaen = {t.get("tili"): t.get("alkaen") for t in lista if t.get("alkaen")}
+    nahdyt, uusia = [], 0
+    for acc in tilit:
+        uid = str(acc.get("uid", ""))
+        if not uid:
+            continue
+        tunniste = _tunniste(acc)
+        vanha = (next((t for t in lista if tunniste
+                       and siisti(str(t.get("tunniste", ""))) == tunniste), None)
+                 or next((t for t in lista if t.get("account_id") == uid), None))
+        kuvaus = siisti(" ".join(str(x) for x in [acc.get("name"), acc.get("product"),
+                                                  acc.get("usage")] if x))
+        ehdotus = (vanha or {}).get("tili") or _ehdota_tilinimi(pankki, acc)
+        print(f"\n  tili {tunniste or uid}  {kuvaus}".rstrip())
+        nimi = _kysy(f"  Nimi raportissa [{ehdotus}]: ", ehdotus)
+        rivi = {"tili": nimi, "account_id": uid, "tunniste": tunniste,
+                "pankki": siisti(pankki)}
+        if vanha is None:
+            rivi["alkaen"] = _viimeinen_pvm(nimi) or vanhat_alkaen.get(nimi, "")
+            if rivi["alkaen"]:
+                print(f"  ℹ pääkirjassa on tätä nimeä viimeksi {rivi['alkaen']} — "
+                      "nouto aloitetaan siitä päivästä (limitys on turvallinen)")
+            lista.append(rivi)
+            uusia += 1
+        else:
+            if vanha.get("account_id") != uid:
+                print("  ↻ valtuutus uusittu — tilin tunnus päivitetty vanhalle riville")
+            vanha.update(rivi)
+        nahdyt.append(uid)
+    # Vanhat rivit (ennen tunniste-kenttää) eivät tiedä pankkiaan, joten
+    # tunnistetaan ne juuri tallennetun tilinimen perusteella — ja kysytään.
+    nimet = {t.get("tili") for t in lista if t.get("account_id") in nahdyt}
+    vanhentuneet = [t for t in lista if t.get("account_id") not in nahdyt
+                    and (siisti(str(t.get("pankki", ""))) == siisti(pankki)
+                         or (not t.get("pankki") and t.get("tili") in nimet))]
+    if vanhentuneet:
+        print("\nNämä saman pankin rivit eivät olleet mukana tässä valtuutuksessa:")
+        for t in vanhentuneet:
+            print(f"  {t.get('tili', '')}  {t.get('tunniste') or t.get('account_id')}")
+        if _kylla("Poistetaanko ne? (vanhentunut tunnus tuottaa vain virheitä)"):
+            poistetut = {id(t) for t in vanhentuneet}
+            lista[:] = [t for t in lista if id(t) not in poistetut]
+    with open(CONFIG, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    print(f"\n✓ tilit tallennettu asetukset/config.json:iin "
+          f"({uusia} uutta, {len(nahdyt) - uusia} päivitettyä)")
+
+
+def eb_valtuuta(cfg, hakusana="", app=None):
+    """Yhdistämisvelho: valitse pankki, tunnistaudu, tallenna tilit.
     Sandboxissa pankin nimeksi käy 'mock'."""
     import uuid
     tok = eb_token()
-    kaikki = _eb_kutsu("/aspsps?country=FI", tok).get("aspsps", [])
-    osuvat = [a for a in kaikki if normalisoi(nimi) in normalisoi(a.get("name", ""))]
-    if not osuvat:
-        print(f"⚠ pankkia '{nimi}' ei löytynyt; tarjolla mm.: "
-              + ", ".join(a.get("name", "") for a in kaikki[:15]))
-        return
-    a = osuvat[0]
-    redirect = siisti(cfg.get("pankkihaku", {}).get("redirect_url", "")) or \
-        "https://enablebanking.com/auth_redirect"
+    if app is None:
+        try:
+            app = eb_sovellus()
+        except (EBVirhe, OSError, ValueError):
+            app = {}
+    maa = siisti((cfg.get("pankkihaku") or {}).get("maa", "")) or "FI"
+    pankit = _eb_pankit(tok, maa)
+    if not pankit:
+        print(f"⚠ maalle {maa} ei löytynyt pankkeja")
+        return False
+    a = _valitse_pankki(pankit, hakusana)
+    if not a:
+        return False
+    redirect = _valitse_paluuosoite(app, cfg)
+    ph = cfg.setdefault("pankkihaku", {})
+    if ph.get("redirect_url") != redirect:
+        ph["redirect_url"] = redirect
     try:
         vastaus = _eb_kutsu("/auth", tok, {
-            "access": {"valid_until": (datetime.now().astimezone() + timedelta(days=90)).isoformat()},
-            "aspsp": {"name": a["name"], "country": a.get("country", "FI")},
+            "access": {"valid_until": (datetime.now().astimezone()
+                                       + timedelta(days=90)).isoformat()},
+            "aspsp": {"name": a["name"], "country": a.get("country", maa)},
             "psu_type": "personal",
             "state": str(uuid.uuid4()),
             "redirect_url": redirect})
     except EBVirhe as e:
         if e.koodi == 400:
-            print(f"⚠ EB hylkäsi valtuutuspyynnön (400): {e.runko}")
-            print(f"  Yritetty redirect_url: {redirect}")
-            print("  Todennäköinen syy: osoite ei ole sovelluksesi rekisteröityjen Redirect URLien")
-            print("  listalla. Katso enablebanking.com-portaalista sovelluksesi asetukset ja joko")
-            print("  1) lisää yllä oleva osoite listaan, tai 2) kopioi listalta jokin olemassa oleva")
-            print('  osoite config.jsoniin: "pankkihaku": {..., "redirect_url": "https://..."}')
-            return
+            print(f"⚠ Enable Banking hylkäsi valtuutuspyynnön (400): {e.runko}")
+            print(f"  Käytetty paluuosoite: {redirect}")
+            print("  Osoitteen pitää olla täsmälleen sama kuin sovelluksesi")
+            print("  'Allowed redirect URLs' -listalla portaalissa. Lisää se")
+            print(f"  sinne ({EB_PORTAALI}) tai vaihda osoite config.jsonista:")
+            print('    "pankkihaku": { "redirect_url": "https://..." }')
+            return False
         raise
-    print("Avaa selaimessa ja tunnistaudu:")
-    print("  " + str(vastaus.get("url", "?")))
-    koodi = _siivoa_koodi(input("Liitä uudelleenohjauksen ?code=-arvo (tai koko osoite) tähän: "))
+    url = str(vastaus.get("url", ""))
+    print(f"\nTunnistaudu pankkiisi selaimessa. Jos selain ei avaudu, "
+          f"kopioi osoite:\n  {url}")
+    _avaa_selain(url)
+    koodi = _odota_koodi(redirect)
+    if koodi:
+        print("✓ paluu napattu automaattisesti")
+    else:
+        koodi = _kysy_koodi(redirect)
+    if not koodi:
+        print("⚠ valtuutus keskeytyi")
+        return False
     istunto = _eb_kutsu("/sessions", tok, {"code": koodi})
-    ph = cfg.setdefault("pankkihaku", {})
-    ph["palvelu"] = "enablebanking"
-    tilit = ph.setdefault("tilit", [])
-    for acc in istunto.get("accounts", []):
-        uid = str(acc.get("uid", ""))
-        iban = (acc.get("account_id") or {}).get("iban", "")
-        print(f"  tili: {uid}  {iban}")
-        tilit.append({"tili": a["name"], "account_id": uid})
-    with open(CONFIG, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
-    print("✓ tilit tallennettu config.jsoniin — vaihda 'tili'-nimiksi omat tilinimesi "
-          "(OP-tili / S-Pankki / Revolut), jotta CSV-muoto ja dedupe osuvat")
+    tilit = istunto.get("accounts") or []
+    if not tilit:
+        print("⚠ istunto syntyi, mutta siinä ei ole yhtään tiliä.")
+        print("  Tuotantosovelluksessa tämä tarkoittaa lähes aina, ettei tiliä")
+        print("  ole liitetty sovellukseen. Käy portaalissa klikkaamassa")
+        print(f"  'Link accounts' ja liitä kyseinen tili: {EB_PORTAALI}")
+        return False
+    _tallenna_tilit(cfg, a.get("name", ""), tilit)
+    return True
+
+
+def eb_yhdista(nimi, cfg):
+    """Vanha `hae --yhdista PANKKI` -sisäänkäynti samaan velhoon."""
+    eb_valtuuta(cfg, nimi)
+
+
+def cmd_pankkihaku(args):
+    """Yksi komento, joka vie käyttöönoton alusta loppuun."""
+    cfg = lue_config()
+    print("""
+Rahaputken automaattinen pankkihaku
+===================================
+Tämän jälkeen tapahtumat tulevat pankista suoraan koneellesi ilman
+CSV-vientejä. Käyttöönotto on neljä vaihetta ja vie noin 15 minuuttia.
+Voit keskeyttää milloin tahansa (Ctrl-C) ja jatkaa myöhemmin samasta
+komennosta — tehty ei katoa.""")
+    if not _varmista_kirjastot():
+        return
+    if not _velho_tunnukset(pakota=getattr(args, "uusi_sovellus", False)):
+        return
+    app = _velho_tarkista()
+    if app is None:
+        return
+    print("\nVAIHE 3/4 — pankkien valtuutus")
+    print("Valtuutus tehdään pankin omilla tunnuksilla, ja se on voimassa")
+    print("pankista riippuen 90–180 päivää. Toista tämä jokaiselle pankille.")
+    yhdistetty = False
+    while True:
+        try:
+            yhdistetty = eb_valtuuta(cfg, "", app) or yhdistetty
+        except EBVirhe as e:
+            print(f"⚠ valtuutus epäonnistui ({e.koodi}): {e.runko}")
+        except (OSError, ValueError) as e:
+            print(f"⚠ valtuutus epäonnistui: {e}")
+        except Exception as e:
+            print(f"⚠ valtuutus epäonnistui odottamattomaan virheeseen: {e}")
+        if not _kylla("\nYhdistetäänkö vielä toinen pankki?", oletus=False):
+            break
+    if not yhdistetty:
+        print("\nYhtään tiliä ei tallennettu. Voit jatkaa myöhemmin komennolla:")
+        print(f"  {_komentorivi()} pankkihaku")
+        return
+    print("""
+VAIHE 4/4 — valmista
+
+Jatkossa riittää yksi komento (tai Pankkihaku-käynnistimen kaksoisklikkaus):
+tapahtumat noudetaan, luokitellaan ja raportti avautuu.""")
+    if _kylla("Haetaanko tapahtumat heti ja avataan raportti?"):
+        args.palvelu = "enablebanking"
+        args.ei_velhoa = True
+        cmd_hae(args)
+        cmd_aja(args)
+
 
 
 def nouda_tapahtumat(palvelu, account_id, cfg, paivia=89, tili_alkaen=""):
@@ -966,18 +1655,37 @@ def cmd_hae(args):
         except (OSError, ValueError) as e:
             print(f"⚠ yhdistäminen epäonnistui — {e}")
         return
-    tilit = ph.get("tilit") or [{"tili": "OP-tili", "account_id": "mock-op"},
-                                {"tili": "S-Pankki", "account_id": "mock-s"},
-                                {"tili": "Revolut", "account_id": "mock-rev"}]
-    if "pankkihaku" not in cfg:
-        cfg["pankkihaku"] = {"palvelu": palvelu, "tilit": tilit}
-        with open(CONFIG, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-        print("ℹ pankkihaku-asetukset alustettu config.jsoniin")
+    # Mallipohjan pankkihaku-lohko näyttää asetetulta, vaikka mitään ei ole
+    # vielä tehty. Käyttöönotto on tehty vasta kun on oikeita tilejä JA avain.
+    tilit = [t for t in (ph.get("tilit") or []) if not _on_paikanpitaja(t.get("account_id"))]
+    tunnukset = bool(_eb_asetukset()["EB_APP_ID"]) if palvelu == "enablebanking" else True
+    nimenomaan_mock = "mock" in (getattr(args, "palvelu", None), ph.get("palvelu"))
+    if not nimenomaan_mock and (not tilit or not tunnukset):
+        # Kaksoisklikkaajan reitti velhoon: käyttöönottoa ei tarvitse tietää
+        # erilliseksi komennoksi, se tarjotaan siinä missä sitä kaivataan.
+        if not getattr(args, "ei_velhoa", False) and sys.stdin.isatty():
+            print("Automaattista pankkihakua ei ole vielä otettu käyttöön.")
+            if _kylla("Otetaanko se käyttöön nyt? (ohjattu, noin 15 min)"):
+                args.ei_velhoa = True
+                return cmd_pankkihaku(args)
+        palvelu = "mock"
+        print("Automaattista pankkihakua ei ole otettu käyttöön — "
+              "alla on kuivaharjoittelu.")
+        print(f"Ota se käyttöön ohjatusti: {_komentorivi()} pankkihaku\n")
+    tilit = tilit or [{"tili": "OP-tili", "account_id": "mock-op"},
+                      {"tili": "S-Pankki", "account_id": "mock-s"},
+                      {"tili": "Revolut", "account_id": "mock-rev"}]
     INBOX.mkdir(exist_ok=True)
     yhteensa = 0
+    # Saman nimiset tilit (esim. Revolutin monta taskua) kirjoitetaan samaan
+    # tiedostoon: yksi tiedosto per tilinimi, ei päällekirjoitusta.
+    kertyma = {}
     for t in tilit:
         tili, aid = t.get("tili", ""), t.get("account_id", "")
+        if _on_paikanpitaja(aid):
+            print(f"· {tili}: mallipohjan paikanpitäjä, ohitetaan "
+                  f"(oikea tunnus tulee komennosta '{_komentorivi()} pankkihaku')")
+            continue
         try:
             data = nouda_tapahtumat(palvelu, aid, cfg, getattr(args, "paivia", None) or 89,
                                     t.get("alkaen", ""))
@@ -999,10 +1707,13 @@ def cmd_hae(args):
         if not rivit:
             print(f"· {tili}: ei tapahtumia")
             continue
-        polku = INBOX / f"hae_{palvelu}_{tili.replace(' ', '_')}_{date.today().isoformat()}.csv"
-        kirjoita_pankkicsv(tili, rivit, polku)
-        print(f"✓ {tili}: {len(rivit)} tapahtumaa → inbox/{polku.name}")
+        kertyma.setdefault(tili, []).extend(rivit)
+        print(f"✓ {tili}: {len(rivit)} tapahtumaa")
         yhteensa += len(rivit)
+    for tili, rivit in kertyma.items():
+        polku = INBOX / f"hae_{palvelu}_{tili.replace(' ', '_')}_{date.today().isoformat()}.csv"
+        kirjoita_pankkicsv(tili, sorted(rivit, key=lambda r: r["pvm"]), polku)
+        print(f"  → inbox/{polku.name} ({len(rivit)} riviä)")
     if yhteensa:
         print("\nSeuraavaksi: python3 kirjanpito.py aja   (dedupe ohittaa jo tuodut)")
 
@@ -4291,6 +5002,12 @@ def main():
     aj = ala.add_parser("aja", help="lue inbox/, luokittele, raportoi")
     aj.add_argument("--siivoa-alkaen", action="store_true", dest="siivoa_alkaen",
                     help="poista pääkirjasta alkupäivää vanhemmat rivit (muuten vain varoitetaan)")
+    pv = ala.add_parser("pankkihaku",
+                        help="ohjattu käyttöönotto: Enable Banking -sovellus, avain ja pankit")
+    pv.add_argument("--uusi-sovellus", action="store_true", dest="uusi_sovellus",
+                    help="kysy tunnukset uudelleen, vaikka ne olisi jo tallennettu")
+    pv.add_argument("--paivia", type=int, default=89,
+                    help="montako päivää historiaa lopuksi noudetaan (oletus 89)")
     h = ala.add_parser("hae", help="nouda tilitapahtumat pankkirajapinnasta inboxiin")
     h.add_argument("--palvelu", choices=["mock", "gocardless", "enablebanking"])
     h.add_argument("--paivia", type=int, default=89,
@@ -4317,6 +5034,7 @@ def main():
     args = p.parse_args()
     varmista_aloitus()
     {"aja": cmd_aja, "hae": cmd_hae, "opi": cmd_opi, "raportti": cmd_raportti,
+     "pankkihaku": cmd_pankkihaku,
      "budjetti-ehdotus": cmd_budjetti, "kurkista": cmd_kurkista,
      "selaa": cmd_selaa, "tarkista-kortit": cmd_tarkista_kortit, "siivoa-kopiot": cmd_siivoa_kopiot, "luokittele": cmd_luokittele}[args.komento](args)
 
