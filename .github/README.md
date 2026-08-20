@@ -14,10 +14,12 @@ Mikään ei mene rikki tauosta.
 
 ## Aloitus
 
-1. **Lataa** työkalu: `Code` → `Download ZIP`
-2. **Pura** ZIP ja siirrä kansio johonkin, missä se saa jäädä pysyvästi —
-   esimerkiksi Tiedostot-kansioon (`Documents`). Voit myös nimetä sen
-   uudelleen vaikka `Rahaputki`. Kirjanpitosi jää asumaan tähän kansioon,
+1. **Lataa** työkalu tästä:
+   [**⬇ rahaputki-main.zip**](https://github.com/vsalmens/rahaputki/archive/refs/heads/main.zip)
+   (sama löytyy myös yläreunan `Code`-napin takaa: `Download ZIP`)
+2. **Pura** ZIP. Kansion nimeksi tulee `rahaputki-main` — nimeä se vaikka
+   `Rahaputki` ja siirrä johonkin, missä se saa jäädä pysyvästi, esimerkiksi
+   Tiedostot-kansioon (`Documents`). Kirjanpitosi jää asumaan tähän kansioon,
    ja Lataukset on paikka, jonka ihmiset tyhjentävät.
 
    Kansion voi siirtää tai nimetä uudelleen myöhemminkin, milloin tahansa:
@@ -148,6 +150,7 @@ kotihakemistoon, jos huomaa kansion olevan synkassa.
 ## Päivittäminen
 
 1. Lataa ja pura uusi ZIP
+   ([**⬇ rahaputki-main.zip**](https://github.com/vsalmens/rahaputki/archive/refs/heads/main.zip))
 2. Vedä sen **`koodi`-kansio** oman Rahaputki-kansiosi päälle
 3. Vastaa **Korvaa** (Replace)
 4. Poista purkamasi paketti
