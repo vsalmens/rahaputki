@@ -140,7 +140,9 @@ kerta. Kaikki muu saa jäädä taustalle.
 Varmuuskopiointi on kansion kopioimista. Jos haluat kirjanpitosi useammalle
 koneelle, pidä kansio pilvitallennuksessa (esim. iCloud, OneDrive, Google
 Drive) — mutta aja putki vain yhdellä koneella kerrallaan, jotta synkronointi
-ei tuota ristiriitaisia kopioita.
+ei tuota ristiriitaisia kopioita. Pankkihaun yksityisavain on tästä ainoa
+poikkeus: se ei kuulu pilveen, ja Rahaputki sijoittaa sen automaattisesti
+kotihakemistoon, jos huomaa kansion olevan synkassa.
 
 ## Päivittäminen
 

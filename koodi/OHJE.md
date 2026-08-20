@@ -174,11 +174,18 @@ Velho avaa selaimeen osoitteen `https://enablebanking.com/sign-in/`.
    Älä avaa sitä äläkä lähetä sitä kenellekään.
 
 Palaa Rahaputken ikkunaan ja paina Enter. Velho etsii `.pem`-tiedoston
-Lataukset- ja Työpöytä-kansiosta, lukee sovelluksesi tunnuksen suoraan
-tiedostonimestä (Enable Banking nimeää avaimen sillä) ja tarjoutuu
-siirtämään avaimen turvaan hakemistoon `~/.rahaputki/` — pois
-Lataukset-kansiosta ja pilvisynkan ulottumattomista. Tunnukset kirjoitetaan
+Lataukset- ja Työpöytä-kansiosta ja lukee sovelluksesi tunnuksen suoraan
+tiedostonimestä (Enable Banking nimeää avaimen sillä). Tunnukset kirjoitetaan
 tiedostoon `asetukset/pankkihaku.env`.
+
+**Minne avain menee.** Oletuksena kansioon `asetukset/`, muiden asetustesi
+viereen: silloin kaikki on yhdessä paikassa ja seuraa mukana, jos siirrät tai
+nimeät kansion uudelleen (polku tallennetaan suhteellisena, joten se ei mene
+rikki). Avain on kuitenkin lukupääsy tileihisi, joten **jos Rahaputken kansio
+on pilvitallennuksessa** (Google Drive, iCloud, OneDrive, Dropbox), velho
+huomaa sen ja sijoittaa avaimen sen sijaan hakemistoon `~/.rahaputki/`.
+Silloin avain on olemassa vain sillä koneella — se on tarkoituskin, ja
+toiselle koneelle tarvitset oman kopion samasta tiedostosta.
 
 **Vaihe 2 — omien tilien liittäminen sovellukseen (~5 min, kerran)**
 
@@ -329,7 +336,8 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 | `raportit/yhteenveto_kk.csv` | sama matriisi Sheets-liitosta varten |
 | `raportit/yhteistalous_erittely.html` | tulostettava kotitalouserittely (selaimesta PDF) |
 | `data/yhteistalous.json` | yhteistalouden tila: tasauspäivä (mihin asti yhteiskulut on huomioitu), kk-vakiot, läsnäolot, kirjaukset — raportin osio ylläpitää tätä puolestasi |
-| `asetukset/pankkihaku.env` | pankkihaun avaimet — **ei jaeta, ei versioida** |
+| `asetukset/pankkihaku.env` | pankkihaun tunnukset — **ei jaeta, ei versioida** |
+| `asetukset/*.pem` | pankkihaun yksityisavain (pilvisynkatussa kansiossa sen sijaan `~/.rahaputki/`) — **ei jaeta, ei versioida** |
 
 ## Kustomointi
 

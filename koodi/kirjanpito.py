@@ -680,7 +680,7 @@ def eb_token():
     if not a["EB_APP_ID"] or not a["EB_KEY_PATH"]:
         raise ValueError(f"EB_APP_ID ja/tai EB_KEY_PATH puuttuvat tiedostosta {env} — "
                          f"ohjattu käyttöönotto: {_komentorivi()} pankkihaku")
-    polku = Path(a["EB_KEY_PATH"]).expanduser()
+    polku = _avainpolku(a["EB_KEY_PATH"])
     if not polku.exists():
         raise ValueError(f"yksityisavainta ei löydy polusta {polku} — "
                          f"tarkista EB_KEY_PATH tiedostossa {env} "
@@ -956,20 +956,25 @@ def _varmista_kirjastot():
 
 
 def _etsi_avaimet():
-    """Enable Banking nimeää selaimessa luodun avaimen sovelluksen id:llä
-    (<uuid>.pem), joten tiedostonimi kertoo suoraan EB_APP_ID:n."""
+    """Etsi mahdolliset yksityisavaimet. Enable Banking nimeää selaimessa
+    luodun avaimen sovelluksen id:llä (<uuid>.pem), joten sellainen kertoo
+    myös EB_APP_ID:n — siksi ne ovat listan kärjessä. Muutkin .pem-tiedostot
+    kelpaavat (esim. aiemmin itse nimetty avain), tunnus kysytään erikseen."""
     koti = Path.home()
-    kansiot = [koti / "Downloads", koti / "Lataukset", koti / "Desktop",
-               koti / "Työpöytä", koti / "Documents", JUURI, koti]
+    kansiot = [ASETUKSET, koti / "Downloads", koti / "Lataukset", koti / "Desktop",
+               koti / "Työpöytä", koti / "Documents", JUURI, koti,
+               koti / ".rahaputki", koti / ".avaimet"]
     loydot = {}
     for kansio in kansiot:
         try:
             for polku in kansio.glob("*.pem"):
-                if polku.is_file() and UUID_KUVIO.match(polku.stem):
+                if polku.is_file():
                     loydot[polku.resolve()] = polku.stat().st_mtime
         except OSError:
             continue
-    return [p for p, _ in sorted(loydot.items(), key=lambda kv: -kv[1])]
+    return [p for p, _ in sorted(loydot.items(),
+                                 key=lambda kv: (not UUID_KUVIO.match(kv[0].stem),
+                                                 -kv[1]))]
 
 
 def _kirjoita_env(arvot):
@@ -996,23 +1001,70 @@ def _kirjoita_env(arvot):
     return polku
 
 
-def _lyhenna_koti(polku):
-    """~/... on siirrettävä ja lyhyt; _eb_asetukset laajentaa sen takaisin."""
+def _lyhenna_polku(polku):
+    """Polku kirjoitetaan siirrettävässä muodossa: kansion sisällä olevat
+    suhteellisena (kansion saa siirtää ja nimetä uudelleen), kotihakemiston
+    alla olevat ~-muodossa. eb_token laajentaa molemmat takaisin."""
+    polku = Path(polku)
     try:
-        return "~/" + str(Path(polku).relative_to(Path.home())).replace(os.sep, "/")
+        return str(polku.relative_to(JUURI)).replace(os.sep, "/")
+    except ValueError:
+        pass
+    try:
+        return "~/" + str(polku.relative_to(Path.home())).replace(os.sep, "/")
     except ValueError:
         return str(polku)
 
 
+def _avainpolku(arvo):
+    """EB_KEY_PATH voi olla suhteellinen (asetukset/…), ~-alkuinen tai
+    absoluuttinen. Suhteellinen tulkitaan aina Rahaputken kansiosta, ei
+    työhakemistosta — muuten kaksoisklikkaus ja komentorivi eroaisivat."""
+    polku = Path(siisti(str(arvo or ""))).expanduser()
+    return polku if polku.is_absolute() else (JUURI / polku)
+
+
+PILVIKANSIOT = ("google drive", "googledrive", "my drive", "onedrive", "dropbox",
+                "icloud drive", "mobile documents", "nextcloud", "pcloud",
+                "jottacloud", "sync.com", "yandexdisk")
+
+
+def _pilvisynkassa(polku):
+    """Karkea mutta riittävä tunnistus: pilvikansiot näkyvät polun nimissä."""
+    nimi = str(polku).lower()
+    return any(merkki in nimi for merkki in PILVIKANSIOT)
+
+
+def _avaimen_kohde(pem):
+    """Avain kuuluu oletuksena kansioon asetukset/: silloin kaikki on yhdessä
+    paikassa ja seuraa kansiota, jos se siirretään tai nimetään uudelleen.
+
+    Poikkeus on pilvisynkattu kansio (Drive, iCloud, OneDrive…): avain on
+    lukupääsy tileihin, eikä sitä pidä synkata mihinkään. Silloin se jää
+    kotihakemistoon — ja on olemassa vain sillä koneella, mikä on tarkoituskin."""
+    if _pilvisynkassa(JUURI):
+        return Path.home() / ".rahaputki" / pem.name, True
+    return ASETUKSET / pem.name, False
+
+
 def _talleta_avain(pem):
-    """Avain pois pilvisynkasta ja pois latauskansiosta: se on lukupääsy
-    tileihisi, ja Lataukset on kansio jonka ihmiset tyhjentävät."""
-    kohde = Path.home() / ".rahaputki" / pem.name
+    """Siirrä avain pois Lataukset-kansiosta (jonka ihmiset tyhjentävät)
+    sinne, minne se tässä asennuksessa kuuluu."""
+    kohde, pilvessa = _avaimen_kohde(pem)
     if pem.resolve() == kohde.resolve():
         return kohde
+    if pilvessa and not _pilvisynkassa(pem) and pem.parent != Path.home() / "Downloads":
+        print(f"\n✓ avain on jo pilvisynkan ulkopuolella: {pem}")
+        return pem
     print(f"\nAvain on nyt: {pem}")
-    print(f"Turvallisempi paikka on {kohde} — pilvisynkan ja Lataukset-kansion")
-    print("ulkopuolella, vain sinun luettavissasi.")
+    if pilvessa:
+        print("Rahaputken kansio on pilvisynkassa, joten avainta EI tallenneta")
+        print(f"sinne. Turvallinen paikka on {kohde} — vain tällä koneella,")
+        print("vain sinun luettavissasi. Toisella koneella tarvitset oman kopion.")
+    else:
+        print(f"Se kuuluu kansioon {kohde.parent} — samaan paikkaan muiden")
+        print("asetustesi kanssa, jolloin se seuraa kansiota mukana.")
+        print("(Jos siirrät kansion pilvitallennukseen, siirrä avain pois sieltä.)")
     if not _kylla("Siirretäänkö avain sinne?"):
         return pem
     try:
@@ -1034,7 +1086,7 @@ def _velho_tunnukset(pakota=False):
     """Vaihe 1: sovellus Enable Bankingiin ja sen avain koneelle."""
     nyt = _eb_asetukset()
     if nyt["EB_APP_ID"] and nyt["EB_KEY_PATH"] and not pakota:
-        polku = Path(nyt["EB_KEY_PATH"]).expanduser()
+        polku = _avainpolku(nyt["EB_KEY_PATH"])
         if polku.exists():
             print(f"✓ tunnukset ovat jo tallessa ({_env_polku()})")
             print(f"  sovellus {nyt['EB_APP_ID']}, avain {polku}")
@@ -1119,7 +1171,7 @@ Selain avautuu osoitteeseen {EB_KIRJAUTUMINEN}
     else:
         app_id = pem.stem
     pem = _talleta_avain(pem)
-    env = _kirjoita_env({"EB_APP_ID": app_id, "EB_KEY_PATH": _lyhenna_koti(pem)})
+    env = _kirjoita_env({"EB_APP_ID": app_id, "EB_KEY_PATH": _lyhenna_polku(pem)})
     print(f"✓ tunnukset tallennettu tiedostoon {env.parent.name}/{env.name}")
     return True
 

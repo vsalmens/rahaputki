@@ -1,6 +1,7 @@
 # Salaisuudet — pankkitunnukset eivät kuulu versionhallintaan
 .env
 *.env
+*.pem
 
 # Käyttäjän oma kansio: asetukset, kirjanpito ja aineisto
 asetukset/
