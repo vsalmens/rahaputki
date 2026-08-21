@@ -886,6 +886,9 @@ def eb_istunto(session_id):
 EB_KIRJAUTUMINEN = "https://enablebanking.com/sign-in/"
 EB_PORTAALI = "https://enablebanking.com/cp/applications"
 EB_TESTIPALUU = "https://enablebanking.com/auth_redirect"
+# Paikallinen kuuntelija tekee valtuutuksesta kopioinnittoman: pankki palaa
+# tähän osoitteeseen, ja _odota_koodi nappaa koodin suoraan selaimesta.
+EB_PAIKALLINEN = "http://localhost:8765/callback"
 EHDOT = "https://github.com/vsalmens/rahaputki/blob/main/koodi/ehdot"
 EB_KUVAUS = "Rahaputki - personal spending tracker running on the user's own computer"
 UUID_HAKU = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
@@ -1245,10 +1248,15 @@ sitä kuin salasanaa: älä lähetä sitä kenellekään.""")
               "koko komennon (se alkaa 'curl' ja sisältää 'Bearer')")
     if not token:
         return None
+    # Tuotantosovellus vaatii yhteysosoitteen tietosuoja-asioihin. Portaalin
+    # lomakkeella se on oma kenttänsä; tässä se on ainoa asia, jota emme voi
+    # päätellä puolesta.
+    sposti = _kysy("\nSähköpostiosoitteesi tietosuoja-asioita varten "
+                   "(Enter = jätä täyttämättä): ")
     print("\nLuodaan avainpari tällä koneella…")
     pem_teksti, varmenne = _luo_avainpari()
     try:
-        vastaus = _rekisteroi_sovellus(token, varmenne)
+        vastaus = _rekisteroi_sovellus(token, varmenne, gdpr_email=sposti)
     except EBVirhe as e:
         if e.koodi in (401, 403):
             print("⚠ tunnus ei kelvannut (se vanhenee tunnissa). Lataa "
@@ -1560,22 +1568,42 @@ def _hallintakutsu(token, runko):
         raise EBVirhe(e.code, teksti) from e
 
 
-def _rekisteroi_sovellus(token, varmenne, nimi="Rahaputki"):
-    """Luo tuotantosovellus hallintarajapinnan kautta. Valinnaiset kentät
-    lähetetään ensin; jos rajapinta ei niitä tunne, yritetään ilman."""
+def _rekisteroi_sovellus(token, varmenne, nimi="Rahaputki", gdpr_email=""):
+    """Luo tuotantosovellus hallintarajapinnan kautta.
+
+    Paluuosoitteita pyydetään kaksi: portaalin oma sivu ja paikallinen
+    kuuntelija. Jälkimmäinen on ainoa tapa päästä eroon osoiterivin
+    kopioinnista jokaisen valtuutuksen yhteydessä, mutta rajapinta ei
+    välttämättä hyväksy http-skeemaa — silloin se pudotetaan. Samoin
+    valinnaiset kentät: ne lähetetään ensin, ja jos rajapinta ei niitä tunne,
+    yritetään ilman. Rekisteröinti on kertaluontoinen, joten kannattaa
+    yrittää parasta ensin ja tyytyä vähempään vasta jos on pakko."""
     perus = {"name": nimi, "certificate": varmenne, "environment": "PRODUCTION",
              "redirect_urls": [EB_TESTIPALUU]}
     laaja = dict(perus, description=EB_KUVAUS,
                  privacy_url=f"{EHDOT}/tietosuoja.md",
                  terms_url=f"{EHDOT}/kayttoehdot.md")
-    try:
-        return _hallintakutsu(token, laaja)
-    except EBVirhe as e:
-        if e.koodi not in (400, 422):
-            raise
-        print("ℹ rajapinta ei ottanut valinnaisia kenttiä vastaan — "
-              "täytä kuvaus ja URLit portaalissa myöhemmin")
-        return _hallintakutsu(token, perus)
+    if gdpr_email:
+        laaja["gdpr_email"] = gdpr_email
+    yritykset = [dict(laaja, redirect_urls=[EB_TESTIPALUU, EB_PAIKALLINEN]),
+                 laaja, perus]
+    for i, runko in enumerate(yritykset):
+        try:
+            vastaus = _hallintakutsu(token, runko)
+        except EBVirhe as e:
+            if e.koodi not in (400, 422) or i + 1 == len(yritykset):
+                raise
+            if i == 0:
+                print("ℹ rajapinta ei hyväksynyt paikallista paluuosoitetta — "
+                      "koodi kopioidaan jatkossa selaimen osoiteriviltä")
+            else:
+                print("ℹ rajapinta ei ottanut valinnaisia kenttiä vastaan — "
+                      "täytä kuvaus ja URLit portaalissa myöhemmin")
+            continue
+        if i == 0:
+            print(f"✓ paikallinen paluuosoite {EB_PAIKALLINEN} rekisteröity — "
+                  "tunnistautumiskoodia ei tarvitse kopioida")
+        return vastaus
 
 
 def _sovellus_id(vastaus):
@@ -1694,16 +1722,28 @@ tilisi — henkilökäytössä tämä on ilmainen tapa saada tuotantoyhteys.
     return app
 
 
+def _paluuosoitteet(app):
+    return [siisti(str(u)) for u in (_kentta(app, "redirect_urls", "redirectUrls") or [])]
+
+
+def _on_paikallinen(osoite):
+    """Paikallinen kuuntelija on käytettävissä vain http-osoitteelle omalla
+    koneella: https vaatisi varmenteen, jota emme voi tarjota."""
+    osoite = siisti(str(osoite or "")).lower()
+    return osoite.startswith("http://") and ("localhost" in osoite
+                                             or "127.0.0.1" in osoite)
+
+
 def _valitse_paluuosoite(app, cfg):
     """Paikallinen paluuosoite on paras: koodi napataan selaimesta itsestään.
     Muussa tapauksessa käytetään sovellukselle rekisteröityä osoitetta."""
-    paluut = [siisti(str(u)) for u in (_kentta(app, "redirect_urls", "redirectUrls") or [])]
+    paluut = _paluuosoitteet(app)
     nykyinen = siisti((cfg.get("pankkihaku") or {}).get("redirect_url", ""))
-    # Enable Banking hylkää http-skeeman ("uses unsupported scheme"), joten
-    # paikallinen kuuntelija on käytettävissä vain jos sellainen on jostain
-    # syystä rekisteröity — https://localhost ei kelpaa, koska emme tarjoile TLS:ää.
-    paikallinen = next((u for u in paluut if u.lower().startswith("http://")
-                        and ("localhost" in u or "127.0.0.1" in u)), "")
+    # Paikallinen kuuntelija on paras, jos sovellukselle on rekisteröity
+    # sellainen osoite: silloin koodia ei tarvitse kopioida lainkaan. Kaikki
+    # rajapinnan versiot eivät http-skeemaa hyväksy, joten eb_valtuuta osaa
+    # pudota takaisin https-osoitteeseen.
+    paikallinen = next((u for u in paluut if _on_paikallinen(u)), "")
     if paikallinen:
         return paikallinen
     if nykyinen and (not paluut or nykyinen in paluut):
@@ -1979,18 +2019,35 @@ def eb_valtuuta(cfg, hakusana="", app=None):
     if not a:
         return False
     redirect = _valitse_paluuosoite(app, cfg)
+    # Paikallinen paluuosoite säästää osoiterivin kopioinnin, mutta kaikki
+    # rajapinnan versiot eivät hyväksy http-skeemaa. Jos se torjutaan, ei
+    # kaaduta siihen vaan pudotaan sovelluksen https-osoitteeseen — ja se
+    # jää talteen, joten hylkäys tulee vastaan kerran eikä joka kerta.
+    vaihtoehdot = [redirect]
+    if _on_paikallinen(redirect):
+        vaihtoehdot += [u for u in _paluuosoitteet(app)
+                        if not _on_paikallinen(u)] or [EB_TESTIPALUU]
     ph = cfg.setdefault("pankkihaku", {})
-    if ph.get("redirect_url") != redirect:
-        ph["redirect_url"] = redirect
-    try:
-        vastaus = _eb_kutsu("/auth", tok, {
-            "access": {"valid_until": (datetime.now().astimezone()
-                                       + timedelta(days=90)).isoformat()},
-            "aspsp": {"name": a["name"], "country": a.get("country", maa)},
-            "psu_type": _psu_valinta(a),
-            "state": str(uuid.uuid4()),
-            "redirect_url": redirect})
-    except EBVirhe as e:
+    vastaus = None
+    for i, redirect in enumerate(vaihtoehdot):
+        try:
+            vastaus = _eb_kutsu("/auth", tok, {
+                "access": {"valid_until": (datetime.now().astimezone()
+                                           + timedelta(days=90)).isoformat()},
+                "aspsp": {"name": a["name"], "country": a.get("country", maa)},
+                "psu_type": _psu_valinta(a),
+                "state": str(uuid.uuid4()),
+                "redirect_url": redirect})
+            break
+        except EBVirhe as e:
+            if e.koodi == 400 and i + 1 < len(vaihtoehdot):
+                print(f"ℹ paluuosoitetta {redirect} ei hyväksytty — "
+                      f"käytetään osoitetta {vaihtoehdot[i + 1]}")
+                continue
+            vastaus = e
+            break
+    if isinstance(vastaus, EBVirhe):
+        e = vastaus
         if e.koodi == 422 and "ASPSP" in str(e.runko).upper():
             print(f"⚠ Enable Banking ei hyväksynyt pankkivalintaa (422): {e.runko}")
             print(f"  Pankki: {a.get('name', '')} ({a.get('country', maa)}), "
@@ -2006,7 +2063,9 @@ def eb_valtuuta(cfg, hakusana="", app=None):
             print(f"  sinne ({EB_PORTAALI}) tai vaihda osoite config.jsonista:")
             print('    "pankkihaku": { "redirect_url": "https://..." }')
             return False
-        raise
+        raise e
+    if ph.get("redirect_url") != redirect:
+        ph["redirect_url"] = redirect
     url = str(vastaus.get("url", ""))
     print(f"\nTunnistaudu pankkiisi selaimessa. Jos selain ei avaudu, "
           f"kopioi osoite:\n  {url}")

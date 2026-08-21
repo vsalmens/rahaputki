@@ -192,10 +192,17 @@ luoda rajapinnan kautta. Velho pyytää kopioimaan sen:
    kaikki (Cmd-A / Ctrl-A) ja kopioi.
 3. Palaa Rahaputkeen ja paina Enter — velho lukee komennon leikepöydältä.
 
-Loput tapahtuu itsestään: **avainpari luodaan tällä koneella**, ja
-rajapinnalle lähtee vain julkinen varmenne. Nimi, paluuosoite, kuvaus ja
-ehtojen URLit täyttyvät valmiiksi, ja sovelluksen tunnus tallentuu suoraan
-asetuksiin.
+Velho kysyy vain sähköpostiosoitteen tietosuoja-asioita varten (Enable
+Banking vaatii sen tuotantosovellukselta). Loput tapahtuu itsestään:
+**avainpari luodaan tällä koneella**, ja rajapinnalle lähtee vain julkinen
+varmenne. Nimi, paluuosoitteet, kuvaus ja ehtojen URLit täyttyvät valmiiksi,
+ja sovelluksen tunnus tallentuu suoraan asetuksiin.
+
+Paluuosoitteita pyydetään kaksi: portaalin oma sivu ja `http://localhost:8765/
+callback`. Jälkimmäinen on se, joka poistaa kopioinnin kokonaan — pankki palaa
+omalle koneellesi, ja Rahaputki nappaa tunnistautumiskoodin suoraan
+selaimesta. Jos rajapinta ei hyväksy http-osoitetta, se pudotetaan pois ja
+koodi kopioidaan osoiteriviltä kuten ennenkin; valtuutus ei kaadu siihen.
 
 Tämä on myös turvallisin tapa: lomakereitillä yksityisavain syntyy selaimessa
 ja päätyy latauskansioon, tässä se ei käy missään. Komento sisältää
