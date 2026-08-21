@@ -126,6 +126,28 @@ Jatkossa sama `Pankkihaku`-käynnistin noutaa tuoreet tapahtumat, luokittelee
 ne ja avaa raportin yhdellä kaksoisklikkauksella. Rautalankaohje kaikista
 vaiheista on [koodi/OHJE.md](https://github.com/vsalmens/rahaputki/blob/main/koodi/OHJE.md).
 
+## Korttilaskut PDF:stä
+
+Luottokorttien tapahtumia ei saa monesta pankista CSV:nä lainkaan, ja
+rajapinta ulottuu taaksepäin tyypillisesti 90 päivää. Vanhempi korttihistoria
+tuodaan siksi kuukausilaskujen PDF:istä:
+
+```
+python3 koodi/laskusta_csv.py --nayta lasku.pdf   # tarkista tulkinta ensin
+python3 koodi/laskusta_csv.py laskut/*.pdf        # -> inbox/*.csv
+```
+
+Muunnin tunnistaa kortin laskun tekstistä, päättelee vuoden oikein
+vuodenvaihteen yli, kirjaa hyvitykset positiivisina ja ohittaa laskun
+maksusuoritukset — ne näkyvät jo pankkitilillä siirtona. Vaatii
+`pdfplumber`-kirjaston tai poppler-utilsin `pdftotext`-komennon.
+
+**Jatkuvaan käyttöön suosittelemme silti tuontia suoraan pankista sähköisen
+rajapinnan kautta.** Se kattaa myös luottokortit, eikä laskuja tarvitse jäädä
+odottelemaan. PDF-reitti on historiaa ja varareitti varten: laskupohjat
+vaihtelevat pankeittain ja muuttuvat aika ajoin, joten aja aina ensin
+`--nayta` ja tarkista että jokainen ostorivi tunnistuu.
+
 ## Rituaali jatkossa (~15–30 min, milloin huvittaa)
 
 1. Kaksoisklikkaa `Pankkihaku`-käynnistintä — se noutaa tuoreet tapahtumat ja
