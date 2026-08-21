@@ -26,11 +26,26 @@ import json
 import os
 import re
 import shutil
+import socket
 import statistics
 import sys
+import tempfile
+import uuid
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
+
+# Tiedostolukkoon: fcntl on POSIXissa, msvcrt Windowsissa. Kumpikaan ei ole
+# pakollinen — ilman niitä ohjelma toimii, mutta ei huomaa rinnakkaista ajoa.
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
 
 # Ohjelmatiedostot asuvat koodi/-alihakemistossa ja data sen yläpuolella, jotta
 # päivitys on yhden kansion korvaaminen. Vanha litteä asennus (kaikki samassa
@@ -581,6 +596,228 @@ def parsi_tiedosto(polku: Path, cfg):
     return nimi, rivit, varoitukset
 
 
+# ---------------------------------------------------------------- lukitus
+
+# Lukittavia ovat komennot, jotka kirjoittavat pääkirjaa tai sääntöjä. Pelkkä
+# katselu (raportti, kurkista, budjetti-ehdotus) ei lukitse mitään: pääkirjan
+# lukeminen toiselta koneelta on aina sallittua.
+KIRJOITTAVAT = {"aja", "hae", "opi", "luokittele", "siivoa-kopiot", "selaa",
+                "tarkista-kortit", "pankkihaku"}
+LUKKO_VANHENEE_MIN = 30
+LUKKO_TUNNISTE = None
+
+
+def _paikallinen_lukko():
+    """Saman koneen rinnakkaiset ajot: käyttöjärjestelmän oma tiedostolukko
+    väliaikaiskansiossa. Tämä on aukoton, eikä se voi jäädä roikkumaan —
+    käyttöjärjestelmä vapauttaa lukon, kun prosessi päättyy, tapahtui se miten
+    tahansa."""
+    tunnus = hashlib.sha1(str(DATA.resolve()).encode("utf-8")).hexdigest()[:10]
+    polku = Path(tempfile.gettempdir()) / f"rahaputki-{tunnus}.lock"
+    try:
+        kahva = open(polku, "w", encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        if fcntl is not None:
+            fcntl.flock(kahva.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        elif msvcrt is not None:
+            msvcrt.locking(kahva.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        kahva.close()
+        raise SystemExit("⚠ Rahaputki on jo ajossa tällä koneella. Odota että "
+                         "edellinen ajo valmistuu.")
+    return kahva
+
+
+def _vapauta_paikallinen(kahva):
+    if kahva is None:
+        return
+    try:
+        if fcntl is not None:
+            fcntl.flock(kahva.fileno(), fcntl.LOCK_UN)
+        elif msvcrt is not None:
+            kahva.seek(0)
+            msvcrt.locking(kahva.fileno(), msvcrt.LK_UNLCK, 1)
+    except (OSError, ValueError):
+        pass
+    kahva.close()
+
+
+def _konenimi():
+    return re.sub(r"[^A-Za-z0-9_-]+", "-", socket.gethostname() or "") or "kone"
+
+
+def _lukkotiedosto():
+    """Konekohtainen nimi: jokainen kone kirjoittaa vain omaan tiedostoonsa.
+
+    Yhteinen nimi altistaisi kirjoitus-kirjoitus-törmäykselle, jonka pilvisynkka
+    ratkaisee joko rinnakkaiskopiolla tai — pahemmin — sillä että viimeinen
+    voittaa. Silloin toisen koneen lukko katoaisi äänettömästi. Kilpailijat
+    tunnistetaan siksi kansiolistauksesta, ei yhteisestä tiedostosta."""
+    return DATA / f".lukko.{_konenimi()}.json"
+
+
+def _kaikki_lukot():
+    ulos = []
+    try:
+        polut = sorted(DATA.glob(".lukko.*.json"))
+    except OSError:
+        return ulos
+    for polku in polut:
+        try:
+            with open(polku, encoding="utf-8") as f:
+                ulos.append(json.load(f))
+        except (OSError, ValueError):
+            continue
+    return ulos
+
+
+def _lukon_ika_min(tiedot):
+    try:
+        alku = datetime.fromisoformat(str(tiedot.get("aloitettu", "")))
+    except ValueError:
+        return 10 ** 6
+    return (datetime.now() - alku).total_seconds() / 60.0
+
+
+def _jarjestysavain(tiedot):
+    """Tasatilanteen ratkaisu: aiemmin aloittanut voittaa, tasapelissä pienempi
+    tunniste. Molemmat koneet päätyvät samaan tulokseen ilman neuvottelua."""
+    return (str(tiedot.get("aloitettu", "")), str(tiedot.get("tunniste", "")))
+
+
+def _lue_lukko():
+    try:
+        with open(_lukkotiedosto(), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _kirjoita_lukko(komento, tunniste):
+    try:
+        turvakirjoita_json(_lukkotiedosto(), {
+            "kone": _konenimi(), "pid": os.getpid(), "tunniste": tunniste,
+            "komento": komento,
+            "aloitettu": datetime.now().isoformat(timespec="seconds")})
+    except OSError:
+        pass
+
+
+def _kilpaileva_lukko(tunniste):
+    """Toisen koneen tuore lukko, joka voittaa oman — tai None."""
+    oma, muut = None, []
+    for tiedot in _kaikki_lukot():
+        if tiedot.get("tunniste") == tunniste:
+            oma = tiedot
+        elif _lukon_ika_min(tiedot) < LUKKO_VANHENEE_MIN:
+            muut.append(tiedot)
+    if oma is None or not muut:
+        return None
+    paras = min(muut, key=_jarjestysavain)
+    return paras if _jarjestysavain(paras) < _jarjestysavain(oma) else None
+
+
+def _varmista_omistus(tunniste, varmistus_s):
+    """Kirjoita, odota, lue: jos toinen kone ehti ensin, perääntymme.
+
+    Tämä ei tee lukosta atomista — pilvisynkan yli se ei voi olla. Se kutistaa
+    kilpailuikkunan synkan kierrosajan mittaiseksi ja tekee ratkaisusta
+    deterministisen: kumpikin kone laskee saman voittajan, joten kumpikaan ei
+    jää odottamaan turhaan."""
+    if varmistus_s <= 0:
+        return
+    time.sleep(varmistus_s)
+    voittaja = _kilpaileva_lukko(tunniste)
+    if voittaja:
+        raise SystemExit(f"⚠ Toinen kone ({voittaja.get('kone', '?')}) ehti ensin "
+                         f"({voittaja.get('komento', '?')}). Yritä hetken päästä uudelleen.")
+
+
+def lukon_virkistys():
+    """Pitkä ajo (selaa voi olla auki tunteja) pitää lukkonsa tuoreena joka
+    kirjoituksella. Samalla tarkistetaan, ettei lukko ole vaihtanut omistajaa
+    kesken ajon: jos on, keskeytetään ennen kirjoitusta eikä vasta sen
+    jälkeen, kun toisen koneen työ on jo mennyt yli."""
+    if LUKKO_TUNNISTE is None:
+        return
+    voittaja = _kilpaileva_lukko(LUKKO_TUNNISTE)
+    if voittaja:
+        raise SystemExit(f"⚠ Toinen kone ({voittaja.get('kone', '?')}) otti lukon kesken "
+                         f"ajon. Kirjoitus keskeytetty, jotta muutokset eivät mene ristiin.")
+    tiedot = _lue_lukko()
+    if tiedot and tiedot.get("tunniste") == LUKKO_TUNNISTE:
+        _kirjoita_lukko(tiedot.get("komento", ""), LUKKO_TUNNISTE)
+
+
+@contextmanager
+def paakirjalukko(komento, pakota=False):
+    """Estää päällekkäiset ajot kahdella tasolla.
+
+    1) Sama kone: käyttöjärjestelmän tiedostolukko. Aukoton.
+    2) Eri koneet: neuvoa-antava .lukko-tiedosto datakansiossa. Pilvisynkan
+       viiveen takia se ei voi olla atominen, mutta se muuttaa hiljaisen
+       datamenetyksen äänekkääksi varoitukseksi.
+
+    Toinen taso on käytössä vain, jos config.jsonissa on "lukitus": "jaettu".
+    Yhden koneen asennus on tavallisin, eikä sen kansioon kannata kirjoittaa
+    lukkotiedostoja eikä sen ajoon lisätä odotusta."""
+    global LUKKO_TUNNISTE
+    if komento not in KIRJOITTAVAT:
+        yield
+        return
+    DATA.mkdir(parents=True, exist_ok=True)
+    kahva = _paikallinen_lukko()
+    try:
+        cfg = lue_config() or {}
+    except (OSError, ValueError):
+        cfg = {}
+    if siisti(str(cfg.get("lukitus", "kone"))).lower() != "jaettu":
+        try:
+            yield
+        finally:
+            _vapauta_paikallinen(kahva)
+        return
+    if not pakota:
+        for tiedot in _kaikki_lukot():
+            if tiedot.get("kone") == _konenimi():
+                continue
+            ika = _lukon_ika_min(tiedot)
+            if ika < LUKKO_VANHENEE_MIN:
+                _vapauta_paikallinen(kahva)
+                raise SystemExit(
+                    f"⚠ Pääkirja on lukittu: {tiedot.get('kone', '?')} "
+                    f"({tiedot.get('komento', '?')}), {ika:.0f} min sitten.\n"
+                    f"  Odota että ajo valmistuu ja synkka ehtii perille. Jos lukko on\n"
+                    f"  jäänyt jumiin: python3 koodi/kirjanpito.py --pakota {komento}")
+            print(f"ℹ Vanhentunut lukko ({tiedot.get('kone', '?')}, {ika:.0f} min) ohitettu.")
+    tunniste = uuid.uuid4().hex
+    _kirjoita_lukko(komento, tunniste)
+    try:
+        varmistus = float(cfg.get("lukko_varmistus_s", 3))
+    except (TypeError, ValueError):
+        varmistus = 3.0
+    try:
+        _varmista_omistus(tunniste, varmistus)
+    except SystemExit:
+        _lukkotiedosto().unlink(missing_ok=True)
+        _vapauta_paikallinen(kahva)
+        raise
+    LUKKO_TUNNISTE = tunniste
+    try:
+        yield
+    finally:
+        try:
+            oma = _lue_lukko()
+            if oma and oma.get("tunniste") == tunniste:
+                _lukkotiedosto().unlink(missing_ok=True)
+        except OSError:
+            pass
+        LUKKO_TUNNISTE = None
+        _vapauta_paikallinen(kahva)
+
+
 # ---------------------------------------------------------------- pääkirja
 
 def lue_ledger():
@@ -622,6 +859,7 @@ def _varmuuskopioi_ledger():
 
 def kirjoita_ledger(rivit):
     DATA.mkdir(exist_ok=True)
+    lukon_virkistys()
     _varmuuskopioi_ledger()
     for r in rivit:
         r["tarkenne"] = siisti(r.get("tarkenne", "")).lower()
@@ -5871,6 +6109,8 @@ def main():
     aj = ala.add_parser("aja", help="lue inbox/, luokittele, raportoi")
     aj.add_argument("--siivoa-alkaen", action="store_true", dest="siivoa_alkaen",
                     help="poista pääkirjasta alkupäivää vanhemmat rivit (muuten vain varoitetaan)")
+    p.add_argument("--pakota", action="store_true",
+                   help="ohita toisen koneen lukko (vain jos olet varma ettei ajo ole kesken)")
     pv = ala.add_parser("pankkihaku",
                         help="ohjattu käyttöönotto: Enable Banking -sovellus, avain ja pankit")
     pv.add_argument("--uusi-sovellus", action="store_true", dest="uusi_sovellus",
@@ -5902,10 +6142,12 @@ def main():
     k.add_argument("tiedosto")
     args = p.parse_args()
     varmista_aloitus()
-    {"aja": cmd_aja, "hae": cmd_hae, "opi": cmd_opi, "raportti": cmd_raportti,
-     "pankkihaku": cmd_pankkihaku,
-     "budjetti-ehdotus": cmd_budjetti, "kurkista": cmd_kurkista,
-     "selaa": cmd_selaa, "tarkista-kortit": cmd_tarkista_kortit, "siivoa-kopiot": cmd_siivoa_kopiot, "luokittele": cmd_luokittele}[args.komento](args)
+    with paakirjalukko(args.komento, getattr(args, "pakota", False)):
+        {"aja": cmd_aja, "hae": cmd_hae, "opi": cmd_opi, "raportti": cmd_raportti,
+         "pankkihaku": cmd_pankkihaku,
+         "budjetti-ehdotus": cmd_budjetti, "kurkista": cmd_kurkista,
+         "selaa": cmd_selaa, "tarkista-kortit": cmd_tarkista_kortit,
+         "siivoa-kopiot": cmd_siivoa_kopiot, "luokittele": cmd_luokittele}[args.komento](args)
 
 
 if __name__ == "__main__":

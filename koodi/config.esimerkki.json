@@ -193,6 +193,7 @@
     }
   },
   "alkaen": "",
+  "lukitus": "kone",
   "pankkihaku": {
     "palvelu": "enablebanking",
     "redirect_url": "https://enablebanking.com/auth_redirect",

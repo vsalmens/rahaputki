@@ -474,6 +474,7 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 | `raportit/raportti.html` | kuukausigraafi + budjettivertailu + matriisi |
 | `raportit/yhteenveto_kk.csv` | sama matriisi Sheets-liitosta varten |
 | `raportit/yhteistalous_erittely.html` | tulostettava kotitalouserittely (selaimesta PDF) |
+| `data/.lukko.<kone>.json` | ajonaikainen lukko, vain jaetussa tilassa (`"lukitus": "jaettu"`); katoaa itsestään |
 | `data/varaukset.json` | odottavat korttivaraukset — `hae` kirjoittaa, `aja` täsmäyttää; poistettavissa milloin vain |
 | `data/yhteistalous.json` | yhteistalouden tila: tasauspäivä (mihin asti yhteiskulut on huomioitu), kk-vakiot, läsnäolot, kirjaukset — raportin osio ylläpitää tätä puolestasi |
 | `asetukset/pankkihaku.env` | pankkihaun tunnukset — **ei jaeta, ei versioida** |
@@ -504,6 +505,16 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   vanhemmat rivit tuomatta, vaikka ne olisivat tiedostossa — kätevä, jos et
   halua ottaa mukaan koko historiaa. Tuonti kertoo aina montako riviä rajaus
   pudotti. Tyhjä arvo (oletus) tarkoittaa, ettei mitään rajata pois.
+- **Kaksi konetta samaan kansioon**: `asetukset/config.json` →
+  `"lukitus": "jaettu"`. Oletuksena Rahaputki varmistaa vain, ettei sama kone
+  aja putkea kahdesti yhtä aikaa. Jaettu tila lisää siihen lukkotiedoston
+  (`data/.lukko.<kone>.json`), jonka toinen kone näkee pilvisynkan kautta:
+  päällekkäinen ajo kertoo kuka on liikkeellä ja millä komennolla sen sijaan,
+  että kaksi versiota pääkirjasta törmäisivät äänettömästi. Lukko vanhenee
+  itsestään 30 minuutissa, ja jumiin jääneen ohittaa `--pakota`:
+  `python3 koodi/kirjanpito.py --pakota aja`. Synkka ei ole hetkellinen,
+  joten tämä on varoitin eikä tae — älä silti aloita ajoa toisella koneella
+  ennen kuin edellinen on valmis.
 - **Uusi pankki / muuttunut CSV-muoto**: aja
   `python3 koodi/kirjanpito.py kurkista tiedosto.csv` — se näyttää enkoodauksen,
   erottimen ja otsikot. Lisää/korjaa lähde `asetukset/config.json`:iin niillä
