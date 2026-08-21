@@ -107,7 +107,13 @@ def _datajuuri():
 
 
 DATAJUURI, DATAJUURI_LAHDE = _datajuuri()
-INBOX = DATAJUURI / "inbox"
+
+# Inbox on läpikulkupaikka, ei kirjanpitoa: tiliotteet ladataan sillä koneella
+# jolla ollaan, ja tuonnin jälkeen ne ovat pääkirjassa. Siksi se jää koneen
+# omaan kansioon silloinkin, kun kirjanpito on jaetussa kansiossa — jaettuna se
+# olisi vain synkkaa odottavaa läpikulkutavaraa. Yhden kansion asennuksessa
+# juuret ovat sama polku, joten mikään ei muutu.
+INBOX = KOODIJUURI / "inbox"
 ARKISTO = INBOX / "arkisto"
 DATA = DATAJUURI / "data"
 RAPORTIT = DATAJUURI / "raportit"
@@ -134,7 +140,7 @@ ENKOODAUKSET = ["utf-8-sig", "utf-8", "iso-8859-1"]
 MIN_PYTHON = (3, 9)
 
 # Kansiot ja mallitiedostot, jotka ensikäynnistys luo puolestasi.
-ALOITUSKANSIOT = ("inbox", "data", "raportit", "asetukset")
+ALOITUSKANSIOT = (INBOX, DATA, RAPORTIT, ASETUKSET)
 ALOITUSMALLIT = ((CONFIG, "config.esimerkki.json"),
                  (SAANNOT, "saannot.esimerkki.csv"))
 
@@ -230,8 +236,8 @@ def varmista_aloitus():
     _varmista_datajuuri()
     _siirra_vanhat_asetukset()
     ensikerta = not CONFIG.exists()
-    for nimi in ALOITUSKANSIOT:
-        (DATAJUURI / nimi).mkdir(parents=True, exist_ok=True)
+    for kansio in ALOITUSKANSIOT:
+        kansio.mkdir(parents=True, exist_ok=True)
     for kohde, malli_nimi in ALOITUSMALLIT:
         malli = KOODI / malli_nimi
         if not kohde.exists() and malli.exists():
@@ -1538,9 +1544,18 @@ def _lyhenna_polku(polku):
 def _avainpolku(arvo):
     """EB_KEY_PATH voi olla suhteellinen (asetukset/…), ~-alkuinen tai
     absoluuttinen. Suhteellinen tulkitaan aina Rahaputken kansiosta, ei
-    työhakemistosta — muuten kaksoisklikkaus ja komentorivi eroaisivat."""
+    työhakemistosta — muuten kaksoisklikkaus ja komentorivi eroaisivat.
+
+    Erotetussa asennuksessa katsotaan ensin koneen omaa kansiota: avain on
+    konekohtainen, joten sen suhteellinen polku tarkoittaa sielläkin konetta
+    eikä jaettua kirjanpitokansiota. Vanha sijainti kelpaa yhä."""
     polku = Path(siisti(str(arvo or ""))).expanduser()
-    return polku if polku.is_absolute() else (DATAJUURI / polku)
+    if polku.is_absolute():
+        return polku
+    paikallinen = KOODIJUURI / polku
+    if DATAJUURI != KOODIJUURI and paikallinen.exists():
+        return paikallinen
+    return DATAJUURI / polku
 
 
 PILVIKANSIOT = ("google drive", "googledrive", "my drive", "onedrive", "dropbox",

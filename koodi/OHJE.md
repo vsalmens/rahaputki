@@ -539,9 +539,20 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   echo "$HOME/…/Rahaputki" > datakansio.txt    # koodin juureen, kerran per kone
   ```
 
-  Silloin `inbox/`, `asetukset/`, `data/` ja `raportit/` luetaan ja
-  kirjoitetaan sieltä, ja ohjelma päivittyy `git pull`illa. Suhteellinen polku
-  tulkitaan koodin juuresta. Ilman asetusta mikään ei muutu.
+  Jako menee sen mukaan, kuka tiedoston omistaa ja kuka sitä tarvitsee:
+
+  | Jaetussa kansiossa | Koneen omassa kansiossa |
+  |---|---|
+  | `data/` — pääkirja, varmuuskopiot, yhteistalous, varaukset, lukot | `inbox/` — tiliotteet ladataan sillä koneella jolla ollaan |
+  | `asetukset/` — config, säännöt, budjetti | `pankkihaku.env` — osoittaa koneen omaan avaimeen |
+  | `raportit/` — myös puhelimesta luettavissa Drive-apilla | `datakansio.txt` — osoitin jaettuun kansioon |
+
+  Yksityisavain (`.pem`) ei ole kummassakaan vaan kotihakemistossa
+  `~/.rahaputki/`, jonne ohjelma sen itse sijoittaa, kun huomaa
+  kirjanpitokansion olevan pilvisynkassa.
+
+  Ohjelma päivittyy `git pull`illa. Suhteellinen polku tulkitaan koodin
+  juuresta. Ilman asetusta mikään ei muutu: juuret ovat sama kansio.
 
   Osoitin on koodin juuressa eikä `asetukset/`-kansiossa yksinkertaisesta
   syystä: `asetukset/` on itse datakansion sisällä, joten sieltä sitä ei voisi
