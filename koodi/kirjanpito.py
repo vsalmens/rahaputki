@@ -656,9 +656,14 @@ EB_API = "https://api.enablebanking.com"
 
 
 def _eb_asetukset():
-    """EB_APP_ID ja EB_KEY_PATH (.pem) ympäristöstä tai .env-tiedostosta."""
+    """EB_APP_ID ja EB_KEY_PATH (.pem) ympäristöstä tai .env-tiedostosta.
+
+    EB_SOVELLUS_OK on sen sovelluksen tunnus, jonka käyttäjä on nimenomaan
+    hyväksynyt tälle asennukselle. Sitä vasten vaiheen 2 varoitukset
+    vaimennetaan: tietoinen valinta kysytään kerran, ei joka ajolla."""
     arvot = {"EB_APP_ID": os.environ.get("EB_APP_ID", ""),
-             "EB_KEY_PATH": os.environ.get("EB_KEY_PATH", "")}
+             "EB_KEY_PATH": os.environ.get("EB_KEY_PATH", ""),
+             "EB_SOVELLUS_OK": os.environ.get("EB_SOVELLUS_OK", "")}
     env = _env_polku()
     if env.exists():
         for rv in env.read_text(encoding="utf-8").splitlines():
@@ -1027,6 +1032,13 @@ def _varmista_kirjastot():
 AVAINKANSIOT_VIHJE = "asetukset/ tai ~/.rahaputki/"
 
 
+def _konekansio():
+    """Koneen yhteinen avainkansio. Sama kaikille tämän koneen asennuksille,
+    joten täältä löytyvä avain ei ole välttämättä tämän asennuksen eikä edes
+    saman Enable Banking -tunnuksen sovellus."""
+    return Path.home() / ".rahaputki"
+
+
 def _etsi_avaimet():
     """Etsi yksityisavain vain paikoista, joihin se kuuluu: tämän asennuksen
     asetukset/ ensin, sitten ~/.rahaputki/. Latauskansiota ja työpöytää ei
@@ -1035,15 +1047,22 @@ def _etsi_avaimet():
 
     Enable Banking nimeää selaimessa luodun avaimen sovelluksen id:llä
     (<uuid>.pem), joten sellainen kertoo myös EB_APP_ID:n — siksi ne ovat
-    kansionsa sisällä kärjessä."""
-    loydot = []
-    for kansio in (ASETUKSET, Path.home() / ".rahaputki"):
+    kansionsa sisällä kärjessä.
+
+    Palauttaa parit (polku, oma): oma=True on tämän asennuksen oma avain.
+    Koneen yhteisestä kansiosta löytynyt on jonkin toisen asennuksen, eikä
+    sitä oteta käyttöön kysymättä."""
+    loydot, nahdyt = [], set()
+    for kansio, oma in ((ASETUKSET, True), (_konekansio(), False)):
         try:
             osumat = [p.resolve() for p in kansio.glob("*.pem") if p.is_file()]
         except OSError:
             continue
         osumat.sort(key=lambda p: (not UUID_KUVIO.match(p.stem), p.name))
-        loydot += [p for p in osumat if p not in loydot]
+        for polku in osumat:
+            if polku not in nahdyt:
+                nahdyt.add(polku)
+                loydot.append((polku, oma))
     return loydot
 
 
@@ -1113,11 +1132,27 @@ def _avaimen_kohde(pem):
     lukupääsy tileihin, eikä sitä pidä synkata mihinkään. Silloin se jää
     kotihakemistoon — ja on olemassa vain sillä koneella, mikä on tarkoituskin."""
     if _pilvisynkassa(JUURI):
-        return Path.home() / ".rahaputki" / pem.name, True
+        return _konekansio() / pem.name, True
     return ASETUKSET / pem.name, False
 
 
 LATAUSKANSIOT = ("downloads", "lataukset", "desktop", "työpöytä", "tyopoyta")
+
+
+def _vapaa_nimi(kohde, pem):
+    """Portaali lataa avaimen usein nimellä enablebanking.pem, joten kahden
+    eri sovelluksen avaimet törmäävät koneen yhteisessä kansiossa. Toisen
+    asennuksen avainta ei kirjoiteta yli, vaan uusi saa numeron perään."""
+    try:
+        if not kohde.exists() or kohde.read_bytes() == pem.read_bytes():
+            return kohde
+    except OSError:
+        return kohde
+    for n in range(2, 100):
+        ehdokas = kohde.with_name(f"{kohde.stem}-{n}{kohde.suffix}")
+        if not ehdokas.exists():
+            return ehdokas
+    return kohde
 
 
 def _talleta_avain(pem):
@@ -1129,6 +1164,7 @@ def _talleta_avain(pem):
     kohde, pilvessa = _avaimen_kohde(pem)
     if pem.resolve() == kohde.resolve():
         return kohde
+    kohde = _vapaa_nimi(kohde, pem)
     lataus = normalisoi(pem.parent.name) in LATAUSKANSIOT
     if not lataus and not _pilvisynkassa(pem):
         print(f"\n✓ avain on jo turvallisessa paikassa, käytetään sitä sieltä:")
@@ -1230,7 +1266,8 @@ sitä kuin salasanaa: älä lähetä sitä kenellekään.""")
         if not UUID_KUVIO.match(app_id):
             return None
     polku = _talleta_uusi_avain(pem_teksti, app_id)
-    env = _kirjoita_env({"EB_APP_ID": app_id, "EB_KEY_PATH": _lyhenna_polku(polku)})
+    env = _kirjoita_env({"EB_APP_ID": app_id, "EB_KEY_PATH": _lyhenna_polku(polku),
+                         "EB_SOVELLUS_OK": app_id})
     print(f"✓ sovellus Rahaputki luotu ({app_id})")
     print(f"✓ yksityisavain: {polku}")
     print(f"✓ tunnukset tallennettu tiedostoon {env.parent.name}/{env.name}")
@@ -1262,13 +1299,25 @@ Jos sinulla ei vielä ole tunnusta: selain avautuu osoitteeseen
 sähköpostiisi. Salasanaa ei ole.""")
     # Sovellus on voitu luoda jo aiemmin (toinen kansio, aiempi yritys,
     # portaalin lomake). Silloin ei pidä luoda uutta vaan ottaa se käyttöön.
+    # Oletukseksi vanha avain kelpaa vain, jos se on tämän asennuksen oma:
+    # ~/.rahaputki/ on koneen kaikkien asennusten yhteinen, ja sieltä poimittu
+    # avain veisi uuden asennuksen huomaamatta toisen Enable Banking
+    # -tunnuksen sovellukseen — mikä näkyy vasta siinä, ettei sovellusta löydy
+    # portaalista eivätkä tilit aktivoidu.
     loydot = _etsi_avaimet()
+    omat = [pol for pol, oma in loydot if oma]
     if loydot:
-        polut = "\n".join(f"        {_lyhenna_polku(pol)}" for pol in loydot[:3])
+        polut = "\n".join(f"        {_lyhenna_polku(pol)}"
+                          + ("" if oma else "   (koneen yhteinen kansio)")
+                          for pol, oma in loydot[:3])
         if len(loydot) > 3:
             polut += f"\n        (ja {len(loydot) - 3} muuta)"
         olemassa = ("Käytä sovellusta, joka sinulla jo on\n"
                     "     Avaintiedosto löytyi koneelta:\n" + polut)
+        if not omat:
+            olemassa += ("\n     Avain ei ole tämän asennuksen vaan koneen yhteisessä"
+                         "\n     kansiossa. Valitse tämä vain, jos loit sovelluksen itse"
+                         "\n     samalla Enable Banking -tunnuksella, jolla juuri kirjauduit.")
     else:
         olemassa = ("Minulla on jo sovellus — raahaan sen .pem-avaintiedoston tähän\n"
                     f"     (kansioista {AVAINKANSIOT_VIHJE} ei löytynyt avainta)")
@@ -1278,7 +1327,7 @@ sähköpostiisi. Salasanaa ei ole.""")
         ("lomake", "Luon sovelluksen itse portaalin lomakkeella"),
     ]
     valinta = _valikko("Mistä lähdetään liikkeelle?", vaihtoehdot,
-                       oletus=2 if loydot else 1)
+                       oletus=2 if omat and not pakota else 1)
     if valinta == "uusi":
         if not _kylla("\nOletko kirjautunut Enable Bankingin portaaliin?", oletus=True):
             _avaa_selain(EB_KIRJAUTUMINEN)
@@ -1327,25 +1376,92 @@ Sovelluksen luonti lomakkeella (portaalin sivu API applications):
     return _ota_avain_kayttoon(kerro_lomake=True)
 
 
+def _kysy_sovellus(app_id, pem):
+    """Kysy rajapinnalta, mikä sovellus tästä avaimesta ja tunnuksesta avautuu.
+
+    Tiedostonimi ja kansio ovat arvauksia; GET /application on ainoa lähde,
+    joka kertoo sovelluksen nimen, ympäristön ja tilan — ja samalla sen, että
+    avain ja tunnus ovat samasta sovelluksesta.
+
+    Palauttaa (app, virhe). app on None vain, kun rajapinta torjui parin
+    (401/403): silloin tunnuksia ei pidä tallentaa lainkaan. Verkkokatko tai
+    vanha rajapintaversio antaa tyhjän app:n ja virheilmoituksen — käyttöönotto
+    saa silti jatkua, koska tarkistus tehdään vielä vaiheessa 2."""
+    try:
+        token = eb_jwt(app_id, pem.read_text(encoding="utf-8"))
+        return _eb_kutsu("/application", token), ""
+    except EBVirhe as e:
+        if e.koodi in (401, 403):
+            return None, "avain ja sovelluksen tunnus eivät ole samasta sovelluksesta"
+        return {}, f"rajapinta vastasi {e.koodi}"
+    except OSError as e:
+        return {}, f"yhteyttä ei saatu ({e})"
+    except Exception as e:
+        return {}, f"avainta ei voitu käyttää ({e})"
+
+
+def _hyvaksy_sovellus(app, app_id, oma):
+    """Näytä, MIKÄ sovellus ollaan ottamassa käyttöön, ennen kuin tunnukset
+    kirjoitetaan. Rajapinta ei kerro, kenen Enable Banking -tunnukselle
+    sovellus kuuluu — sen tietää vain käyttäjä, joten se kysytään aina kun
+    avain ei ole tämän asennuksen oma. Väärä sovellus paljastuisi muuten vasta
+    siinä, ettei portaalin tililtä löydy sovellusta eivätkä tilit aktivoidu."""
+    nimi = _kentta(app, "name") or "(nimetön)"
+    ymparisto = str(_kentta(app, "environment") or "?").upper()
+    print(f"\nAvain avaa sovelluksen: {nimi} ({ymparisto})")
+    print(f"  sovelluksen tunnus: {app_id}")
+    if _kentta(app, "active") is False:
+        print("  tilejä ei ole vielä liitetty (sovellus ei ole aktiivinen)")
+    paluut = [siisti(str(u)) for u in (_kentta(app, "redirect_urls", "redirectUrls") or [])]
+    varoitukset = []
+    if paluut and EB_TESTIPALUU not in paluut:
+        varoitukset.append(f"""
+⚠ Sovelluksen paluuosoite ei ole Rahaputken vaan toisen palvelun:
+    {", ".join(paluut)}
+  Sovellus on siis luotu jotain muuta ohjelmaa varten. Pankista palaava
+  kertakäyttöinen tunnistautumiskoodi ohjautuisi sen palvelimelle.""")
+    if ymparisto not in ("PRODUCTION", "?"):
+        varoitukset.append(f"""
+⚠ Sovellus on {ymparisto}-ympäristössä. Sandbox on kehittäjien leikkikenttä:
+  sieltä saa keksittyjä mock-pankkeja ja testitilejä, ei sinun tapahtumiasi.
+  Ympäristöä ei voi vaihtaa jälkikäteen — tuotantoa varten on luotava uusi
+  sovellus.""")
+    for varoitus in varoitukset:
+        print(varoitus)
+    if varoitukset:
+        return _kylla("Otetaanko se silti käyttöön?", oletus=False)
+    if not oma:
+        print("Sen pitää olla sinun sovelluksesi, luotu sillä Enable Banking")
+        print("-tunnuksella, jolla juuri kirjauduit.")
+        return _kylla("Onko tämä sinun sovelluksesi?", oletus=False)
+    return True
+
+
 def _ota_avain_kayttoon(kerro_lomake=True):
     """Etsi ja ota käyttöön olemassa oleva .pem-avain sovelluksineen."""
     if not kerro_lomake:
         print(f"\nEtsitään avaintiedostoa kansiosta {AVAINKANSIOT_VIHJE}. Se on se "
               "\n.pem-tiedosto, jonka sait sovellusta luodessasi. Jos se on muualla, "
               "\nvoit raahata sen tähän ikkunaan.")
-    pem = None
+    pem, oma = None, False
     for _ in range(3):
         loydot = _etsi_avaimet()
         if loydot:
             print("\nLöytyi avaintiedosto:")
-            for i, p in enumerate(loydot[:5], 1):
-                print(f"  {i}) {p}")
+            for i, (polku, oma) in enumerate(loydot[:5], 1):
+                lisa = "" if oma else "   (koneen yhteinen kansio — toisen asennuksen)"
+                print(f"  {i}) {polku}{lisa}")
+            # Enter poimii ensimmäisen vain, jos se on tämän asennuksen oma.
+            oletus = "1" if loydot[0][1] else ""
             valinta = _kysy("Valitse numero, tai raahaa oikea tiedosto tähän "
-                            "ikkunaan ja paina Enter [1] ", "1")
+                            f"ikkunaan ja paina Enter{' [1]' if oletus else ''} ", oletus)
+            if not valinta:
+                print("⚠ valitse numero tai raahaa tiedosto ikkunaan.")
+                continue
             if valinta.isdigit() and 1 <= int(valinta) <= len(loydot[:5]):
-                pem = loydot[int(valinta) - 1]
+                pem, oma = loydot[int(valinta) - 1]
             else:
-                pem = Path(_siivoa_polku(valinta)).expanduser()
+                pem, oma = Path(_siivoa_polku(valinta)).expanduser(), False
         else:
             print(f"\nEn löytänyt .pem-tiedostoa kansiosta {AVAINKANSIOT_VIHJE}.")
             annettu = _siivoa_polku(_kysy("Raahaa tiedosto tähän ikkunaan ja "
@@ -1367,8 +1483,21 @@ def _ota_avain_kayttoon(kerro_lomake=True):
             return False
     else:
         app_id = pem.stem
+    app, virhe = _kysy_sovellus(app_id, pem)
+    if app is None:
+        print(f"\n⚠ {virhe}.")
+        print("  Sovelluksen tunnus löytyy portaalista sen sovelluksen kohdalta,")
+        print("  jonka .pem-tiedoston valitsit. Tunnuksia ei tallennettu.")
+        return False
+    if virhe:
+        print(f"ℹ sovellusta ei voitu tarkistaa nyt: {virhe} — jatketaan silti")
+    elif not _hyvaksy_sovellus(app, app_id, oma):
+        print("\nPeruttu — tunnuksia ei tallennettu. Luo oma sovellus valitsemalla")
+        print("'Luo minulle uusi sovellus'.")
+        return False
     pem = _talleta_avain(pem)
-    env = _kirjoita_env({"EB_APP_ID": app_id, "EB_KEY_PATH": _lyhenna_polku(pem)})
+    env = _kirjoita_env({"EB_APP_ID": app_id, "EB_KEY_PATH": _lyhenna_polku(pem),
+                         "EB_SOVELLUS_OK": app_id})
     print(f"✓ tunnukset tallennettu tiedostoon {env.parent.name}/{env.name}")
     return True
 
@@ -1497,6 +1626,9 @@ def _velho_tarkista():
         print(f"⚠ avainta ei voitu käyttää: {e}")
         print("  Tarkista, että valitsit Enable Bankingin lataaman .pem-tiedoston.")
         return None
+    asetukset = _eb_asetukset()
+    hyvaksytty = bool(asetukset["EB_APP_ID"]) and (
+        asetukset["EB_SOVELLUS_OK"] == asetukset["EB_APP_ID"])
     nimi = _kentta(app, "name") or "(nimetön)"
     ymparisto = str(_kentta(app, "environment") or "?").upper()
     aktiivinen = _kentta(app, "active")
@@ -1504,6 +1636,39 @@ def _velho_tarkista():
     print(f"✓ yhteys toimii — sovellus: {nimi} ({ymparisto})")
     if paluut:
         print("  paluuosoitteet: " + ", ".join(str(u) for u in paluut))
+    # Vieras paluuosoite tarkoittaa, että käytössä on toisen ohjelman sovellus:
+    # pankista palaava kertakäyttöinen koodi kulkisi sen palvelimen kautta.
+    if not hyvaksytty and paluut and EB_TESTIPALUU not in [siisti(str(u)) for u in paluut]:
+        print(f"""
+⚠ SOVELLUS ON LUOTU TOISTA OHJELMAA VARTEN.
+
+Sen paluuosoite ei ole Rahaputken {EB_TESTIPALUU}, vaan
+{", ".join(str(u) for u in paluut)}. Pankista palaava tunnistautumiskoodi
+ohjautuisi sinne. Lisää portaalissa tälle sovellukselle Rahaputken
+paluuosoite, tai luo Rahaputkelle oma sovellus:
+
+  {_komentorivi()} pankkihaku --uusi-sovellus
+""")
+        if not _kylla("Jatketaanko silti tällä sovelluksella?", oletus=False):
+            return None
+        _kirjoita_env({"EB_SOVELLUS_OK": asetukset["EB_APP_ID"]})
+    # Ympäristöä ei voi vaihtaa jälkikäteen, joten väärä valinta portaalin
+    # lomakkeella (tai vanha sandbox-sovellus) kannattaa kertoa heti eikä
+    # vasta siinä, että tapahtumat ovat keksittyjä.
+    if not hyvaksytty and ymparisto not in ("PRODUCTION", "?"):
+        print(f"""
+⚠ SOVELLUS ON {ymparisto}-YMPÄRISTÖSSÄ, EI TUOTANNOSSA.
+
+Sandbox on kehittäjien leikkikenttä: sieltä saa keksittyjä mock-pankkeja ja
+testitilejä, ei sinun tilejäsi eikä sinun tapahtumiasi. Ympäristöä ei voi
+vaihtaa jälkikäteen — tarvitset uuden sovelluksen, jonka Environment on
+Production:
+
+  {_komentorivi()} pankkihaku --uusi-sovellus
+""")
+        if not _kylla("Jatketaanko silti tällä sovelluksella?", oletus=False):
+            return None
+        _kirjoita_env({"EB_SOVELLUS_OK": asetukset["EB_APP_ID"]})
     if aktiivinen is False:
         print("""
 Sovellus ei ole vielä aktiivinen. Se aktivoituu, kun liität siihen omat

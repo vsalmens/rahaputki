@@ -150,14 +150,35 @@ Velho kysyy mistä lähdetään liikkeelle:
   3) Luon sovelluksen itse portaalin lomakkeella
 ```
 
-Jos avaintiedosto löytyy, kohta 2 on oletus ja tiedoston nimi näkyy
-valinnassa. Velho etsii sitä vain kahdesta paikasta — tämän asennuksen
-`asetukset/` ensin, sitten `~/.rahaputki/` — eikä kahlaa Lataukset-kansiota
-tai työpöytää läpi. Muualla olevan avaimen saat käyttöön raahaamalla
-tiedoston terminaali-ikkunaan. Tämä on se reitti, jota tarvitset esimerkiksi silloin, kun
-otat Rahaputken käyttöön toisella koneella tai uudessa kansiossa: samaa
+Velho etsii avainta vain kahdesta paikasta — tämän asennuksen `asetukset/`
+ensin, sitten `~/.rahaputki/` — eikä kahlaa Lataukset-kansiota tai työpöytää
+läpi. Muualla olevan avaimen saat käyttöön raahaamalla tiedoston
+terminaali-ikkunaan. Tämä on se reitti, jota tarvitset esimerkiksi silloin,
+kun otat Rahaputken käyttöön toisella koneella tai uudessa kansiossa: samaa
 sovellusta voi käyttää monesta paikasta, eikä avainta silloin siirretä
 paikaltaan — se voi olla toisenkin asennuksen käytössä.
+
+**Kohta 2 on oletus vain, jos avain on tämän asennuksen omassa
+`asetukset/`-kansiossa.** `~/.rahaputki/` on koneen kaikkien asennusten
+yhteinen, joten sieltä löytyvä avain voi olla toisen asennuksen — ja toisen
+Enable Banking -tunnuksen — sovellus. Sellainen näkyy listalla merkinnällä
+*koneen yhteinen kansio*, se pitää valita itse, eikä sitä oteta käyttöön
+ilman erillistä vahvistusta. Ennen kuin tunnukset tallennetaan, velho kysyy
+rajapinnalta (`GET /application`) mikä sovellus avaimesta oikeasti avautuu ja
+näyttää sen nimen ja ympäristön — samalla varmistuu, että avain ja sovelluksen
+tunnus ovat samasta sovelluksesta. Väärä sovellus paljastuisi muuten vasta
+siinä, ettei portaalin tililtä löydy sitä sovellusta, jota Rahaputki käyttää,
+eivätkä tilit tunnu aktivoituvan. Samalla tarkistuu paluuosoite: jos sovellus
+on luotu jotain muuta ohjelmaa varten (esimerkiksi Syncbankia), pankista
+palaava kertakäyttöinen koodi ohjautuisi sen palvelimelle — velho varoittaa
+siitäkin.
+
+**Environment: Production, ei koskaan Sandbox.** Automaattinen tapa (A) luo
+sovelluksen suoraan tuotantoon, joten siinä ei ole mitään valittavaa.
+Lomakkeella (B) ympäristö valitaan itse — ja **väärää valintaa ei voi
+korjata jälkikäteen**, vaan on luotava uusi sovellus. Sandbox on kehittäjien
+leikkikenttä: siellä on keksittyjä mock-pankkeja ja testitilejä, ei sinun
+rahojasi. Velho tarkistaa ympäristön ja varoittaa, jos se ei ole Production.
 
 ### Tapa A: automaattinen (suositus)
 
@@ -370,7 +391,10 @@ kertaalleen — reitit deduplikoituvat keskenään.
 Velho kirjoittaa nämä puolestasi, mutta ne ovat tavallista tekstiä ja
 muokattavissa:
 
-- `asetukset/pankkihaku.env`: `EB_APP_ID=…` ja `EB_KEY_PATH=…`
+- `asetukset/pankkihaku.env`: `EB_APP_ID=…` ja `EB_KEY_PATH=…`. Lisäksi
+  `EB_SOVELLUS_OK=…` kertoo, minkä sovelluksen olet nimenomaan hyväksynyt
+  tälle asennukselle — sitä vasten vaiheen 2 varoitukset vaimennetaan,
+  jotta tietoinen valinta kysytään kerran eikä joka ajolla.
   (**ei jaeta, ei versioida**)
 - `asetukset/config.json` → `pankkihaku`: `palvelu`, `redirect_url`, ja
   `tilit`-lista muotoa
