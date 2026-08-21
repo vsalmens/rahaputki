@@ -54,27 +54,59 @@ KOODI = Path(__file__).resolve().parent
 KOODIJUURI = KOODI.parent if KOODI.name == "koodi" else KOODI
 
 
+DATAKANSIO_TIEDOSTO = "datakansio.txt"
+
+
+def _datakansio_tiedostosta():
+    """Datakansion polku koodin juuressa olevasta tiedostosta.
+
+    Osoitin datakansioon ei voi asua asetukset/-kansiossa, koska se on itse
+    datakansion sisällä. Se ei myöskään kuulu kotihakemistoon, joka on koneen
+    kaikkien asennusten yhteinen — sama harha kuin avaimilla. Jää siis koodin
+    juuri: konekohtainen, löytyy __file__:stä, eikä seuraa mukana repossa.
+
+    Tiedostossa on yksi rivi, polku. Tyhjät rivit ja #-alkuiset ohitetaan."""
+    polku = KOODIJUURI / DATAKANSIO_TIEDOSTO
+    try:
+        rivit = polku.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return ""
+    for rivi in rivit:
+        rivi = rivi.strip()
+        if rivi and not rivi.startswith("#"):
+            return rivi
+    return ""
+
+
 def _datajuuri():
-    """Kansio, jossa kirjanpito asuu: RAHAPUTKI_DATA jos asetettu, muuten koodin
-    oma juuri.
+    """Kansio, jossa kirjanpito asuu, ja mistä tieto tuli.
 
     Oletus on sama kuin ennen — kaikki yhdessä kansiossa — joten olemassa olevat
-    asennukset toimivat muuttumatta. Ympäristömuuttuja on niitä varten, jotka
-    haluavat pitää ohjelman git-checkouttina koneen omalla levyllä ja
-    kirjanpidon jaetussa pilvikansiossa: silloin koodi päivittyy git pullilla
-    eikä pilvisynkka näe .git-hakemistoa lainkaan. Suhteellinen arvo tulkitaan
-    koodin juuresta, ei työhakemistosta, jotta kaksoisklikkaus ja komentorivi
-    eivät eroa toisistaan."""
+    asennukset toimivat muuttumatta. Asetus on niitä varten, jotka haluavat
+    pitää ohjelman git-checkouttina koneen omalla levyllä ja kirjanpidon
+    jaetussa pilvikansiossa: silloin koodi päivittyy git pullilla eikä
+    pilvisynkka näe .git-hakemistoa lainkaan.
+
+    Kansion voi kertoa kahdella tavalla. Ympäristömuuttuja RAHAPUTKI_DATA
+    voittaa, ja se on kätevä kertakokeiluun. Pysyvä tapa on tiedosto
+    datakansio.txt koodin juuressa: sen lukee myös kaksoisklikattu käynnistin,
+    joka ei näe komentotulkin asetuksia lainkaan.
+
+    Suhteellinen arvo tulkitaan koodin juuresta, ei työhakemistosta, jotta
+    kaksoisklikkaus ja komentorivi eivät eroa toisistaan."""
     arvo = os.environ.get("RAHAPUTKI_DATA", "").strip()
+    lahde = "RAHAPUTKI_DATA"
     if not arvo:
-        return KOODIJUURI
+        arvo, lahde = _datakansio_tiedostosta(), DATAKANSIO_TIEDOSTO
+    if not arvo:
+        return KOODIJUURI, None
     polku = Path(arvo).expanduser()
     if not polku.is_absolute():
         polku = KOODIJUURI / polku
-    return polku.resolve()
+    return polku.resolve(), lahde
 
 
-DATAJUURI = _datajuuri()
+DATAJUURI, DATAJUURI_LAHDE = _datajuuri()
 INBOX = DATAJUURI / "inbox"
 ARKISTO = INBOX / "arkisto"
 DATA = DATAJUURI / "data"
@@ -160,6 +192,22 @@ def _env_polku():
     return _paikallinen_env() or ENV
 
 
+def _varmista_datajuuri():
+    """Osoitettu datakansio on oltava olemassa ennen kuin sinne kirjoitetaan.
+
+    Jos se puuttuu — pilvikansio ei ole vielä latautunut, levy ei ole kiinni,
+    polussa on kirjoitusvirhe — kansiorakenne luotaisiin muuten vaiti uuteen
+    paikkaan ja kirjanpito alkaisi tyhjästä. Kaksi rinnakkaista pääkirjaa on
+    pahempi vika kuin selvä virheilmoitus."""
+    if DATAJUURI_LAHDE is None or DATAJUURI.is_dir():
+        return
+    print(f"Datakansiota ei löydy: {DATAJUURI}\n"
+          f"  (asetettu: {DATAJUURI_LAHDE})\n"
+          "Tarkista polku, tai luo kansio ensin jos aloitat uuden kirjanpidon.\n"
+          "Rahaputki ei aloita tyhjää kirjanpitoa väärään paikkaan.")
+    sys.exit(1)
+
+
 def _siirra_vanhat_asetukset():
     """Siirrä juuressa olleet asetustiedostot asetukset/-kansioon. Ajetaan joka
     kerta, mutta tekee jotain vain kerran: olemassa olevan päälle ei kirjoiteta."""
@@ -179,6 +227,7 @@ def varmista_aloitus():
     """Luo puuttuvat kansiot ja mallitiedostot. Uusi käyttäjä ei saa törmätä
     traceback-tulosteeseen ennen kuin on edes päässyt alkuun. Olemassa olevaa
     ei kosketa koskaan, joten tämän voi ajaa turvallisesti joka kerta."""
+    _varmista_datajuuri()
     _siirra_vanhat_asetukset()
     ensikerta = not CONFIG.exists()
     for nimi in ALOITUSKANSIOT:

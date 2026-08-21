@@ -475,6 +475,7 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 | `raportit/raportti.html` | kuukausigraafi + budjettivertailu + matriisi |
 | `raportit/yhteenveto_kk.csv` | sama matriisi Sheets-liitosta varten |
 | `raportit/yhteistalous_erittely.html` | tulostettava kotitalouserittely (selaimesta PDF) |
+| `datakansio.txt` | konekohtainen osoitin datakansioon, koodin juuressa; vain erotetussa asennuksessa (ks. Kustomointi) |
 | `data/.lukko.<kone>.json` | ajonaikainen lukko, vain jaetussa tilassa (`"lukitus": "jaettu"`); katoaa itsestään |
 | `data/varaukset.json` | odottavat korttivaraukset — `hae` kirjoittaa, `aja` täsmäyttää; poistettavissa milloin vain |
 | `data/yhteistalous.json` | yhteistalouden tila: tasauspäivä (mihin asti yhteiskulut on huomioitu), kk-vakiot, läsnäolot, kirjaukset — raportin osio ylläpitää tätä puolestasi |
@@ -535,12 +536,25 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   pilvikansiossa, aseta ympäristömuuttuja osoittamaan datakansioon:
 
   ```
-  export RAHAPUTKI_DATA="$HOME/…/Rahaputki"   # ~/.zshrc:hen pysyväksi
+  echo "$HOME/…/Rahaputki" > datakansio.txt    # koodin juureen, kerran per kone
   ```
 
   Silloin `inbox/`, `asetukset/`, `data/` ja `raportit/` luetaan ja
-  kirjoitetaan sieltä, ja ohjelma päivittyy `git pull`illa. Suhteellinen arvo
-  tulkitaan koodin juuresta. Ilman muuttujaa mikään ei muutu.
+  kirjoitetaan sieltä, ja ohjelma päivittyy `git pull`illa. Suhteellinen polku
+  tulkitaan koodin juuresta. Ilman asetusta mikään ei muutu.
+
+  Osoitin on koodin juuressa eikä `asetukset/`-kansiossa yksinkertaisesta
+  syystä: `asetukset/` on itse datakansion sisällä, joten sieltä sitä ei voisi
+  lukea tietämättä jo vastausta. Tiedosto on konekohtainen ja gitignoroitu.
+
+  Saman voi kertoa myös ympäristömuuttujalla `RAHAPUTKI_DATA`, joka voittaa
+  tiedoston — kätevä kertakokeiluun. Pysyvään käyttöön tiedosto on parempi,
+  koska **kaksoisklikattu käynnistin ei lue `~/.zshrc`:tä** eikä siis näkisi
+  muuttujaa lainkaan; tiedoston se lukee.
+
+  Jos osoitettua kansiota ei löydy — pilvikansio ei ole latautunut, levy ei ole
+  kiinni, polussa on kirjoitusvirhe — ohjelma pysähtyy virheilmoitukseen eikä
+  aloita tyhjää kirjanpitoa väärään paikkaan.
 
   Pilvikansion sisään ei kannata laittaa `.git`-hakemistoa: synkka kopioi sen
   tiedosto kerrallaan ja voi rikkoa indeksin kesken commitin.
