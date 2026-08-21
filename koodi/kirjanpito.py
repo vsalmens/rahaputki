@@ -20,6 +20,7 @@ import calendar
 import csv
 import hashlib
 import html
+import io
 import time
 import json
 import os
@@ -196,6 +197,38 @@ def lue_teksti(polku: Path):
     return paras, paras_enc
 
 
+def turvakirjoita(polku, teksti):
+    """Kirjoita tiedosto niin, ettei siitä voi jäädä puolikasta.
+
+    Sisältö menee ensin viereiseen tilapäistiedostoon, joka vaihdetaan
+    paikalleen yhdellä os.replacella. Keskeytys — kaatuminen, virtakatko,
+    pilvisynkka kesken kirjoituksen — jättää siis aina joko vanhan tai uuden
+    version, ei koskaan katkaistua.
+
+    Käytetään tiedostoihin, jotka ovat käyttäjän totuus: pääkirja, säännöt,
+    config, pankkihaun tunnukset, yhteistalouden tila ja pankista noudetut
+    CSV:t. Raportit syntyvät joka ajossa uudelleen, joten niitä ei tarvitse
+    suojata."""
+    polku = Path(polku)
+    polku.parent.mkdir(parents=True, exist_ok=True)
+    tilapainen = polku.with_name(f"{polku.name}.uusi{os.getpid()}")
+    try:
+        with open(tilapainen, "w", encoding="utf-8", newline="") as f:
+            f.write(teksti)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tilapainen, polku)
+    finally:
+        try:
+            tilapainen.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def turvakirjoita_json(polku, data):
+    turvakirjoita(polku, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
+
 def siisti(s):
     return re.sub(r"\s+", " ", (s or "").strip())
 
@@ -310,7 +343,7 @@ def poista_saanto(malli, kategoria="", ehto=""):
             continue
         jaa.append(rivi)
     if poistettu:
-        SAANNOT.write_text("\n".join(jaa) + "\n", encoding="utf-8")
+        turvakirjoita(SAANNOT, "\n".join(jaa) + "\n")
     return poistettu
 
 
@@ -338,7 +371,7 @@ def lisaa_saanto(malli, kategoria, ehto=""):
     sen edelle (poikkeus voittaa), muuten loppuun."""
     rivi_uusi = ";".join([malli, kategoria] + ([ehto] if ehto else []))
     if not SAANNOT.exists():
-        SAANNOT.write_text("malli;kategoria\n" + rivi_uusi + "\n", encoding="utf-8")
+        turvakirjoita(SAANNOT, "malli;kategoria\n" + rivi_uusi + "\n")
         return True
     teksti, _ = lue_teksti(SAANNOT)
     rivit = teksti.splitlines()
@@ -361,7 +394,7 @@ def lisaa_saanto(malli, kategoria, ehto=""):
         rivit.append(rivi_uusi)
     else:
         rivit.insert(saanto_rivit[kohta][0], rivi_uusi)
-    SAANNOT.write_text("\n".join(rivit) + "\n", encoding="utf-8")
+    turvakirjoita(SAANNOT, "\n".join(rivit) + "\n")
     return True
 
 
@@ -389,14 +422,14 @@ def siirra_saanto(malli, kategoria="", ehto="", suunta=-1, kohde_sija=None):
         sisalto = rivit[a]
         del rivit[a]
         rivit.insert(indeksit[t], sisalto)
-        SAANNOT.write_text("\n".join(rivit) + "\n", encoding="utf-8")
+        turvakirjoita(SAANNOT, "\n".join(rivit) + "\n")
         return True
     naapuri = kohde + (1 if suunta > 0 else -1)
     if naapuri < 0 or naapuri >= len(indeksit):
         return False
     a, b = indeksit[kohde], indeksit[naapuri]
     rivit[a], rivit[b] = rivit[b], rivit[a]
-    SAANNOT.write_text("\n".join(rivit) + "\n", encoding="utf-8")
+    turvakirjoita(SAANNOT, "\n".join(rivit) + "\n")
     return True
 
 
@@ -595,10 +628,11 @@ def kirjoita_ledger(rivit):
         r.setdefault("peruste", "")
         r.setdefault("tila", "")
     rivit.sort(key=lambda r: (r["pvm"], r["tili"], r["id"]))
-    with open(LEDGER, "w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=LEDGER_KENTAT, delimiter=";")
-        w.writeheader()
-        w.writerows(rivit)
+    puskuri = io.StringIO()
+    w = csv.DictWriter(puskuri, fieldnames=LEDGER_KENTAT, delimiter=";")
+    w.writeheader()
+    w.writerows(rivit)
+    turvakirjoita(LEDGER, puskuri.getvalue())
 
 
 def avain(tili, pvm, summa, saaja):
@@ -1084,8 +1118,7 @@ def _kirjoita_env(arvot):
     if not ulos:
         ulos = ["# Rahaputki: pankkihaun tunnukset. Ei jaeta, ei versioida."]
     ulos += [f"{k}={v}" for k, v in jaljella.items()]
-    polku.parent.mkdir(parents=True, exist_ok=True)
-    polku.write_text("\n".join(ulos) + "\n", encoding="utf-8")
+    turvakirjoita(polku, "\n".join(ulos) + "\n")
     try:
         os.chmod(polku, 0o600)
     except OSError:
@@ -1994,8 +2027,7 @@ def _tallenna_tilit(cfg, pankki, tilit):
         if _kylla("Poistetaanko ne? (vanhentunut tunnus tuottaa vain virheitä)"):
             poistetut = {id(t) for t in vanhentuneet}
             lista[:] = [t for t in lista if id(t) not in poistetut]
-    with open(CONFIG, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    turvakirjoita_json(CONFIG, cfg)
     print(f"\n✓ tilit tallennettu asetukset/config.json:iin "
           f"({uusia} uutta, {len(nahdyt) - uusia} päivitettyä)")
 
@@ -2206,36 +2238,35 @@ def kirjoita_pankkicsv(tili, rivit, polku):
     Revolut ja kortit käyttävät yleistä muotoa (Ostopäivä;Summa;Ostopaikka;
     Selite;Tili): Revolutin oma vientimuoto ei kanna viestiä lainkaan, ja
     juuri viestissä on usein ainoa tieto vastapuolesta."""
-    with open(polku, "w", encoding="utf-8", newline="") as f:
-        if tili == "S-Pankki":
-            w = csv.writer(f, delimiter=";")
-            w.writerow(["Kirjauspäivä", "Summa", "Saajan nimi", "Maksaja", "Viesti",
-                        "Saajan tilinumero"])
-            for r in rivit:
-                w.writerow([r["pvm"].strftime("%d.%m.%Y"),
-                            f"{r['summa']:.2f}".replace(".", ","),
-                            r["saaja"], "", r["selite"], ""])
-        elif tili == "OP-tili":
-            w = csv.writer(f, delimiter=";")
-            w.writerow(["Kirjauspäivä", "Määrä EUROA", "Saaja/Maksaja", "Selitys", "Viesti",
-                        "Saajan tilinumero ja pankin BIC"])
-            for r in rivit:
-                w.writerow([r["pvm"].strftime("%d.%m.%Y"),
-                            f"{r['summa']:.2f}".replace(".", ","),
-                            r["saaja"], r["selite"], "", ""])
-        else:
-            # Kortit, Revolut ja muut tilit: kortti_pdf-muoto, jossa on oma
-            # Selite-sarake ja Tili-sarake kantaa tilin nimen pääkirjaan asti
-            # (sama muoto kuin laskusta_csv kirjoittaa).
-            #
-            # Revolutin oma vientimuoto oli tässä aiemmin, mutta siinä ei ole
-            # viestikenttää lainkaan: pankin remittance_information — usein
-            # ainoa tieto vastapuolesta — katosi kokonaan matkalla pääkirjaan.
-            w = csv.writer(f, delimiter=";")
-            w.writerow(["Ostopäivä", "Summa", "Ostopaikka", "Selite", "Tili"])
-            for r in rivit:
-                w.writerow([r["pvm"].isoformat(), f"{r['summa']:.2f}",
-                            r["saaja"], r["selite"], tili])
+    puskuri = io.StringIO()
+    w = csv.writer(puskuri, delimiter=";")
+    if tili == "S-Pankki":
+        w.writerow(["Kirjauspäivä", "Summa", "Saajan nimi", "Maksaja", "Viesti",
+                    "Saajan tilinumero"])
+        for r in rivit:
+            w.writerow([r["pvm"].strftime("%d.%m.%Y"),
+                        f"{r['summa']:.2f}".replace(".", ","),
+                        r["saaja"], "", r["selite"], ""])
+    elif tili == "OP-tili":
+        w.writerow(["Kirjauspäivä", "Määrä EUROA", "Saaja/Maksaja", "Selitys", "Viesti",
+                    "Saajan tilinumero ja pankin BIC"])
+        for r in rivit:
+            w.writerow([r["pvm"].strftime("%d.%m.%Y"),
+                        f"{r['summa']:.2f}".replace(".", ","),
+                        r["saaja"], r["selite"], "", ""])
+    else:
+        # Kortit, Revolut ja muut tilit: kortti_pdf-muoto, jossa on oma
+        # Selite-sarake ja Tili-sarake kantaa tilin nimen pääkirjaan asti
+        # (sama muoto kuin laskusta_csv kirjoittaa).
+        #
+        # Revolutin oma vientimuoto oli tässä aiemmin, mutta siinä ei ole
+        # viestikenttää lainkaan: pankin remittance_information — usein
+        # ainoa tieto vastapuolesta — katosi kokonaan matkalla pääkirjaan.
+        w.writerow(["Ostopäivä", "Summa", "Ostopaikka", "Selite", "Tili"])
+        for r in rivit:
+            w.writerow([r["pvm"].isoformat(), f"{r['summa']:.2f}",
+                        r["saaja"], r["selite"], tili])
+    turvakirjoita(polku, puskuri.getvalue())
 
 
 def cmd_hae(args):
@@ -2350,8 +2381,7 @@ def kirjoita_varaukset(tilikohtaiset):
         ulos["tilit"][tili] = [{"pvm": r["pvm"].isoformat(), "summa": round(r["summa"], 2),
                                 "saaja": r["saaja"], "selite": r["selite"],
                                 "laji": r.get("laji", "")} for r in rivit]
-    with open(VARAUKSET, "w", encoding="utf-8") as f:
-        json.dump(ulos, f, ensure_ascii=False, indent=2)
+    turvakirjoita_json(VARAUKSET, ulos)
 
 
 def lue_varaukset():
@@ -2920,8 +2950,7 @@ def lue_olympos():
 
 
 def kirjoita_olympos(data):
-    with open(_oly_polku(), "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    turvakirjoita_json(_oly_polku(), data)
 
 
 def olympos_laskelma(ledger, oly, tanaan=None, alku_yli=None):
@@ -5767,8 +5796,7 @@ def cmd_selaa(args):
                         return self._json({"ok": False, "virhe": "tyhjä nimi"})
                     if nimi not in cfg["kategoriat"]:
                         cfg["kategoriat"][nimi] = siisti(pyynto.get("tyyppi", "")) or "meno"
-                        with open(CONFIG, "w", encoding="utf-8") as f:
-                            json.dump(cfg, f, ensure_ascii=False, indent=2)
+                        turvakirjoita_json(CONFIG, cfg)
                     return self._json({"ok": True})
                 if self.path == "/api/kategoria-poista":
                     nimi = siisti(pyynto.get("nimi", ""))
@@ -5804,8 +5832,7 @@ def cmd_selaa(args):
                         kirjoita_ledger(ledger)
                         kirjoita_tarkistettavat(ledger)
                     del cfg["kategoriat"][nimi]
-                    with open(CONFIG, "w", encoding="utf-8") as f:
-                        json.dump(cfg, f, ensure_ascii=False, indent=2)
+                    turvakirjoita_json(CONFIG, cfg)
                     return self._json({"ok": True, "siirretty": siirretty})
                 return self._json({"ok": False, "virhe": "tuntematon polku"}, 404)
             except Exception as e:
