@@ -471,7 +471,7 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 | `Pankkihaku.command` / `Pankkihaku.bat` | sama, mutta noutaa tapahtumat ensin pankeista; ensimmäisellä kerralla ohjattu käyttöönotto |
 | `asetukset/config.json` | lähteiden sarakekartat, kategoriat, omat IBANit |
 | `koodi/config.esimerkki.json`, `koodi/saannot.esimerkki.csv` | riisutut aloituspohjat, joista ensikäynnistys tekee omasi juureen |
-| `asetukset/budjetti.csv` | kk-raamit (täytetään vasta kun toteumaa on) |
+| `asetukset/budjetti.csv` | kk-raamit ja kertyvät erät (täytetään vasta kun toteumaa on) |
 | `raportit/raportti.html` | kuukausigraafi + budjettivertailu + matriisi |
 | `raportit/yhteenveto_kk.csv` | sama matriisi Sheets-liitosta varten |
 | `raportit/yhteistalous_erittely.html` | tulostettava kotitalouserittely (selaimesta PDF) |
@@ -506,6 +506,29 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   vanhemmat rivit tuomatta, vaikka ne olisivat tiedostossa — kätevä, jos et
   halua ottaa mukaan koko historiaa. Tuonti kertoo aina montako riviä rajaus
   pudotti. Tyhjä arvo (oletus) tarkoittaa, ettei mitään rajata pois.
+- **Kertyvät erät**: kaikkea ei voi budjetoida kuukausittain. Vuosivakuutus,
+  kesäloma tai renkaiden vaihto on kertasumma, joka romahduttaa yhden
+  kuukauden ja jättää yksitoista muuta näyttämään paremmalta kuin ne ovat.
+  Lisää tällainen erä `asetukset/budjetti.csv`:hen omalle rivilleen: sarakkeet
+  ovat `kategoria;kk_raami;tavoite;erapaiva;kertynyt`, ja rivi tulkitaan
+  kertyväksi eräksi silloin kun sillä on tavoite. Kuukausiraami jätetään
+  tyhjäksi:
+
+  ```
+  kategoria;kk_raami;tavoite;erapaiva;kertynyt
+  Päivittäistavarat;600;;;
+  Autovakuutus;;969;2027-04-01;240
+  Kesäloma;;2500;2027-06-15;300
+  ```
+
+  Raportti näyttää näistä oman taulukkonsa: paljonko puuttuu, montako
+  kuukautta eräpäivään ja **paljonko kuussa pitää panna sivuun**, jotta summa
+  on kasassa ajoissa. Eräpäivän voi jättää tyhjäksi — silloin kertyy ilman
+  määräaikaa. Raha ei liiku minnekään eikä ohjelma siirrä mitään: `kertynyt`
+  on omissa käsissäsi, ja jos pidät summan erillisellä tilillä tai
+  pocketissa, kirjaa sen saldo siihen. Nämä eivät ole samaa kuin *varaukset*,
+  jotka ovat pankin odottavia korttiveloituksia — kertyvä erä on tulevaa
+  menoa varten, varaus jo tapahtunutta ostosta.
 - **Kaksi konetta samaan kansioon**: `asetukset/config.json` →
   `"lukitus": "jaettu"`. Oletuksena Rahaputki varmistaa vain, ettei sama kone
   aja putkea kahdesti yhtä aikaa. Jaettu tila lisää siihen lukkotiedoston

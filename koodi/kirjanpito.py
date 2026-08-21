@@ -3185,6 +3185,63 @@ def uudelleenluokittele_saantorivit(ledger, cfg, vain_peruste=None, pakota_saann
     return muuttui, avoimeksi
 
 
+def lue_kertyvat():
+    """Kertyvät erät budjetti.csv:stä: vuosilaskut, matkat, isot hankinnat.
+
+    Sarakkeet: kategoria;kk_raami;tavoite;erapaiva;kertynyt. Rivi on kertyvä
+    erä silloin kun sillä on tavoite. Kuukausiraami jää tyhjäksi, koska erä ei
+    ole kuukausikulu vaan kertyy kohti kertasummaa:
+
+        Autovakuutus;;969;2027-04-01;240
+
+    Raha ei liiku minnekään — tämä on korvamerkintä, ja kertynyt-sarake on
+    käsin ylläpidetty. Jos pidät summan omalla tilillä tai pocketissa, kirjaa
+    sen saldo siihen.
+
+    Erillinen nimi on tarkoituksella: varaus (lue_varaukset) on pankin
+    odottava veloitus, joka on jo tapahtunut mutta ei vielä kirjautunut.
+    Kertyvä erä on päinvastainen — tulevaa menoa varten sivuun pantava summa,
+    jota mikään pankki ei tiedä."""
+    ulos = []
+    if not BUDJETTI.exists():
+        return ulos
+    teksti, _ = lue_teksti(BUDJETTI)
+    for rivi in csv.DictReader(teksti.splitlines(), delimiter=";"):
+        nimi = siisti(str(rivi.get("kategoria", "") or ""))
+        try:
+            tavoite = parsi_summa(siisti(str(rivi.get("tavoite", "") or "")))
+        except ValueError:
+            continue
+        if not nimi or tavoite <= 0:
+            continue
+        try:
+            kertynyt = parsi_summa(siisti(str(rivi.get("kertynyt", "") or "0")))
+        except ValueError:
+            kertynyt = 0.0
+        ulos.append({"nimi": nimi, "tavoite": tavoite, "kertynyt": max(0.0, kertynyt),
+                     "erapaiva": siisti(str(rivi.get("erapaiva", "") or ""))})
+    return ulos
+
+
+def kertyva_laske(k, tanaan=None):
+    """Erän tila: paljonko puuttuu, montako kuukautta eräpäivään ja mikä on
+    kuukausisiirto, jolla tavoite ehtii täyttyä."""
+    tanaan = tanaan or date.today()
+    puuttuu = max(0.0, k["tavoite"] - k["kertynyt"])
+    kk, erap = None, None
+    if k.get("erapaiva"):
+        try:
+            erap = date.fromisoformat(k["erapaiva"])
+            kk = (erap.year - tanaan.year) * 12 + (erap.month - tanaan.month)
+        except ValueError:
+            erap = None
+    kk_jaljella = max(1, kk) if kk is not None else None
+    return {"puuttuu": puuttuu, "kk_jaljella": kk_jaljella,
+            "per_kk": puuttuu / kk_jaljella if kk_jaljella else None,
+            "osuus": (k["kertynyt"] / k["tavoite"]) if k["tavoite"] else 0.0,
+            "erap": erap, "myohassa": kk is not None and kk < 0}
+
+
 def lue_budjetti():
     raamit = {}
     if BUDJETTI.exists():
@@ -4000,6 +4057,45 @@ def tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit, ledg
                 palkki, erotus, raami_s = '<div class="palkki tyhja"></div>', '<td class="num">–</td>', '<td class="num">–</td>'
             rivit_html.append(f'<tr><td{kat_attr(k, kohde)}>{e(k)}</td><td class="num">{fmt_eur(tot)}</td>{raami_s}{erotus}'
                               f'<td>{palkki}</td></tr>')
+
+    # --- kertyvät erät: vuosilaskut ja muut kertasummat, joita säästetään kokoon ---
+    kertyva_rivit = []
+    for kohta in lue_kertyvat():
+        tila = kertyva_laske(kohta)
+        palkki = (f'<div class="palkki"><div class="taytto" '
+                  f'style="width:{min(tila["osuus"], 1.0) * 100:.0f}%"></div></div>')
+        if tila["per_kk"] is None:
+            kk_s = '<td class="num">–</td>'
+            era_s = '<td class="pikkuteksti">ei eräpäivää</td>'
+        else:
+            kk_s = f'<td class="num"><b>{fmt_eur(tila["per_kk"])}</b></td>'
+            d = tila["erap"]
+            era_txt = f"{d.day}.{d.month}.{d.year}"
+            era_s = (f'<td class="miinus">{era_txt} (mennyt)</td>' if tila["myohassa"]
+                     else f'<td>{era_txt} <span class="pikkuteksti">'
+                          f'({tila["kk_jaljella"]} kk)</span></td>')
+        kertyva_rivit.append(
+            f'<tr><td>{e(kohta["nimi"])}</td><td class="num">{fmt_eur(kohta["tavoite"])}</td>'
+            f'<td class="num">{fmt_eur(kohta["kertynyt"])}</td>'
+            f'<td class="num">{tila["osuus"] * 100:.0f} %</td>'
+            f'<td class="num">{fmt_eur(tila["puuttuu"])}</td>{kk_s}{era_s}'
+            f'<td>{palkki}</td></tr>')
+    kertyvat_html = ""
+    if kertyva_rivit:
+        kertyvat_html = (
+            '<h2>Kertyvät erät <span class="pikkuteksti">(vuosilaskut, matkat, '
+            'isot hankinnat)</span></h2>'
+            '<table><tr><th>Erä</th><th>Tavoite €</th><th>Kertynyt €</th><th>%</th>'
+            '<th>Puuttuu €</th><th>Siirrä €/kk</th><th>Eräpäivä</th><th></th></tr>'
+            + "".join(kertyva_rivit) + '</table>'
+            '<p class="pikkuteksti">Raha ei liiku minnekään — tämä on korvamerkintä. '
+            'Siirrä €/kk kertoo, paljonko kuussa pitää panna sivuun, jotta tavoite '
+            'täyttyy eräpäivään mennessä. Rivi tiedostoon asetukset/budjetti.csv: '
+            '<code>kategoria;kk_raami;tavoite;erapaiva;kertynyt</code> — esimerkiksi '
+            '<code>Autovakuutus;;969;2027-04-01;240</code>. Kertynyt-sarake on omissa '
+            'käsissäsi: jos pidät summan omalla tilillä tai pocketissa, kirjaa sen saldo '
+            'siihen. Nämä eivät ole odottavia korttivarauksia — ne näkyvät pääkirjassa '
+            'omilla riveillään.</p>')
 
     # --- kategoriat × kuukaudet -matriisi (klikattavat solut) ---
     def matriisirivi(nimi, arvot, luokka="", klik=False):
@@ -5648,6 +5744,7 @@ keskiarvo miinus edeltävän 3 kk keskiarvo. {saasto_rivi}Sama taulukko: raporti
 {''.join(rivit_html)}</table>
 <p class="pikkuteksti">Pystyviiva palkissa = raami. Raamit asetetaan tiedostossa budjetti.csv
 (ehdotus toteumasta: <code>python3 kirjanpito.py budjetti-ehdotus</code>).</p>
+{kertyvat_html}
 {saldot_html}
 <h2>Kategoriat × kuukaudet</h2>
 <div style="overflow-x:auto"><table>{''.join(matriisi)}</table></div>
