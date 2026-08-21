@@ -3,18 +3,26 @@
 *.env
 *.pem
 
-# Käyttäjän oma kansio: asetukset, kirjanpito ja aineisto
+# Käyttäjän oma kansio: asetukset, kirjanpito ja aineisto.
+# Nämä syntyvät myös koodin viereen, jos RAHAPUTKI_DATA ei ole asetettu.
 asetukset/
 data/
 inbox/
 raportit/
 config.json
 config.json.backup
+saannot.csv
+budjetti.csv
+budjetti_ehdotus.csv
+
+# Kahden koneen lukot — ajonaikaisia, katoavat itsestään
+.lukko.*.json
 
 # Kaikki data — ei koskaan repoon. Mallipohja on ainoa poikkeus.
 *.csv
 !koodi/saannot.esimerkki.csv
 
-# Pythonin välimuisti
+# Pythonin välimuisti ja käyttöjärjestelmän roskat
 __pycache__/
 *.pyc
+.DS_Store

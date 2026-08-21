@@ -51,12 +51,35 @@ except ImportError:
 # päivitys on yhden kansion korvaaminen. Vanha litteä asennus (kaikki samassa
 # kansiossa) toimii edelleen sellaisenaan.
 KOODI = Path(__file__).resolve().parent
-JUURI = KOODI.parent if KOODI.name == "koodi" else KOODI
-INBOX = JUURI / "inbox"
+KOODIJUURI = KOODI.parent if KOODI.name == "koodi" else KOODI
+
+
+def _datajuuri():
+    """Kansio, jossa kirjanpito asuu: RAHAPUTKI_DATA jos asetettu, muuten koodin
+    oma juuri.
+
+    Oletus on sama kuin ennen — kaikki yhdessä kansiossa — joten olemassa olevat
+    asennukset toimivat muuttumatta. Ympäristömuuttuja on niitä varten, jotka
+    haluavat pitää ohjelman git-checkouttina koneen omalla levyllä ja
+    kirjanpidon jaetussa pilvikansiossa: silloin koodi päivittyy git pullilla
+    eikä pilvisynkka näe .git-hakemistoa lainkaan. Suhteellinen arvo tulkitaan
+    koodin juuresta, ei työhakemistosta, jotta kaksoisklikkaus ja komentorivi
+    eivät eroa toisistaan."""
+    arvo = os.environ.get("RAHAPUTKI_DATA", "").strip()
+    if not arvo:
+        return KOODIJUURI
+    polku = Path(arvo).expanduser()
+    if not polku.is_absolute():
+        polku = KOODIJUURI / polku
+    return polku.resolve()
+
+
+DATAJUURI = _datajuuri()
+INBOX = DATAJUURI / "inbox"
 ARKISTO = INBOX / "arkisto"
-DATA = JUURI / "data"
-RAPORTIT = JUURI / "raportit"
-ASETUKSET = JUURI / "asetukset"
+DATA = DATAJUURI / "data"
+RAPORTIT = DATAJUURI / "raportit"
+ASETUKSET = DATAJUURI / "asetukset"
 LEDGER = DATA / "tapahtumat.csv"
 SAANNOT = ASETUKSET / "saannot.csv"
 CONFIG = ASETUKSET / "config.json"
@@ -64,7 +87,7 @@ BUDJETTI = ASETUKSET / "budjetti.csv"
 ENV = ASETUKSET / "pankkihaku.env"
 TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 
-VERSIO = "v124"
+VERSIO = "v125"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -112,13 +135,29 @@ def _siisti_konsoli():
             pass
 
 
+def _paikallinen_env():
+    """Konekohtainen pankkihaku.env koodin juuressa.
+
+    Merkitystä vain silloin, kun data on erotettu omaan kansioonsa
+    (RAHAPUTKI_DATA). Tunnukset osoittavat yksityisavaimeen, joka on
+    tarkoituksella vain yhdellä koneella, joten ne eivät kuulu jaettuun
+    pilvikansioon vaan sen koneen omaan hakemistoon."""
+    if DATAJUURI == KOODIJUURI:
+        return None
+    return KOODIJUURI / "pankkihaku.env"
+
+
 def _env_polku():
-    """Pankkihaun tunnukset. Ensisijaisesti asetukset/pankkihaku.env (näkyvä
-    nimi); vanhat piilotetut paikat luetaan yhä, jos sellainen on jäljellä."""
-    for polku in (ENV, ASETUKSET / ".env", JUURI / ".env"):
+    """Pankkihaun tunnukset. Erotetussa asennuksessa ensin koneen oma tiedosto,
+    muuten asetukset/pankkihaku.env (näkyvä nimi); vanhat piilotetut paikat
+    luetaan yhä, jos sellainen on jäljellä."""
+    paikallinen = _paikallinen_env()
+    if paikallinen is None:
+        paikallinen = ENV
+    for polku in (paikallinen, ENV, ASETUKSET / ".env", DATAJUURI / ".env"):
         if polku.is_file():
             return polku
-    return ENV
+    return _paikallinen_env() or ENV
 
 
 def _siirra_vanhat_asetukset():
@@ -126,7 +165,7 @@ def _siirra_vanhat_asetukset():
     kerta, mutta tekee jotain vain kerran: olemassa olevan päälle ei kirjoiteta."""
     siirretyt = []
     for vanha_nimi, uusi in VANHAT_ASETUKSET:
-        vanha = JUURI / vanha_nimi
+        vanha = DATAJUURI / vanha_nimi
         if vanha.is_file() and not uusi.exists():
             uusi.parent.mkdir(parents=True, exist_ok=True)
             os.replace(vanha, uusi)
@@ -143,7 +182,7 @@ def varmista_aloitus():
     _siirra_vanhat_asetukset()
     ensikerta = not CONFIG.exists()
     for nimi in ALOITUSKANSIOT:
-        (JUURI / nimi).mkdir(parents=True, exist_ok=True)
+        (DATAJUURI / nimi).mkdir(parents=True, exist_ok=True)
     for kohde, malli_nimi in ALOITUSMALLIT:
         malli = KOODI / malli_nimi
         if not kohde.exists() and malli.exists():
@@ -151,17 +190,17 @@ def varmista_aloitus():
             print(f"Luotu {kohde.parent.name}/{kohde.name} tiedostosta {malli_nimi} "
                   "— muokkaa omaksesi kun haluat.")
     if not CONFIG.exists():
-        print(f"config.json puuttuu kansiosta {JUURI}, eikä mallipohjaa "
+        print(f"config.json puuttuu kansiosta {DATAJUURI}, eikä mallipohjaa "
               f"(config.esimerkki.json) löydy kansiosta {KOODI}.\n"
               "Lataa työkalu uudelleen kokonaisena pakettina.")
         sys.exit(1)
     if ensikerta:
-        erillinen = KOODI != JUURI
+        erillinen = KOODI != KOODIJUURI
         koodirivi = ("  koodi/      ohjelma; päivitys korvaa vain tämän kansion\n"
                      if erillinen else "")
         ohje = "koodi/OHJE.md" if erillinen else "OHJE.md"
         print(f"""
-Tervetuloa. Kansio {JUURI.name} on nyt valmis:
+Tervetuloa. Kansio {DATAJUURI.name} on nyt valmis:
 
   inbox/      <- VIE PANKKIESI CSV-TIEDOSTOT TÄNNE
   asetukset/  kategoriat, säännöt ja budjetti — muokkaa kun haluat
@@ -1438,7 +1477,7 @@ def _lyhenna_polku(polku):
     alla olevat ~-muodossa. eb_token laajentaa molemmat takaisin."""
     polku = Path(polku)
     try:
-        return str(polku.relative_to(JUURI)).replace(os.sep, "/")
+        return str(polku.relative_to(DATAJUURI)).replace(os.sep, "/")
     except ValueError:
         pass
     try:
@@ -1452,7 +1491,7 @@ def _avainpolku(arvo):
     absoluuttinen. Suhteellinen tulkitaan aina Rahaputken kansiosta, ei
     työhakemistosta — muuten kaksoisklikkaus ja komentorivi eroaisivat."""
     polku = Path(siisti(str(arvo or ""))).expanduser()
-    return polku if polku.is_absolute() else (JUURI / polku)
+    return polku if polku.is_absolute() else (DATAJUURI / polku)
 
 
 PILVIKANSIOT = ("google drive", "googledrive", "my drive", "onedrive", "dropbox",
@@ -1473,7 +1512,7 @@ def _avaimen_kohde(pem):
     Poikkeus on pilvisynkattu kansio (Drive, iCloud, OneDrive…): avain on
     lukupääsy tileihin, eikä sitä pidä synkata mihinkään. Silloin se jää
     kotihakemistoon — ja on olemassa vain sillä koneella, mikä on tarkoituskin."""
-    if _pilvisynkassa(JUURI):
+    if _pilvisynkassa(DATAJUURI):
         return _konekansio() / pem.name, True
     return ASETUKSET / pem.name, False
 
@@ -2849,8 +2888,8 @@ def cmd_aja(args):
     print(f"\nPääkirjassa {len(ledger)} tapahtumaa, uusia {len(uudet)}.")
     avoimia = sum(1 for r in ledger if r["kategoria"] == "TARKISTA")
     if avoimia:
-        print(f"→ {avoimia} riviä odottaa luokittelua: täytä {TARKISTETTAVAT.relative_to(JUURI)} ja aja 'opi'.")
-    print(f"→ Raportti: {(RAPORTIT / 'raportti.html').relative_to(JUURI)}")
+        print(f"→ {avoimia} riviä odottaa luokittelua: täytä {TARKISTETTAVAT.relative_to(DATAJUURI)} ja aja 'opi'.")
+    print(f"→ Raportti: {(RAPORTIT / 'raportti.html').relative_to(DATAJUURI)}")
 
 
 def kirjoita_tarkistettavat(ledger):
@@ -2929,7 +2968,7 @@ def cmd_opi(args):
             print(f"Niputettu {n} jäljellä ollutta riviä kategoriaan {kat}.")
     # raportin tiedostotilassa lataamat muutokset (myös Downloads-kansiosta)
     kat_haku2 = {k.lower(): k for k in kategoriat}
-    for kansio in (RAPORTIT, JUURI, Path.home() / "Downloads"):
+    for kansio in (RAPORTIT, DATAJUURI, Path.home() / "Downloads"):
         try:
             loydot = sorted(kansio.glob("muutokset*.csv"))
         except OSError:

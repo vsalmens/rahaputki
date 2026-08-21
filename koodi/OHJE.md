@@ -529,6 +529,29 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   pocketissa, kirjaa sen saldo siihen. Nämä eivät ole samaa kuin *varaukset*,
   jotka ovat pankin odottavia korttiveloituksia — kertyvä erä on tulevaa
   menoa varten, varaus jo tapahtunutta ostosta.
+- **Koodi ja data eri paikkoihin** (`RAHAPUTKI_DATA`): oletuksena kaikki on
+  yhdessä kansiossa, ja niin sen kuuluukin olla useimmille. Jos haluat pitää
+  ohjelman git-checkouttina koneen omalla levyllä ja kirjanpidon jaetussa
+  pilvikansiossa, aseta ympäristömuuttuja osoittamaan datakansioon:
+
+  ```
+  export RAHAPUTKI_DATA="$HOME/…/Rahaputki"   # ~/.zshrc:hen pysyväksi
+  ```
+
+  Silloin `inbox/`, `asetukset/`, `data/` ja `raportit/` luetaan ja
+  kirjoitetaan sieltä, ja ohjelma päivittyy `git pull`illa. Suhteellinen arvo
+  tulkitaan koodin juuresta. Ilman muuttujaa mikään ei muutu.
+
+  Pilvikansion sisään ei kannata laittaa `.git`-hakemistoa: synkka kopioi sen
+  tiedosto kerrallaan ja voi rikkoa indeksin kesken commitin.
+
+  Kaksi asiaa jää tässä mallissa konekohtaiseksi eikä siirry pilven kautta.
+  Yksityisavain: ohjelma huomaa datakansion olevan synkassa ja sijoittaa
+  avaimen `~/.rahaputki/`-kansioon (ks. Pankkihaku). Pankkihaun tunnukset:
+  `pankkihaku.env` luetaan silloin ensisijaisesti koodin juuresta, koska se
+  osoittaa juuri siihen avaimeen. Jos tiedosto on jo `asetukset/`-kansiossa,
+  sitä luetaan yhä — mutta erotetussa asennuksessa se kannattaa siirtää
+  koodikansioon kummallakin koneella erikseen.
 - **Kaksi konetta samaan kansioon**: `asetukset/config.json` →
   `"lukitus": "jaettu"`. Oletuksena Rahaputki varmistaa vain, ettei sama kone
   aja putkea kahdesti yhtä aikaa. Jaettu tila lisää siihen lukkotiedoston
