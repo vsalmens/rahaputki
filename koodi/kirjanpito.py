@@ -244,6 +244,67 @@ def turvakirjoita_json(polku, data):
     turvakirjoita(polku, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
 
+def _kopion_aika(polku, etuliite):
+    try:
+        return datetime.strptime(polku.stem[len(etuliite):], "%Y-%m-%d_%H%M%S")
+    except (ValueError, IndexError):
+        return None
+
+
+def _karsi_varmuuskopiot(kansio, etuliite, paate, tuoreita=10,
+                         paivia=7, viikkoja=8, kuukausia=12):
+    """Säilytä tuoreimmat ja lisäksi kunkin päivän, viikon ja kuukauden viimeisin.
+
+    Pelkkä "N tuoreinta" on petollinen turva: yhden iltapäivän aherrus tuottaa
+    helposti kymmenen kopiota, jolloin ne kaikki ovat samalta tunnilta eikä
+    eilistä ole enää missään. Juuri silloin varmuuskopiota tarvitaan — virhe
+    huomataan tyypillisesti vasta seuraavana päivänä."""
+    try:
+        tiedostot = sorted(kansio.glob(f"{etuliite}*{paate}"))
+    except OSError:
+        return
+    if len(tiedostot) <= tuoreita:
+        return
+    pidettavat = set(tiedostot[-tuoreita:])
+    for avain, maara in ((lambda d: d.strftime("%Y-%m-%d"), paivia),
+                         (lambda d: d.strftime("%G-W%V"), viikkoja),
+                         (lambda d: d.strftime("%Y-%m"), kuukausia)):
+        korit = {}
+        for tiedosto in tiedostot:
+            aika = _kopion_aika(tiedosto, etuliite)
+            if aika is not None:
+                korit[avain(aika)] = tiedosto   # nouseva järjestys -> uusin jää koriin
+        for kori in sorted(korit)[-maara:]:
+            pidettavat.add(korit[kori])
+    for tiedosto in tiedostot:
+        if tiedosto not in pidettavat:
+            try:
+                tiedosto.unlink()
+            except OSError:
+                pass
+
+
+def varmuuskopioi(polku, etuliite=None):
+    """Ottaa talteen minkä tahansa tiedoston samalla sukupolvilogiikalla.
+
+    Pääkirjalla on oma, tiukempi kopiointinsa (_varmuuskopioi_ledger). Tämä on
+    niitä tiedostoja varten, jotka sisältävät käsityötä eivätkä synny
+    uudelleen pankkidatasta: säännöt ja yhteistalouden tila."""
+    polku = Path(polku)
+    if not polku.exists():
+        return
+    etuliite = etuliite or (polku.stem + "_")
+    kansio = DATA / "varmuuskopiot"
+    kohde = kansio / f"{etuliite}{time.strftime('%Y-%m-%d_%H%M%S')}{polku.suffix}"
+    try:
+        kansio.mkdir(parents=True, exist_ok=True)
+        if not kohde.exists():
+            shutil.copy2(polku, kohde)
+    except OSError:
+        return
+    _karsi_varmuuskopiot(kansio, etuliite, polku.suffix)
+
+
 def siisti(s):
     return re.sub(r"\s+", " ", (s or "").strip())
 
@@ -283,6 +344,13 @@ def fmt_eur(x):
 
 
 # ---------------------------------------------------------------- säännöt
+
+def kirjoita_saannot(teksti):
+    """Sääntötiedostoon kertyy käsityötä, jota ei saa takaisin pankkidatasta:
+    varmuuskopio ennen jokaista kirjoitusta."""
+    varmuuskopioi(SAANNOT)
+    turvakirjoita(SAANNOT, teksti)
+
 
 def _saanto_fyysiset(teksti):
     """Sääntötiedoston loogiset rivit: [(fyysinen_rivi_indeksi, osat)].
@@ -358,7 +426,7 @@ def poista_saanto(malli, kategoria="", ehto=""):
             continue
         jaa.append(rivi)
     if poistettu:
-        turvakirjoita(SAANNOT, "\n".join(jaa) + "\n")
+        kirjoita_saannot("\n".join(jaa) + "\n")
     return poistettu
 
 
@@ -386,7 +454,7 @@ def lisaa_saanto(malli, kategoria, ehto=""):
     sen edelle (poikkeus voittaa), muuten loppuun."""
     rivi_uusi = ";".join([malli, kategoria] + ([ehto] if ehto else []))
     if not SAANNOT.exists():
-        turvakirjoita(SAANNOT, "malli;kategoria\n" + rivi_uusi + "\n")
+        kirjoita_saannot("malli;kategoria\n" + rivi_uusi + "\n")
         return True
     teksti, _ = lue_teksti(SAANNOT)
     rivit = teksti.splitlines()
@@ -409,7 +477,7 @@ def lisaa_saanto(malli, kategoria, ehto=""):
         rivit.append(rivi_uusi)
     else:
         rivit.insert(saanto_rivit[kohta][0], rivi_uusi)
-    turvakirjoita(SAANNOT, "\n".join(rivit) + "\n")
+    kirjoita_saannot("\n".join(rivit) + "\n")
     return True
 
 
@@ -437,14 +505,14 @@ def siirra_saanto(malli, kategoria="", ehto="", suunta=-1, kohde_sija=None):
         sisalto = rivit[a]
         del rivit[a]
         rivit.insert(indeksit[t], sisalto)
-        turvakirjoita(SAANNOT, "\n".join(rivit) + "\n")
+        kirjoita_saannot("\n".join(rivit) + "\n")
         return True
     naapuri = kohde + (1 if suunta > 0 else -1)
     if naapuri < 0 or naapuri >= len(indeksit):
         return False
     a, b = indeksit[kohde], indeksit[naapuri]
     rivit[a], rivit[b] = rivit[b], rivit[a]
-    turvakirjoita(SAANNOT, "\n".join(rivit) + "\n")
+    kirjoita_saannot("\n".join(rivit) + "\n")
     return True
 
 
@@ -829,7 +897,11 @@ def lue_ledger():
 
 def _varmuuskopioi_ledger():
     """Ennen jokaista pääkirjan kirjoitusta: nykyinen versio talteen
-    data/varmuuskopiot/-kansioon; 20 tuoreinta säilytetään."""
+    data/varmuuskopiot/-kansioon (säilytys: ks. _karsi_varmuuskopiot).
+
+    Tämä on pääkirjan oma kopiointi eikä yleinen varmuuskopioi, koska
+    epäonnistuminen ei saa jäädä huomaamatta: jos kopiota ei saada, koko
+    tallennus keskeytetään."""
     if not LEDGER.exists():
         return
     kansio = DATA / "varmuuskopiot"
@@ -850,11 +922,7 @@ def _varmuuskopioi_ledger():
             f"Varmuuskopiota ei saatu kirjoitettua ({viimeisin}) — tallennus keskeytetty "
             f"turvallisuussyistä. Tarkista että kansio {kansio} on olemassa "
             f"(pilvisynkka voi piilottaa sen hetkellisesti; kokeile uudelleen).")
-    for ylimaara in sorted(kansio.glob("tapahtumat_*.csv"))[:-20]:
-        try:
-            ylimaara.unlink()
-        except OSError:
-            pass
+    _karsi_varmuuskopiot(kansio, "tapahtumat_", ".csv")
 
 
 def kirjoita_ledger(rivit):
@@ -3188,6 +3256,7 @@ def lue_olympos():
 
 
 def kirjoita_olympos(data):
+    varmuuskopioi(_oly_polku())
     turvakirjoita_json(_oly_polku(), data)
 
 

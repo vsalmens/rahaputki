@@ -462,6 +462,7 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 |---|---|
 | `inbox/` | tänne pankkien CSV:t; käsitellyt siirtyvät `inbox/arkisto/` |
 | `data/tapahtumat.csv` | pääkirja — koko totuus, pelkkää tekstiä, versioi/varmuuskopioi vapaasti (sarake `tila`: tyhjä = pankin kirjaama, `varaus` = odottava) |
+| `data/varmuuskopiot/` | pääkirjan, sääntöjen ja yhteistalouden aiemmat versiot. Palautus = kopioi tiedosto takaisin oikealle nimelle. Säilytys: 10 tuoreinta sekä kunkin päivän (7), viikon (8) ja kuukauden (12) viimeisin — eilinen versio on siis tallessa, vaikka tänään olisi ajettu kymmenen kertaa |
 | `asetukset/saannot.csv` | kauppias → kategoria -säännöt (syntyy ensikäynnistyksessä mallista, karttuu käytössä) |
 | `koodi/` | **ohjelma** — päivitys korvaa tämän kansion kokonaan, muu jää koskematta |
 | `koodi/laskusta_csv.py` | korttilaskujen PDF → CSV -muunnin (`--nayta` näyttää rivien tulkinnan) |
