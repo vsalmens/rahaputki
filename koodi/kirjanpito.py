@@ -64,7 +64,7 @@ BUDJETTI = ASETUKSET / "budjetti.csv"
 ENV = ASETUKSET / "pankkihaku.env"
 TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 
-VERSIO = "v123"
+VERSIO = "v124"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -4053,10 +4053,12 @@ def tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit, ledg
                           f'style="width:{osuus / 1.5 * 100:.0f}%"></div><i style="left:{100 / 1.5:.1f}%"></i></div>')
                 erotus = f'<td class="num {"plus" if raami - tot >= 0 else "miinus"}">{fmt_eur(raami - tot)}</td>'
                 raami_s = f'<td class="num">{fmt_eur(raami)}</td>'
+                pros = f'<td class="num {"miinus" if tot > raami else ""}">{tot / raami * 100:.0f} %</td>'
             else:
                 palkki, erotus, raami_s = '<div class="palkki tyhja"></div>', '<td class="num">–</td>', '<td class="num">–</td>'
+                pros = '<td class="num">–</td>'
             rivit_html.append(f'<tr><td{kat_attr(k, kohde)}>{e(k)}</td><td class="num">{fmt_eur(tot)}</td>{raami_s}{erotus}'
-                              f'<td>{palkki}</td></tr>')
+                              f'{pros}<td>{palkki}</td></tr>')
 
     # --- kertyvät erät: vuosilaskut ja muut kertasummat, joita säästetään kokoon ---
     kertyva_rivit = []
@@ -4085,9 +4087,10 @@ def tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit, ledg
         kertyvat_html = (
             '<h2>Kertyvät erät <span class="pikkuteksti">(vuosilaskut, matkat, '
             'isot hankinnat)</span></h2>'
-            '<table><tr><th>Erä</th><th>Tavoite €</th><th>Kertynyt €</th><th>%</th>'
+            '<div style="overflow-x:auto"><table>'
+            '<tr><th>Erä</th><th>Tavoite €</th><th>Kertynyt €</th><th>%</th>'
             '<th>Puuttuu €</th><th>Siirrä €/kk</th><th>Eräpäivä</th><th></th></tr>'
-            + "".join(kertyva_rivit) + '</table>'
+            + "".join(kertyva_rivit) + '</table></div>'
             '<p class="pikkuteksti">Raha ei liiku minnekään — tämä on korvamerkintä. '
             'Siirrä €/kk kertoo, paljonko kuussa pitää panna sivuun, jotta tavoite '
             'täyttyy eräpäivään mennessä. Rivi tiedostoon asetukset/budjetti.csv: '
@@ -5647,6 +5650,16 @@ td.num.klik {{ text-decoration:none }}
   border-radius:8px; padding:.5rem .6rem; background:#fbf9f5 }}
 #tutki-kuva {{ flex:1 1 26rem; min-width:22rem }}
 #tutki-svg {{ min-height:19rem }}
+@media (max-width:640px) {{
+  body {{ padding:1rem .6rem 3rem }}
+  h2 {{ margin:1.6rem 0 .5rem }}
+  table {{ font-size:.86rem }}
+  .palkki {{ min-width:70px }}
+  #tutki {{ flex-direction:column }}
+  #tutki-puu {{ flex:1 1 auto; width:100%; height:14rem }}
+  #tutki-kuva {{ flex:1 1 auto; width:100%; min-width:0 }}
+  #tutki-svg {{ min-height:12rem }}
+}}
 #tutki-ohjaus {{ display:flex; gap:.5rem; align-items:center; margin-bottom:.4rem; flex-wrap:wrap }}
 #tutki-ohjaus button {{ font:inherit; padding:.2rem .6rem; border:1px solid #c9c3b8;
   background:#fff; border-radius:6px; cursor:pointer }}
@@ -5740,8 +5753,9 @@ Mediaani = tyypillinen kuukausi — jos keskiarvo on selvästi mediaania suuremp
 piikeistä (vakuutukset, matkat) ja sitä kannattaa arvioida vuositasolla. Trendi = viimeisen 3 kk
 keskiarvo miinus edeltävän 3 kk keskiarvo. {saasto_rivi}Sama taulukko: raportit/yhteenveto_koko.csv.</p>
 <h2>{'Kuukausi ' + kohde[5:] + '/' + kohde[:4] + ' · toteuma vs. raami' if kohde else ''}</h2>
-<table><tr><th>Kategoria</th><th>Toteuma €</th><th>Raami €</th><th>Jäljellä €</th><th></th></tr>
-{''.join(rivit_html)}</table>
+<div style="overflow-x:auto"><table><tr><th>Kategoria</th><th>Toteuma €</th><th>Raami €</th>
+<th>Jäljellä €</th><th>%</th><th></th></tr>
+{''.join(rivit_html)}</table></div>
 <p class="pikkuteksti">Pystyviiva palkissa = raami. Raamit asetetaan tiedostossa budjetti.csv
 (ehdotus toteumasta: <code>python3 kirjanpito.py budjetti-ehdotus</code>).</p>
 {kertyvat_html}
