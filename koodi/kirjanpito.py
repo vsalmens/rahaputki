@@ -55,28 +55,74 @@ KOODI = Path(__file__).resolve().parent
 KOODIJUURI = KOODI.parent if KOODI.name == "koodi" else KOODI
 
 
-DATAKANSIO_TIEDOSTO = "datakansio.txt"
+# Koneen omat asetukset asuvat koodin juuressa, koska se on ainoa paikka joka
+# on varmasti konekohtainen: asetukset/ on itse datakansion sisällä (eikä sieltä
+# voisi lukea, missä datakansio on), ja kotihakemisto on koneen kaikkien
+# asennusten yhteinen. Tiedosto ei seuraa mukana repossa eikä päivityksessä.
+PAIKALLISET_TIEDOSTO = "paikalliset.txt"
+PAIKALLISET_MUOTO = 1
+DATAKANSIO_TIEDOSTO = "datakansio.txt"  # muoto 0: pelkkä polku, ei avaimia
+
+PAIKALLISET_OHJE = """\
+# Rahaputken paikalliset asetukset — koskevat vain tätä konetta.
+#
+# Tiedosto on konekohtainen: se ei seuraa päivityksessä (koodi/ korvataan
+# kokonaan) eikä pilvisynkassa, joten jokaisella koneella on omansa.
+#
+# Muoto: avain = arvo, yksi per rivi. Rivi joka alkaa #-merkillä on kommentti.
+#
+# Tunnetut avaimet:
+#   datakansio   polku kansioon, jossa asetukset/, data/ ja raportit/ ovat.
+#                Tyhjä tai puuttuva = ohjelman oma kansio (tavallisin).
+#                Kirjoita polku kokonaisena tai ~/-alkuisena.
+#   muoto        tiedoston muodon versio; ohjelma päivittää tämän itse.
+"""
 
 
-def _datakansio_tiedostosta():
-    """Datakansion polku koodin juuressa olevasta tiedostosta.
-
-    Osoitin datakansioon ei voi asua asetukset/-kansiossa, koska se on itse
-    datakansion sisällä. Se ei myöskään kuulu kotihakemistoon, joka on koneen
-    kaikkien asennusten yhteinen — sama harha kuin avaimilla. Jää siis koodin
-    juuri: konekohtainen, löytyy __file__:stä, eikä seuraa mukana repossa.
-
-    Tiedostossa on yksi rivi, polku. Tyhjät rivit ja #-alkuiset ohitetaan."""
-    polku = KOODIJUURI / DATAKANSIO_TIEDOSTO
+def _lue_avainarvot(polku):
+    """avain = arvo -rivit sanakirjaksi. Tuntemattomat avaimet säilyvät, jotta
+    uudempi versio voi kirjoittaa niitä eikä vanhempi hukkaa niitä."""
+    arvot = {}
     try:
-        rivit = polku.read_text(encoding="utf-8").splitlines()
+        teksti = polku.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        return ""
-    for rivi in rivit:
+        return arvot
+    for rivi in teksti.splitlines():
         rivi = rivi.strip()
-        if rivi and not rivi.startswith("#"):
-            return rivi
-    return ""
+        if not rivi or rivi.startswith("#") or "=" not in rivi:
+            continue
+        avain, _, arvo = rivi.partition("=")
+        arvot[avain.strip().lower()] = arvo.strip()
+    return arvot
+
+
+def _lue_paikalliset():
+    """Koneen omat asetukset: arvot, luettu muotoversio ja tiedosto josta ne
+    tulivat (None jos tiedostoa ei ole — se on täysin normaalia, koska yhden
+    kansion asennus ei tarvitse yhtään paikallista asetusta).
+
+    Vanha datakansio.txt luetaan yhä: siinä on pelkkä polku ilman avainta, eli
+    muoto 0. varmista_aloitus kirjoittaa sen uuteen muotoon."""
+    uusi = KOODIJUURI / PAIKALLISET_TIEDOSTO
+    if uusi.is_file():
+        arvot = _lue_avainarvot(uusi)
+        try:
+            muoto = int(arvot.get("muoto", PAIKALLISET_MUOTO))
+        except (TypeError, ValueError):
+            muoto = PAIKALLISET_MUOTO
+        return arvot, muoto, uusi
+    vanha = KOODIJUURI / DATAKANSIO_TIEDOSTO
+    if vanha.is_file():
+        try:
+            rivit = vanha.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            rivit = []
+        for rivi in rivit:
+            rivi = rivi.strip()
+            if rivi and not rivi.startswith("#"):
+                return {"datakansio": rivi}, 0, vanha
+        return {}, 0, vanha
+    return {}, PAIKALLISET_MUOTO, None
 
 
 def _siisti_polkuarvo(arvo):
@@ -107,17 +153,18 @@ def _datajuuri():
     pilvisynkka näe .git-hakemistoa lainkaan.
 
     Kansion voi kertoa kahdella tavalla. Ympäristömuuttuja RAHAPUTKI_DATA
-    voittaa, ja se on kätevä kertakokeiluun. Pysyvä tapa on tiedosto
-    datakansio.txt koodin juuressa: sen lukee myös kaksoisklikattu käynnistin,
-    joka ei näe komentotulkin asetuksia lainkaan.
+    voittaa, ja se on kätevä kertakokeiluun. Pysyvä tapa on avain datakansio
+    paikallisissa asetuksissa: ne lukee myös kaksoisklikattu käynnistin, joka ei
+    näe komentotulkin asetuksia lainkaan.
 
     Suhteellinen arvo tulkitaan koodin juuresta, ei työhakemistosta, jotta
     kaksoisklikkaus ja komentorivi eivät eroa toisistaan."""
     arvo = _siisti_polkuarvo(os.environ.get("RAHAPUTKI_DATA", ""))
     lahde = "ympäristömuuttuja RAHAPUTKI_DATA"
     if not arvo:
-        arvo = _siisti_polkuarvo(_datakansio_tiedostosta())
-        lahde = str(KOODIJUURI / DATAKANSIO_TIEDOSTO)
+        arvo = _siisti_polkuarvo(PAIKALLISET.get("datakansio", ""))
+        lahde = (f"{PAIKALLISET_LAHDE} (avain datakansio)"
+                 if PAIKALLISET_MUOTO_LUETTU else str(PAIKALLISET_LAHDE))
     if not arvo:
         return KOODIJUURI, None, ""
     polku = Path(arvo).expanduser()
@@ -126,6 +173,7 @@ def _datajuuri():
     return polku.resolve(), lahde, arvo
 
 
+PAIKALLISET, PAIKALLISET_MUOTO_LUETTU, PAIKALLISET_LAHDE = _lue_paikalliset()
 DATAJUURI, DATAJUURI_LAHDE, DATAJUURI_ARVO = _datajuuri()
 
 # Inbox on läpikulkupaikka, ei kirjanpitoa: tiliotteet ladataan sillä koneella
@@ -243,6 +291,50 @@ def _varmista_datajuuri():
     sys.exit(1)
 
 
+def _kirjoita_paikalliset(arvot):
+    """Kirjoittaa koneen omat asetukset uusimmassa muodossa.
+
+    Tiedosto rakennetaan otsikko-ohjeesta ja avaimista, joten käyttäjän omat
+    kommentit eivät säily. Se on tietoinen vaihtokauppa: näin ohje tiedoston
+    sisällä pysyy ajan tasalla silloinkin kun muoto muuttuu, eikä kukaan lue
+    vanhentunutta neuvoa omasta tiedostostaan. Uudelleen kirjoitetaan vain
+    muodon päivittyessä, ei joka ajolla."""
+    rivit = [PAIKALLISET_OHJE, f"muoto = {PAIKALLISET_MUOTO}"]
+    rivit += [f"{avain} = {arvot[avain]}" for avain in sorted(arvot)
+              if avain != "muoto"]
+    turvakirjoita(KOODIJUURI / PAIKALLISET_TIEDOSTO, "\n".join(rivit) + "\n")
+
+
+def _paivita_paikalliset():
+    """Paikallisten asetusten muoto päivitetään samalla tavalla kuin muidenkin
+    asetusten ja pääkirjan: vanha luetaan, uusi kirjoitetaan, eikä käyttäjän
+    tarvitse tietää tapahtuneesta muuta kuin yhden rivin.
+
+    Muoto 0 oli datakansio.txt: pelkkä polku, ilman avainta ja ilman varaa
+    mihinkään muuhun. Muoto 1 on avain = arvo, jolloin samaan tiedostoon
+    mahtuvat myös muut tätä konetta koskevat asetukset — siksi se ei enää ole
+    nimetty ainoan sisältämänsä asian mukaan."""
+    if PAIKALLISET_LAHDE is None or PAIKALLISET_MUOTO_LUETTU >= PAIKALLISET_MUOTO:
+        return
+    try:
+        _kirjoita_paikalliset(PAIKALLISET)
+    except OSError as e:
+        print(f"⚠ Paikallisia asetuksia ei saatu kirjoitettua ({e}).\n"
+              f"  {PAIKALLISET_LAHDE.name} kelpaa yhä, joten mikään ei katkennut.")
+        return
+    vanha = PAIKALLISET_LAHDE.name
+    if vanha == PAIKALLISET_TIEDOSTO:
+        print(f"Paikalliset asetukset päivitetty muodosta "
+              f"{PAIKALLISET_MUOTO_LUETTU} muotoon {PAIKALLISET_MUOTO}.")
+        return
+    try:
+        PAIKALLISET_LAHDE.unlink()
+    except OSError:
+        pass
+    print(f"Paikalliset asetukset päivitetty muotoon {PAIKALLISET_MUOTO}: "
+          f"{vanha} → {PAIKALLISET_TIEDOSTO}")
+
+
 def _siirra_vanhat_asetukset():
     """Siirrä juuressa olleet asetustiedostot asetukset/-kansioon. Ajetaan joka
     kerta, mutta tekee jotain vain kerran: olemassa olevan päälle ei kirjoiteta."""
@@ -263,6 +355,7 @@ def varmista_aloitus():
     traceback-tulosteeseen ennen kuin on edes päässyt alkuun. Olemassa olevaa
     ei kosketa koskaan, joten tämän voi ajaa turvallisesti joka kerta."""
     _varmista_datajuuri()
+    _paivita_paikalliset()
     _siirra_vanhat_asetukset()
     ensikerta = not CONFIG.exists()
     for kansio in ALOITUSKANSIOT:

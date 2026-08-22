@@ -15,7 +15,8 @@ saannot.csv
 budjetti.csv
 budjetti_ehdotus.csv
 
-# Konekohtainen osoitin datakansioon — eri jokaisella koneella
+# Koneen omat asetukset — eri jokaisella koneella
+paikalliset.txt
 datakansio.txt
 
 # Kahden koneen lukot — ajonaikaisia, katoavat itsestään

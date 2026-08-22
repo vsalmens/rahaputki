@@ -475,7 +475,7 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 | `raportit/raportti.html` | kuukausigraafi + budjettivertailu + matriisi |
 | `raportit/yhteenveto_kk.csv` | sama matriisi Sheets-liitosta varten |
 | `raportit/yhteistalous_erittely.html` | tulostettava kotitalouserittely (selaimesta PDF) |
-| `datakansio.txt` | konekohtainen osoitin datakansioon, koodin juuressa; vain erotetussa asennuksessa (ks. Kustomointi) |
+| `paikalliset.txt` | koneen omat asetukset (mm. `datakansio`), koodin juuressa; syntyy vain jos jotain on asetettavaa (ks. Kustomointi) |
 | `data/.lukko.<kone>.json` | ajonaikainen lukko, vain jaetussa tilassa (`"lukitus": "jaettu"`); katoaa itsestään |
 | `data/varaukset.json` | odottavat korttivaraukset — `hae` kirjoittaa, `aja` täsmäyttää; poistettavissa milloin vain |
 | `data/yhteistalous.json` | yhteistalouden tila: tasauspäivä (mihin asti yhteiskulut on huomioitu), kk-vakiot, läsnäolot, kirjaukset — raportin osio ylläpitää tätä puolestasi |
@@ -533,10 +533,11 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 - **Koodi ja data eri paikkoihin** (`RAHAPUTKI_DATA`): oletuksena kaikki on
   yhdessä kansiossa, ja niin sen kuuluukin olla useimmille. Jos haluat pitää
   ohjelman git-checkouttina koneen omalla levyllä ja kirjanpidon jaetussa
-  pilvikansiossa, aseta ympäristömuuttuja osoittamaan datakansioon:
+  pilvikansiossa, kerro datakansio koneen omissa asetuksissa:
 
   ```
-  echo "$HOME/…/Rahaputki" > datakansio.txt    # koodin juureen, kerran per kone
+  # koodin juureen, kerran per kone
+  printf 'datakansio = %s\n' "$HOME/…/Rahaputki" > paikalliset.txt
   ```
 
   Polku kirjoitetaan kokonaisena tai `~/`-alkuisena. Ilman kumpaakaan se on
@@ -551,7 +552,7 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   |---|---|
   | `data/` — pääkirja, varmuuskopiot, yhteistalous, varaukset, lukot | `inbox/` — tiliotteet ladataan sillä koneella jolla ollaan |
   | `asetukset/` — config, säännöt, budjetti | `pankkihaku.env` — osoittaa koneen omaan avaimeen |
-  | `raportit/` — myös puhelimesta luettavissa Drive-apilla | `datakansio.txt` — osoitin jaettuun kansioon |
+  | `raportit/` — myös puhelimesta luettavissa Drive-apilla | `paikalliset.txt` — koneen omat asetukset, mm. osoitin jaettuun kansioon |
 
   Yksityisavain (`.pem`) ei ole kummassakaan vaan kotihakemistossa
   `~/.rahaputki/`, jonne ohjelma sen itse sijoittaa, kun huomaa
@@ -563,6 +564,17 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   Osoitin on koodin juuressa eikä `asetukset/`-kansiossa yksinkertaisesta
   syystä: `asetukset/` on itse datakansion sisällä, joten sieltä sitä ei voisi
   lukea tietämättä jo vastausta. Tiedosto on konekohtainen ja gitignoroitu.
+
+  `paikalliset.txt` on koneen omien asetusten tiedosto, ei pelkkä osoitin:
+  muoto on `avain = arvo`, `#` aloittaa kommenttirivin, ja tuntemattomat
+  avaimet säilyvät. Toistaiseksi tunnettuja avaimia on kaksi, `datakansio` ja
+  `muoto`. Jälkimmäinen on tiedoston muodon versio, jota ohjelma ylläpitää
+  itse: kun muoto muuttuu, vanha luetaan ja uusi kirjoitetaan käynnistyksen
+  yhteydessä samalla tavalla kuin asetusten ja pääkirjan kohdalla. Aiempi
+  `datakansio.txt` (pelkkä polku, ei avainta) on muoto 0, ja se päivittyy
+  itsestään ensimmäisellä ajolla — vanha tiedosto poistetaan, kun uusi on
+  kirjoitettu. Uudelleenkirjoitus rakentaa myös tiedoston sisällä olevan
+  ohjeen, joten omat kommentit eivät säily muodon vaihtuessa.
 
   Saman voi kertoa myös ympäristömuuttujalla `RAHAPUTKI_DATA`, joka voittaa
   tiedoston — kätevä kertakokeiluun. Pysyvään käyttöön tiedosto on parempi,
