@@ -1273,12 +1273,21 @@ def paakirjalukko(komento, pakota=False):
     try:
         yield
     finally:
-        try:
-            oma = _lue_lukko()
-            if oma and oma.get("tunniste") == tunniste:
+        # Lukkotiedoston nimessä on koneen nimi, ja saman koneen rinnakkaiset
+        # ajot estää jo paikallinen tiedostolukko — poistettava tiedosto on siis
+        # aina oma. Sitä ei tarvitse lukea, ja juuri lukeminen oli se hidas
+        # operaatio, joka sai pilvikansiossa ohjelman näyttämään jumittuneelta
+        # sulkemisen jälkeen: käyttäjä painoi Ctrl-C:tä toisen kerran, ja lukko
+        # jäi roikkumaan kesken poiston. Keskeytys ei saa jättää lukkoa: se
+        # nielaistaan täällä ja poisto yritetään uudelleen.
+        for _ in range(3):
+            try:
                 _lukkotiedosto().unlink(missing_ok=True)
-        except OSError:
-            pass
+                break
+            except OSError:
+                break
+            except KeyboardInterrupt:
+                continue
         LUKKO_TUNNISTE, LUKKO_KOMENTO = None, None
         _vapauta_paikallinen(kahva)
 
@@ -6716,7 +6725,7 @@ def cmd_selaa(args):
         with http.server.ThreadingHTTPServer(("127.0.0.1", portti), Kasittelija) as srv:
             srv.serve_forever()
     except KeyboardInterrupt:
-        print("\nSuljettu.")
+        print("\nSuljetaan\u2026")
 
 
 def cmd_onko_dataa(args):
@@ -6787,4 +6796,10 @@ def main():
 if __name__ == "__main__":
     _varmista_python()
     _siisti_konsoli()
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        # Ctrl-C on käyttäjän tapa lopettaa, ei virhe. Traceback näyttäisi
+        # siltä kuin jokin olisi mennyt rikki — eikä mikään mennyt.
+        print("\nKeskeytetty.")
+        sys.exit(130)
