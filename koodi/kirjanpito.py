@@ -56,8 +56,8 @@ KOODIJUURI = KOODI.parent if KOODI.name == "koodi" else KOODI
 
 
 # Koneen omat asetukset asuvat koodin juuressa, koska se on ainoa paikka joka
-# on varmasti konekohtainen: asetukset/ on itse datakansion sisällä (eikä sieltä
-# voisi lukea, missä datakansio on), ja kotihakemisto on koneen kaikkien
+# on varmasti konekohtainen: asetukset/ on itse tietokansion sisällä (eikä
+# sieltä voisi lukea, missä tietokansio on), ja kotihakemisto on koneen kaikkien
 # asennusten yhteinen. Tiedosto ei seuraa mukana repossa eikä päivityksessä.
 # Nimi on pari jaetulle asetukset/-kansiolle: siellä ovat asetukset jotka
 # seuraavat kirjanpitoa, täällä ne jotka jäävät koneelle. Pääte on .txt eikä
@@ -66,7 +66,7 @@ KOODIJUURI = KOODI.parent if KOODI.name == "koodi" else KOODI
 # oletussovellusta lainkaan, ja .conf on kehittäjien tapa, ei kenenkään muun.
 PAIKALLISET_TIEDOSTO = "koneen-asetukset.txt"
 # Aiemmat nimet luetaan yhä ja kirjoitetaan uudella nimellä. Osoitin
-# datakansioon ei saa kadota kesken päivityksen: ilman sitä ohjelma aloittaisi
+# tietokansioon ei saa kadota kesken päivityksen: ilman sitä ohjelma aloittaisi
 # tyhjän kirjanpidon väärässä paikassa.
 PAIKALLISET_VANHAT = ("paikalliset.txt",)
 DATAKANSIO_TIEDOSTO = "datakansio.txt"  # vanhin muoto: pelkkä polku, ei avaimia
@@ -194,7 +194,7 @@ def _datajuuri():
     pilvisynkka näe .git-hakemistoa lainkaan.
 
     Kansion voi kertoa kahdella tavalla. Ympäristömuuttuja RAHAPUTKI_DATA
-    voittaa, ja se on kätevä kertakokeiluun. Pysyvä tapa on avain datakansio
+    voittaa, ja se on kätevä kertakokeiluun. Pysyvä tapa on avain tietokansio
     paikallisissa asetuksissa: ne lukee myös kaksoisklikattu käynnistin, joka ei
     näe komentotulkin asetuksia lainkaan.
 
@@ -309,7 +309,7 @@ def _env_polku():
 
 
 def _varmista_datajuuri():
-    """Osoitettu datakansio on oltava olemassa ennen kuin sinne kirjoitetaan.
+    """Osoitettu tietokansio on oltava olemassa ennen kuin sinne kirjoitetaan.
 
     Jos se puuttuu — pilvikansio ei ole vielä latautunut, levy ei ole kiinni,
     polussa on kirjoitusvirhe — kansiorakenne luotaisiin muuten vaiti uuteen
@@ -317,7 +317,7 @@ def _varmista_datajuuri():
     pahempi vika kuin selvä virheilmoitus."""
     if DATAJUURI_LAHDE is None or DATAJUURI.is_dir():
         return
-    print(f"Datakansiota ei löydy: {DATAJUURI}\n"
+    print(f"Tietokansiota ei löydy: {DATAJUURI}\n"
           f"  asetettu täällä: {DATAJUURI_LAHDE}\n"
           f"  siinä lukee:     {DATAJUURI_ARVO}")
     # Suhteellinen polku on ylivoimaisesti yleisin virhe: unohtunut ~/ liimaa
@@ -1084,7 +1084,7 @@ def _kesto(minuutteja):
 
 
 def _lukon_polku(tiedot):
-    """Lukkotiedoston nimi datakansiosta katsottuna: sen voi poistaa käsin, jos
+    """Lukkotiedoston nimi tietokansiosta katsottuna: sen voi poistaa käsin, jos
     kone on lopullisesti poissa, eikä nimeä muuten arvaa."""
     kone = str(tiedot.get("kone", "")) or "kone"
     return (DATA / f".lukko.{kone}.json").relative_to(DATAJUURI)
@@ -1197,7 +1197,7 @@ def paakirjalukko(komento, pakota=False):
     """Estää päällekkäiset ajot kahdella tasolla.
 
     1) Sama kone: käyttöjärjestelmän tiedostolukko. Aukoton.
-    2) Eri koneet: neuvoa-antava .lukko-tiedosto datakansiossa. Pilvisynkan
+    2) Eri koneet: neuvoa-antava .lukko-tiedosto tietokansiossa. Pilvisynkan
        viiveen takia se ei voi olla atominen, mutta se muuttaa hiljaisen
        datamenetyksen äänekkääksi varoitukseksi.
 
