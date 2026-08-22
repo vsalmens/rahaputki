@@ -592,7 +592,9 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   itsestään 30 minuutissa, ja jumiin jääneen ohittaa `--pakota`:
   `python3 koodi/kirjanpito.py --pakota aja`. Synkka ei ole hetkellinen,
   joten tämä on varoitin eikä tae — älä silti aloita ajoa toisella koneella
-  ennen kuin edellinen on valmis.
+  ennen kuin edellinen on valmis. Lukkoon törmätessään käynnistin pysähtyy
+  siihen: se ei jatka raportin avaamiseen, vaan jättää varoituksen ruudulle
+  luettavaksi (paluuarvo 4 erottaa lukon muista virheistä).
 - **Uusi pankki / muuttunut CSV-muoto**: aja
   `python3 koodi/kirjanpito.py kurkista tiedosto.csv` — se näyttää enkoodauksen,
   erottimen ja otsikot. Lisää/korjaa lähde `asetukset/config.json`:iin niillä

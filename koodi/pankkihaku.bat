@@ -25,9 +25,18 @@ if not defined PY goto ei_pythonia
 if errorlevel 1 goto ei_pythonia
 
 %PY% "%KOODI%\kirjanpito.py" hae
+set "TILA=%errorlevel%"
 echo.
+
+rem Muu haun virhe (verkko, vanhentunut valtuutus) ei esta inboxin lukemista:
+rem tiedostot voivat olla jo siella. Lukko estaa, koska aja torppaisi samaan.
+if "%TILA%"=="4" goto keskeytyi
+
 %PY% "%KOODI%\kirjanpito.py" aja
+set "TILA=%errorlevel%"
 echo.
+
+if not "%TILA%"=="0" goto keskeytyi
 
 %PY% "%KOODI%\kirjanpito.py" onko-dataa
 if errorlevel 1 goto tyhja
@@ -35,6 +44,11 @@ if errorlevel 1 goto tyhja
 echo Avataan raportti selaimeen. Sulje tama ikkuna kun olet valmis.
 echo.
 %PY% "%KOODI%\kirjanpito.py" selaa
+goto loppu
+
+:keskeytyi
+echo.
+pause
 goto loppu
 
 :tyhja

@@ -23,7 +23,12 @@ if not defined PY goto ei_pythonia
 if errorlevel 1 goto ei_pythonia
 
 %PY% "%KOODI%\kirjanpito.py" aja
+set "TILA=%errorlevel%"
 echo.
+
+rem Ajo ei mennyt lapi (lukko, puuttuva datakansio, ...): raportin avaaminen
+rem nayttaisi vanhan tilanteen ja vierittaisi syyn pois nakyvista.
+if not "%TILA%"=="0" goto keskeytyi
 
 %PY% "%KOODI%\kirjanpito.py" onko-dataa
 if errorlevel 1 goto tyhja
@@ -31,6 +36,11 @@ if errorlevel 1 goto tyhja
 echo Avataan raportti selaimeen. Sulje tama ikkuna kun olet valmis.
 echo.
 %PY% "%KOODI%\kirjanpito.py" selaa
+goto loppu
+
+:keskeytyi
+echo.
+pause
 goto loppu
 
 :tyhja

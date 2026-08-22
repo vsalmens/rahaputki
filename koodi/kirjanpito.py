@@ -818,6 +818,18 @@ LUKKO_VANHENEE_MIN = 30
 LUKKO_TUNNISTE = None
 
 
+LUKKO_KOODI = 4  # paluuarvo, josta käynnistin tunnistaa lukon muista virheistä
+
+
+def _lukko_seis(viesti):
+    """Lukon takia perääntyminen ei ole virhe: mitään ei rikkoutunut, ja oikea
+    vastaus on odottaa hetki. Käynnistin erottaa sen paluuarvosta, jottei se
+    jatka ketjun seuraavaan komentoon — se törmäisi samaan lukkoon ja toistaisi
+    saman varoituksen, kuin ohjelma ei olisi kuullut ensimmäistä."""
+    print(viesti, file=sys.stderr)
+    raise SystemExit(LUKKO_KOODI)
+
+
 def _paikallinen_lukko():
     """Saman koneen rinnakkaiset ajot: käyttöjärjestelmän oma tiedostolukko
     väliaikaiskansiossa. Tämä on aukoton, eikä se voi jäädä roikkumaan —
@@ -836,8 +848,8 @@ def _paikallinen_lukko():
             msvcrt.locking(kahva.fileno(), msvcrt.LK_NBLCK, 1)
     except OSError:
         kahva.close()
-        raise SystemExit("⚠ Rahaputki on jo ajossa tällä koneella. Odota että "
-                         "edellinen ajo valmistuu.")
+        _lukko_seis("⚠ Rahaputki on jo ajossa tällä koneella. Odota että "
+                    "edellinen ajo valmistuu.")
     return kahva
 
 
@@ -942,8 +954,8 @@ def _varmista_omistus(tunniste, varmistus_s):
     time.sleep(varmistus_s)
     voittaja = _kilpaileva_lukko(tunniste)
     if voittaja:
-        raise SystemExit(f"⚠ Toinen kone ({voittaja.get('kone', '?')}) ehti ensin "
-                         f"({voittaja.get('komento', '?')}). Yritä hetken päästä uudelleen.")
+        _lukko_seis(f"⚠ Toinen kone ({voittaja.get('kone', '?')}) ehti ensin "
+                    f"({voittaja.get('komento', '?')}). Yritä hetken päästä uudelleen.")
 
 
 def lukon_virkistys():
@@ -955,8 +967,8 @@ def lukon_virkistys():
         return
     voittaja = _kilpaileva_lukko(LUKKO_TUNNISTE)
     if voittaja:
-        raise SystemExit(f"⚠ Toinen kone ({voittaja.get('kone', '?')}) otti lukon kesken "
-                         f"ajon. Kirjoitus keskeytetty, jotta muutokset eivät mene ristiin.")
+        _lukko_seis(f"⚠ Toinen kone ({voittaja.get('kone', '?')}) otti lukon kesken "
+                    f"ajon. Kirjoitus keskeytetty, jotta muutokset eivät mene ristiin.")
     tiedot = _lue_lukko()
     if tiedot and tiedot.get("tunniste") == LUKKO_TUNNISTE:
         _kirjoita_lukko(tiedot.get("komento", ""), LUKKO_TUNNISTE)
@@ -997,7 +1009,7 @@ def paakirjalukko(komento, pakota=False):
             ika = _lukon_ika_min(tiedot)
             if ika < LUKKO_VANHENEE_MIN:
                 _vapauta_paikallinen(kahva)
-                raise SystemExit(
+                _lukko_seis(
                     f"⚠ Pääkirja on lukittu: {tiedot.get('kone', '?')} "
                     f"({tiedot.get('komento', '?')}), {ika:.0f} min sitten.\n"
                     f"  Odota että ajo valmistuu ja synkka ehtii perille. Jos lukko on\n"

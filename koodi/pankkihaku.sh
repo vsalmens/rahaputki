@@ -26,10 +26,27 @@ if [ -z "$PY" ]; then
     exit 0
 fi
 
+LUKKO=4  # kirjanpito.py: lukko, ei virhe
+
 "$PY" "$KOODI/kirjanpito.py" hae
+TILA=$?
 echo
+
+# Muu haun virhe (verkko, vanhentunut valtuutus) ei estä inboxin lukemista:
+# tiedostot voivat olla jo siella. Lukko estaa, koska aja torppaisi samaan.
+if [ "$TILA" -eq "$LUKKO" ]; then
+    read -r -p "Paina Enter sulkeaksesi..." || true
+    exit "$TILA"
+fi
+
 "$PY" "$KOODI/kirjanpito.py" aja
+TILA=$?
 echo
+
+if [ "$TILA" -ne 0 ]; then
+    read -r -p "Paina Enter sulkeaksesi..." || true
+    exit "$TILA"
+fi
 
 if "$PY" "$KOODI/kirjanpito.py" onko-dataa; then
     echo "Avataan raportti selaimeen. Sulje ikkuna kun olet valmis."

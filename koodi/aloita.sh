@@ -26,7 +26,15 @@ if [ -z "$PY" ]; then
 fi
 
 "$PY" "$KOODI/kirjanpito.py" aja
+TILA=$?
 echo
+
+if [ "$TILA" -ne 0 ]; then
+    # Ajo ei mennyt lapi (lukko, puuttuva datakansio, ...). Raportin avaaminen
+    # nayttaisi vanhan tilanteen ja vierittaisi juuri luetun syyn pois nakyvista.
+    read -r -p "Paina Enter sulkeaksesi..." || true
+    exit "$TILA"
+fi
 
 if "$PY" "$KOODI/kirjanpito.py" onko-dataa; then
     echo "Avataan raportti selaimeen. Sulje ikkuna kun olet valmis."
