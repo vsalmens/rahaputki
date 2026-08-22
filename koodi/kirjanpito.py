@@ -282,7 +282,10 @@ def varmista_aloitus():
         koodirivi = ("  koodi/      ohjelma; päivitys korvaa vain tämän kansion\n"
                      if erillinen else "")
         ohje = "koodi/OHJE.md" if erillinen else "OHJE.md"
-        print(f"""
+        seuraava = ("Seuraava askel: vie tiliotteet verkkopankista CSV-muodossa "
+                    f"kansioon inbox/\nja käynnistä uudelleen. Tarkemmat ohjeet: {ohje}")
+        if DATAJUURI == KOODIJUURI:
+            print(f"""
 Tervetuloa. Kansio {DATAJUURI.name} on nyt valmis:
 
   inbox/      <- VIE PANKKIESI CSV-TIEDOSTOT TÄNNE
@@ -290,8 +293,26 @@ Tervetuloa. Kansio {DATAJUURI.name} on nyt valmis:
   data/       kirjanpitosi kertyy tänne (tapahtumat.csv on koko totuus)
   raportit/   raportti.html syntyy tänne
 {koodirivi}
-Seuraava askel: vie tiliotteet verkkopankista CSV-muodossa kansioon inbox/
-ja käynnistä uudelleen. Tarkemmat ohjeet: {ohje}
+{seuraava}
+""")
+        else:
+            # Erotettu asennus: kirjanpito on jaetussa kansiossa, ohjelma ja
+            # inbox koneen omassa. Yksi yhteinen puu valehtelisi kummastakin,
+            # ja juuri tässä kohtaa käyttäjä päättää minne tiliotteet vie.
+            print(f"""
+Tervetuloa. Kirjanpitosi asuu kansiossa
+{DATAJUURI}
+
+  asetukset/  kategoriat, säännöt ja budjetti — muokkaa kun haluat
+  data/       kirjanpitosi kertyy tänne (tapahtumat.csv on koko totuus)
+  raportit/   raportti.html syntyy tänne
+
+Ohjelma ja inbox jäävät tälle koneelle kansioon
+{KOODIJUURI}
+
+  inbox/      <- VIE PANKKIESI CSV-TIEDOSTOT TÄNNE
+{koodirivi}
+{seuraava}
 """)
 
 
