@@ -906,6 +906,27 @@ def _lukon_ika_min(tiedot):
     return (datetime.now() - alku).total_seconds() / 60.0
 
 
+def _kesto(minuutteja):
+    """Ikä ihmisen mitassa. "455 min" ei kerro mitään ilman jakolaskua, ja juuri
+    lukkoa katsoessa kysymys on nimenomaan siitä, onko tämä hetki sitten vai
+    eilinen jäänne."""
+    m = int(round(minuutteja))
+    if m < 60:
+        return f"{m} min"
+    h, m = divmod(m, 60)
+    if h < 24:
+        return f"{h} h {m} min"
+    d, h = divmod(h, 24)
+    return f"{d} vrk {h} h {m} min"
+
+
+def _lukon_polku(tiedot):
+    """Lukkotiedoston nimi datakansiosta katsottuna: sen voi poistaa käsin, jos
+    kone on lopullisesti poissa, eikä nimeä muuten arvaa."""
+    kone = str(tiedot.get("kone", "")) or "kone"
+    return (DATA / f".lukko.{kone}.json").relative_to(DATAJUURI)
+
+
 def _jarjestysavain(tiedot):
     """Tasatilanteen ratkaisu: aiemmin aloittanut voittaa, tasapelissä pienempi
     tunniste. Molemmat koneet päätyvät samaan tulokseen ilman neuvottelua."""
@@ -1045,7 +1066,8 @@ def paakirjalukko(komento, pakota=False):
                 _vapauta_paikallinen(kahva)
                 _lukko_seis(
                     f"⚠ Pääkirja on lukittu: {tiedot.get('kone', '?')} "
-                    f"({tiedot.get('komento', '?')}), {ika:.0f} min sitten.\n"
+                    f"({tiedot.get('komento', '?')}), {_kesto(ika)} sitten.\n"
+                    f"  Lukko: {_lukon_polku(tiedot)}\n"
                     f"  Odota että ajo valmistuu ja synkka ehtii perille. Jos lukko on\n"
                     f"  jäänyt jumiin: {_komentorivi()} --pakota {komento}")
             # Vanha lukko on melkein aina jäänne keskeytyneestä ajosta. "Melkein
@@ -1055,7 +1077,8 @@ def paakirjalukko(komento, pakota=False):
             # Kysytään siis, ja oletus on ettei ohiteta. Putkitetussa ajossa
             # kysymys jää vastaamatta ja oletus pitää — se on oikea suunta.
             print(f"⚠ Toisen koneen lukko on vanha: {tiedot.get('kone', '?')} "
-                  f"({tiedot.get('komento', '?')}), {ika:.0f} min sitten.\n"
+                  f"({tiedot.get('komento', '?')}), {_kesto(ika)} sitten.\n"
+                  f"  Lukko: {_lukon_polku(tiedot)}\n"
                   "  Yleensä ajo on keskeytynyt ja lukko jäänyt roikkumaan.\n"
                   "  Jos se sen sijaan on yhä käynnissä, ohittaminen tarkoittaa\n"
                   "  kahta konetta saman pääkirjan kimpussa yhtä aikaa.")
