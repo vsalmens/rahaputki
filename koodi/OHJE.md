@@ -539,6 +539,12 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   echo "$HOME/…/Rahaputki" > datakansio.txt    # koodin juureen, kerran per kone
   ```
 
+  Polku kirjoitetaan kokonaisena tai `~/`-alkuisena. Ilman kumpaakaan se on
+  suhteellinen ja luetaan **koodin juuresta**, jolloin kirjanpito osoittaisi
+  ohjelmakansion sisään — tyypillinen erehdys, ja siksi virheilmoitus kertoo
+  sen erikseen. Lainausmerkit, kenoviivoitetut välilyönnit ja `$HOME`
+  siivotaan pois, joten leikepöydältä liimattu polku kelpaa sellaisenaan.
+
   Jako menee sen mukaan, kuka tiedoston omistaa ja kuka sitä tarvitsee:
 
   | Jaetussa kansiossa | Koneen omassa kansiossa |

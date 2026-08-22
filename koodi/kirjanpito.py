@@ -78,6 +78,24 @@ def _datakansio_tiedostosta():
     return ""
 
 
+def _siisti_polkuarvo(arvo):
+    """Polku sellaisena kuin ihminen sen kirjoittaa, poluksi jonka voi avata.
+
+    Leikepöydältä tulee lainausmerkkejä ("…" tai '…'), Finderistä vedetty polku
+    kenoviivoittaa välilyönnit, ja komentotulkkiin tottunut kirjoittaa $HOME.
+    Mikään näistä ei ole polku sellaisenaan, mutta jokainen on selvästi se mitä
+    tarkoitettiin — ja väärin tulkittuna niistä syntyy suhteellinen polku, joka
+    liimautuu ohjelman kansion perään aivan väärään paikkaan."""
+    arvo = arvo.strip()
+    for merkki in ('"', "'"):
+        if len(arvo) >= 2 and arvo.startswith(merkki) and arvo.endswith(merkki):
+            arvo = arvo[1:-1].strip()
+            break
+    if os.sep != "\\":  # Windowsissa kenoviiva on erotin, ei suojamerkki
+        arvo = arvo.replace("\\ ", " ")
+    return os.path.expandvars(arvo)  # $HOME, %USERPROFILE%
+
+
 def _datajuuri():
     """Kansio, jossa kirjanpito asuu, ja mistä tieto tuli.
 
@@ -94,19 +112,20 @@ def _datajuuri():
 
     Suhteellinen arvo tulkitaan koodin juuresta, ei työhakemistosta, jotta
     kaksoisklikkaus ja komentorivi eivät eroa toisistaan."""
-    arvo = os.environ.get("RAHAPUTKI_DATA", "").strip()
-    lahde = "RAHAPUTKI_DATA"
+    arvo = _siisti_polkuarvo(os.environ.get("RAHAPUTKI_DATA", ""))
+    lahde = "ympäristömuuttuja RAHAPUTKI_DATA"
     if not arvo:
-        arvo, lahde = _datakansio_tiedostosta(), DATAKANSIO_TIEDOSTO
+        arvo = _siisti_polkuarvo(_datakansio_tiedostosta())
+        lahde = str(KOODIJUURI / DATAKANSIO_TIEDOSTO)
     if not arvo:
-        return KOODIJUURI, None
+        return KOODIJUURI, None, ""
     polku = Path(arvo).expanduser()
     if not polku.is_absolute():
         polku = KOODIJUURI / polku
-    return polku.resolve(), lahde
+    return polku.resolve(), lahde, arvo
 
 
-DATAJUURI, DATAJUURI_LAHDE = _datajuuri()
+DATAJUURI, DATAJUURI_LAHDE, DATAJUURI_ARVO = _datajuuri()
 
 # Inbox on läpikulkupaikka, ei kirjanpitoa: tiliotteet ladataan sillä koneella
 # jolla ollaan, ja tuonnin jälkeen ne ovat pääkirjassa. Siksi se jää koneen
@@ -208,8 +227,17 @@ def _varmista_datajuuri():
     if DATAJUURI_LAHDE is None or DATAJUURI.is_dir():
         return
     print(f"Datakansiota ei löydy: {DATAJUURI}\n"
-          f"  (asetettu: {DATAJUURI_LAHDE})\n"
-          "Tarkista polku, tai luo kansio ensin jos aloitat uuden kirjanpidon.\n"
+          f"  asetettu täällä: {DATAJUURI_LAHDE}\n"
+          f"  siinä lukee:     {DATAJUURI_ARVO}")
+    # Suhteellinen polku on ylivoimaisesti yleisin virhe: unohtunut ~/ liimaa
+    # kirjanpidon ohjelman kansion sisään, ja tulokseen ilmestyy kansion nimi
+    # kahdesti. Sitä ei arvaa ilman että sen sanoo ääneen.
+    if not Path(DATAJUURI_ARVO).expanduser().is_absolute():
+        print(f"  Polku on suhteellinen, joten se luettiin ohjelman kansiosta:\n"
+              f"  {KOODIJUURI}\n"
+              "  Jos tarkoitit kotihakemistoasi, kirjoita eteen ~/ — tai koko\n"
+              "  polku alusta asti.")
+    print("Tarkista polku, tai luo kansio ensin jos aloitat uuden kirjanpidon.\n"
           "Rahaputki ei aloita tyhjää kirjanpitoa väärään paikkaan.")
     sys.exit(1)
 
