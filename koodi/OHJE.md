@@ -428,6 +428,15 @@ Kaksi tapaa, sama näkymä:
    palauttaa lomakkeen uuden säännön tilaan.
    Valikon "+ uusi kategoria…" lisää kategorian asetukset/config.json:iin lennossa.
    Taulukot ja käyrät päivittyvät kun lataat sivun uudelleen. Ctrl-C sammuttaa.
+
+   Hakukentän vieressä on kaksi nappia: **Hae pankista** noutaa tuoreet
+   tapahtumat rajapinnasta ja **Lue inbox** lukee inbox-kansion tiedostot
+   pääkirjaan. Ne tekevät saman kuin komennot `hae` ja `aja`, ja tuloste
+   näkyy sivulla rivi riviltä sitä mukaa kuin sitä syntyy (myös terminaalissa,
+   jos sellainen on auki). Kun ajo on valmis, "Päivitä raportti" lataa sivun
+   uusiksi. Komento ajetaan samassa prosessissa kuin selaa, joten se käyttää
+   jo otettua pääkirjalukkoa eikä voi törmätä siihen — toisin kuin erikseen
+   käynnistetty komento.
 2. **Pelkkä raportti.html avattuna** (ilman palvelinta): samat muokkaukset
    kerätään muistiin ja alapalkin nappi lataa ne muutokset.csv-tiedostona.
    `python3 koodi/kirjanpito.py opi` etsii muutokset*.csv:t automaattisesti myös

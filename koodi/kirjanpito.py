@@ -6084,9 +6084,52 @@ window.addEventListener('DOMContentLoaded',function(){
       });
     },2000);
   }
+  function lokiPaneeli(){return document.getElementById('ajoloki');}
+  function naytaLoki(otsikko){
+    var p=lokiPaneeli();p.hidden=false;
+    document.getElementById('ajoloki-otsikko').textContent=otsikko;
+  }
+  function seuraaAjoa(komento,alkaen){
+    fetch('api/loki?alkaen='+alkaen,{cache:'no-store'}).then(function(r){return r.json();})
+      .then(function(v){
+        if(!v.ok)return;
+        var teksti=document.getElementById('ajoloki-teksti');
+        if(v.rivit.length){teksti.textContent+=v.rivit.join('\\n')+'\\n';
+          teksti.scrollTop=teksti.scrollHeight;}
+        if(v.kaynnissa){setTimeout(function(){seuraaAjoa(komento,v.seuraava);},700);return;}
+        naytaLoki(v.virhe?(komento+' keskeytyi'):(komento+' valmis'));
+        document.getElementById('ajoloki-nappi').hidden=false;
+        napitKaytossa(true);
+      }).catch(function(){
+        // Palvelin katosi kesken ajon — valvoPalvelinta kertoo sen omalla tavallaan.
+        napitKaytossa(true);
+      });
+  }
+  function napitKaytossa(paalle){
+    ['nappi-hae','nappi-aja'].forEach(function(id){
+      document.getElementById(id).disabled=!paalle;});
+  }
+  function kaynnista(komento){
+    napitKaytossa(false);
+    document.getElementById('ajoloki-teksti').textContent='';
+    document.getElementById('ajoloki-nappi').hidden=true;
+    naytaLoki(komento==='hae'?'Haetaan pankista…':'Luetaan inbox-kansiota…');
+    fetch('api/komento',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({komento:komento})}).then(function(r){return r.json();})
+      .then(function(v){
+        if(!v.ok){naytaLoki(v.virhe||'ei onnistunut');napitKaytossa(true);return;}
+        seuraaAjoa(komento,0);
+      }).catch(function(e){naytaLoki('ei onnistunut: '+e);napitKaytossa(true);});
+  }
+  document.getElementById('nappi-hae').addEventListener('click',function(){kaynnista('hae');});
+  document.getElementById('nappi-aja').addEventListener('click',function(){kaynnista('aja');});
+  document.getElementById('ajoloki-nappi').addEventListener('click',function(){location.reload();});
+  document.getElementById('ajoloki-piilota').addEventListener('click',function(){
+    lokiPaneeli().hidden=true;});
   fetch('api/ping').then(function(r){return r.json();}).then(function(v){
     if(v.ok){SERVER=true;document.getElementById('tila').textContent=
-      'selaa-tila \u2713 muutokset tallentuvat heti';valvoPalvelinta();}
+      'selaa-tila \u2713 muutokset tallentuvat heti';
+      document.getElementById('ajonapit').hidden=false;valvoPalvelinta();}
   }).catch(function(){
     document.getElementById('tila').textContent=
       'tiedostotila: muokkaukset ker\u00e4t\u00e4\u00e4n ja ladataan muutokset.csv:n\u00e4';
@@ -6188,6 +6231,14 @@ td.num.klik {{ text-decoration:none }}
 tr.varausrivi td {{ background:#f7fafc }}
 .pikkuteksti {{ color:#6b665c; font-size:.85rem }}
 .tyokalut {{ display:flex; gap:.8rem; align-items:baseline; flex-wrap:wrap; margin:.6rem 0 }}
+#ajonapit button, #ajoloki button {{ font:inherit; font-size:.85em; padding:.2rem .7rem;
+       border:1px solid #c9c3b8; border-radius:5px; background:#fff; cursor:pointer }}
+#ajonapit button:hover:enabled, #ajoloki button:hover {{ background:var(--vaalea) }}
+#ajonapit button:disabled {{ opacity:.5; cursor:default }}
+#ajoloki {{ border:1px solid #c9c3b8; border-radius:8px; background:#fff;
+       padding:.7rem .9rem; margin:.6rem 0 }}
+#ajoloki-teksti {{ font:12px/1.5 ui-monospace,Menlo,monospace; white-space:pre-wrap;
+       max-height:14rem; overflow:auto; margin:.3rem 0 .6rem }}
 .katsel {{ font-size:.78rem; max-width:11em }}
 .spark svg {{ width:150px; height:34px; display:block }}
 .tarkinp {{ font-size:.78rem; width:7em; text-transform:lowercase }}
@@ -6216,7 +6267,8 @@ code {{ font-family:ui-monospace,Menlo,monospace }}
 <p class="meta">Rahaputki {VERSIO} · päivitetty {date.today().strftime('%d.%m.%Y')} · {len(ledger)} tapahtumaa ·
 kategorian nimeä, matriisin solua tai kaavion palkkia klikkaamalla pääset katsomaan ja muokkaamaan rivejä</p>
 {huomio}
-<div class="tyokalut"><input id="haku" type="search" placeholder="hae tapahtumia… (Esc tyhjentää)" size="26"><span id="tila" class="pikkuteksti"></span></div>
+<div class="tyokalut"><input id="haku" type="search" placeholder="hae tapahtumia… (Esc tyhjentää)" size="26"><span id="tila" class="pikkuteksti"></span><span id="ajonapit" hidden> <button type="button" id="nappi-hae">Hae pankista</button> <button type="button" id="nappi-aja">Lue inbox</button></span></div>
+<div id="ajoloki" hidden><div id="ajoloki-otsikko" class="pikkuteksti"></div><pre id="ajoloki-teksti"></pre><button type="button" id="ajoloki-nappi" hidden>Päivitä raportti</button> <button type="button" id="ajoloki-piilota">Piilota</button></div>
 <div id="paneeli"></div>
 <h2>Tulot ja menot kuukausittain <span class="pikkuteksti">(vihreä = tulot, ruskea = menot, tumma viiva = menojen 3 kk liukuva keskiarvo, % = säästöaste)</span></h2>
 {kaavio}
@@ -6456,6 +6508,60 @@ def cmd_tarkista_kortit(args):
           "suuntaa-antavia — YHTEENSÄ-rivin erotus on luotettava mittari.")
 
 
+# Selaimesta käynnistetty komento ajetaan tässä prosessissa, ei uutena
+# prosessina. Silloin se käyttää jo otettua pääkirjalukkoa eikä joudu
+# kilpailemaan siitä itsensä kanssa — kahden käynnistimen mallissa juuri se
+# oli päivittäisen käytön ikävin sudenkuoppa.
+SELAIN_AJO = {"komento": None, "loki": [], "virhe": ""}
+SELAIN_AJO_LUKKO = threading.Lock()
+
+
+class _Haarukka:
+    """Tuloste kahteen paikkaan: konsoliin kuten ennenkin ja selaimen lokiin.
+
+    Komennot kertovat edistymisestään printillä, ja se on niiden ainoa
+    käyttöliittymä. Jotta selain näkee saman, stdout haaroitetaan ajon ajaksi —
+    konsoli säilyy, koska se on yhä oikea paikka katsoa mitä tapahtui."""
+
+    def __init__(self, konsoli, rivit):
+        self.konsoli, self.rivit, self.kesken = konsoli, rivit, ""
+
+    def write(self, teksti):
+        self.konsoli.write(teksti)
+        self.kesken += teksti
+        while "\n" in self.kesken:
+            rivi, _, self.kesken = self.kesken.partition("\n")
+            self.rivit.append(rivi)
+        return len(teksti)
+
+    def flush(self):
+        self.konsoli.flush()
+
+    def isatty(self):
+        return False  # estää komentoja kysymästä mitään: kukaan ei ole vastaamassa
+
+
+def _aja_selaimesta(komento):
+    """Aja hae tai aja taustasäikeessä ja kerää tuloste selaimen luettavaksi."""
+    args = argparse.Namespace(
+        palvelu=None, paivia=89, istunto=None, yhdista=None, raaka=False,
+        siivoa_alkaen=False, pakota=False, ei_velhoa=True, kk=13, kaikki=False)
+    konsoli, rivit = sys.stdout, SELAIN_AJO["loki"]
+    sys.stdout = _Haarukka(konsoli, rivit)
+    try:
+        (cmd_hae if komento == "hae" else cmd_aja)(args)
+    except SystemExit as e:
+        rivit.append(f"Keskeytyi: {e}")
+        SELAIN_AJO["virhe"] = str(e)
+    except Exception as e:
+        rivit.append(f"⚠ {komento} epäonnistui: {e}")
+        SELAIN_AJO["virhe"] = str(e)
+    finally:
+        sys.stdout = konsoli
+        with SELAIN_AJO_LUKKO:
+            SELAIN_AJO["komento"] = None
+
+
 def cmd_selaa(args):
     import http.server
     import webbrowser
@@ -6493,6 +6599,18 @@ def cmd_selaa(args):
                 del self.headers["If-Modified-Since"]  # aina tuore sivu, ei 304-oikotietä
             if self.path == "/api/ping":
                 return self._json({"ok": True})
+            if self.path.startswith("/api/loki"):
+                kysely = self.path.partition("?")[2]
+                alkaen = 0
+                for pala in kysely.split("&"):
+                    avain, _, arvo = pala.partition("=")
+                    if avain == "alkaen" and arvo.isdigit():
+                        alkaen = int(arvo)
+                rivit = SELAIN_AJO["loki"]
+                return self._json({"ok": True, "rivit": rivit[alkaen:],
+                                   "seuraava": len(rivit),
+                                   "kaynnissa": SELAIN_AJO["komento"],
+                                   "virhe": SELAIN_AJO["virhe"]})
             if self.path in ("/", "/raportti.html"):
                 rakenna_raportit(lue_ledger(), lue_config(), kk=13)
                 self.path = "/raportti.html"
@@ -6744,6 +6862,19 @@ def cmd_selaa(args):
                     del cfg["kategoriat"][nimi]
                     turvakirjoita_json(CONFIG, cfg)
                     return self._json({"ok": True, "siirretty": siirretty})
+                if self.path == "/api/komento":
+                    komento = siisti(pyynto.get("komento", ""))
+                    if komento not in ("hae", "aja"):
+                        return self._json({"ok": False, "virhe": f"tuntematon komento {komento}"})
+                    with SELAIN_AJO_LUKKO:
+                        if SELAIN_AJO["komento"]:
+                            return self._json({"ok": False,
+                                               "virhe": f"{SELAIN_AJO['komento']} on jo käynnissä"})
+                        SELAIN_AJO.update(komento=komento, loki=[], virhe="")
+                    saie = threading.Thread(target=_aja_selaimesta, args=(komento,),
+                                            daemon=True)
+                    saie.start()
+                    return self._json({"ok": True, "komento": komento})
                 return self._json({"ok": False, "virhe": "tuntematon polku"}, 404)
             except Exception as e:
                 return self._json({"ok": False, "virhe": str(e)}, 500)
