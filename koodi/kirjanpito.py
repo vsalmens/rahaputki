@@ -60,8 +60,13 @@ KOODIJUURI = KOODI.parent if KOODI.name == "koodi" else KOODI
 # voisi lukea, missä datakansio on), ja kotihakemisto on koneen kaikkien
 # asennusten yhteinen. Tiedosto ei seuraa mukana repossa eikä päivityksessä.
 PAIKALLISET_TIEDOSTO = "paikalliset.txt"
-PAIKALLISET_MUOTO = 1
-DATAKANSIO_TIEDOSTO = "datakansio.txt"  # muoto 0: pelkkä polku, ei avaimia
+DATAKANSIO_TIEDOSTO = "datakansio.txt"  # vanha muoto: pelkkä polku, ei avaimia
+# Leima kertoo, minkä version ohjelma tiedoston kirjoitti. Se on kommentissa
+# eikä avaimena, koska se ei ole käyttäjän asetettavissa: jos versio ei täsmää,
+# tiedosto kirjoitetaan uudelleen, ja käsin muutettu arvo katoaisi silloin
+# joka tapauksessa. Näin jokainen avain = arvo -rivi on käyttäjän omaa.
+PAIKALLISET_LEIMA = re.compile(r"#\s*---\s*Rahaputki\s+(\S+)\s*---")
+PAIKALLISET_VARATUT = ("muoto", "versio")  # aiempi muotoavain: ei enää käytössä
 
 PAIKALLISET_OHJE = """\
 # Rahaputken paikalliset asetukset — koskevat vain tätä konetta.
@@ -75,7 +80,12 @@ PAIKALLISET_OHJE = """\
 #   datakansio   polku kansioon, jossa asetukset/, data/ ja raportit/ ovat.
 #                Tyhjä tai puuttuva = ohjelman oma kansio (tavallisin).
 #                Kirjoita polku kokonaisena tai ~/-alkuisena.
-#   muoto        tiedoston muodon versio; ohjelma päivittää tämän itse.
+#
+# Alla oleva versioleima on ohjelman omaa kirjanpitoa: sitä ei tarvitse
+# muuttaa, eikä muutoksesta seuraa mitään. Kun ohjelma päivittyy, se
+# kirjoittaa tämän tiedoston uudelleen leimoineen ja ohjeineen — omat
+# kommenttisi eivät silloin säily, mutta asetuksesi säilyvät.
+# --- Rahaputki {versio} ---
 """
 
 
@@ -101,16 +111,17 @@ def _lue_paikalliset():
     tulivat (None jos tiedostoa ei ole — se on täysin normaalia, koska yhden
     kansion asennus ei tarvitse yhtään paikallista asetusta).
 
-    Vanha datakansio.txt luetaan yhä: siinä on pelkkä polku ilman avainta, eli
-    muoto 0. varmista_aloitus kirjoittaa sen uuteen muotoon."""
+    Versio on se, jolla tiedosto on kirjoitettu (tyhjä jos leimaa ei ole, eli
+    tiedosto on vanhaa muotoa). Vanha datakansio.txt luetaan yhä: siinä on
+    pelkkä polku ilman avainta. varmista_aloitus kirjoittaa sen uudelleen."""
     uusi = KOODIJUURI / PAIKALLISET_TIEDOSTO
     if uusi.is_file():
         arvot = _lue_avainarvot(uusi)
         try:
-            muoto = int(arvot.get("muoto", PAIKALLISET_MUOTO))
-        except (TypeError, ValueError):
-            muoto = PAIKALLISET_MUOTO
-        return arvot, muoto, uusi
+            osuma = PAIKALLISET_LEIMA.search(uusi.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            osuma = None
+        return arvot, (osuma.group(1) if osuma else ""), uusi
     vanha = KOODIJUURI / DATAKANSIO_TIEDOSTO
     if vanha.is_file():
         try:
@@ -120,9 +131,9 @@ def _lue_paikalliset():
         for rivi in rivit:
             rivi = rivi.strip()
             if rivi and not rivi.startswith("#"):
-                return {"datakansio": rivi}, 0, vanha
-        return {}, 0, vanha
-    return {}, PAIKALLISET_MUOTO, None
+                return {"datakansio": rivi}, "", vanha
+        return {}, "", vanha
+    return {}, "", None
 
 
 def _siisti_polkuarvo(arvo):
@@ -163,8 +174,9 @@ def _datajuuri():
     lahde = "ympäristömuuttuja RAHAPUTKI_DATA"
     if not arvo:
         arvo = _siisti_polkuarvo(PAIKALLISET.get("datakansio", ""))
-        lahde = (f"{PAIKALLISET_LAHDE} (avain datakansio)"
-                 if PAIKALLISET_MUOTO_LUETTU else str(PAIKALLISET_LAHDE))
+        lahde = str(PAIKALLISET_LAHDE)
+        if PAIKALLISET_LAHDE is not None and PAIKALLISET_LAHDE.name == PAIKALLISET_TIEDOSTO:
+            lahde += " (avain datakansio)"
     if not arvo:
         return KOODIJUURI, None, ""
     polku = Path(arvo).expanduser()
@@ -173,7 +185,7 @@ def _datajuuri():
     return polku.resolve(), lahde, arvo
 
 
-PAIKALLISET, PAIKALLISET_MUOTO_LUETTU, PAIKALLISET_LAHDE = _lue_paikalliset()
+PAIKALLISET, PAIKALLISET_VERSIO, PAIKALLISET_LAHDE = _lue_paikalliset()
 DATAJUURI, DATAJUURI_LAHDE, DATAJUURI_ARVO = _datajuuri()
 
 # Inbox on läpikulkupaikka, ei kirjanpitoa: tiliotteet ladataan sillä koneella
@@ -299,9 +311,9 @@ def _kirjoita_paikalliset(arvot):
     sisällä pysyy ajan tasalla silloinkin kun muoto muuttuu, eikä kukaan lue
     vanhentunutta neuvoa omasta tiedostostaan. Uudelleen kirjoitetaan vain
     muodon päivittyessä, ei joka ajolla."""
-    rivit = [PAIKALLISET_OHJE, f"muoto = {PAIKALLISET_MUOTO}"]
+    rivit = [PAIKALLISET_OHJE.format(versio=VERSIO)]
     rivit += [f"{avain} = {arvot[avain]}" for avain in sorted(arvot)
-              if avain != "muoto"]
+              if avain not in PAIKALLISET_VARATUT]
     turvakirjoita(KOODIJUURI / PAIKALLISET_TIEDOSTO, "\n".join(rivit) + "\n")
 
 
@@ -310,11 +322,16 @@ def _paivita_paikalliset():
     asetusten ja pääkirjan: vanha luetaan, uusi kirjoitetaan, eikä käyttäjän
     tarvitse tietää tapahtuneesta muuta kuin yhden rivin.
 
-    Muoto 0 oli datakansio.txt: pelkkä polku, ilman avainta ja ilman varaa
-    mihinkään muuhun. Muoto 1 on avain = arvo, jolloin samaan tiedostoon
-    mahtuvat myös muut tätä konetta koskevat asetukset — siksi se ei enää ole
-    nimetty ainoan sisältämänsä asian mukaan."""
-    if PAIKALLISET_LAHDE is None or PAIKALLISET_MUOTO_LUETTU >= PAIKALLISET_MUOTO:
+    Leima kertoo, millä versiolla tiedosto on kirjoitettu. Erillistä
+    muotonumeroa ei ole: ohjelman oma versio on jo olemassa, ja kaksi numeroa
+    tarkoittaisi kahta asiaa jotka voivat ajautua eri linjoille. Uudelleen
+    kirjoitetaan siis päivityksen jälkeen kerran, vaikkei muoto olisi
+    muuttunut — se maksaa yhden tiedoston ja pitää tiedoston sisällä olevan
+    ohjeen aina saman version kanssa yhtä mieltä.
+
+    Vanha datakansio.txt oli pelkkä polku ilman avainta, eikä siihen olisi
+    mahtunut mitään muuta; se luetaan yhä ja kirjoitetaan uuteen tiedostoon."""
+    if PAIKALLISET_LAHDE is None or PAIKALLISET_VERSIO == VERSIO:
         return
     try:
         _kirjoita_paikalliset(PAIKALLISET)
@@ -324,14 +341,13 @@ def _paivita_paikalliset():
         return
     vanha = PAIKALLISET_LAHDE.name
     if vanha == PAIKALLISET_TIEDOSTO:
-        print(f"Paikalliset asetukset päivitetty muodosta "
-              f"{PAIKALLISET_MUOTO_LUETTU} muotoon {PAIKALLISET_MUOTO}.")
+        print(f"Paikalliset asetukset päivitetty versiolle {VERSIO}.")
         return
     try:
         PAIKALLISET_LAHDE.unlink()
     except OSError:
         pass
-    print(f"Paikalliset asetukset päivitetty muotoon {PAIKALLISET_MUOTO}: "
+    print(f"Paikalliset asetukset päivitetty versiolle {VERSIO}: "
           f"{vanha} → {PAIKALLISET_TIEDOSTO}")
 
 

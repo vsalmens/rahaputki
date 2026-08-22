@@ -567,14 +567,22 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 
   `paikalliset.txt` on koneen omien asetusten tiedosto, ei pelkkä osoitin:
   muoto on `avain = arvo`, `#` aloittaa kommenttirivin, ja tuntemattomat
-  avaimet säilyvät. Toistaiseksi tunnettuja avaimia on kaksi, `datakansio` ja
-  `muoto`. Jälkimmäinen on tiedoston muodon versio, jota ohjelma ylläpitää
-  itse: kun muoto muuttuu, vanha luetaan ja uusi kirjoitetaan käynnistyksen
-  yhteydessä samalla tavalla kuin asetusten ja pääkirjan kohdalla. Aiempi
-  `datakansio.txt` (pelkkä polku, ei avainta) on muoto 0, ja se päivittyy
-  itsestään ensimmäisellä ajolla — vanha tiedosto poistetaan, kun uusi on
+  avaimet säilyvät. Toistaiseksi tunnettuja avaimia on yksi, `datakansio`.
+
+  Tiedoston lopussa on kommenttirivi `# --- Rahaputki v125 ---`. Se on
+  ohjelman oma leima siitä, millä versiolla tiedosto on kirjoitettu, ja siksi
+  se on kommentissa eikä avaimena: se ei ole asetus, eikä käsin muutettuna
+  tee mitään. Kun versio vaihtuu, ohjelma lukee vanhan tiedoston ja
+  kirjoittaa sen uudelleen käynnistyksen yhteydessä — samalla tavalla kuin
+  asetukset ja pääkirja päivittyvät muodosta toiseen. Erillistä
+  muotonumeroa ei ole, koska ohjelman versio on jo olemassa eikä kahden
+  numeron tarvitse ajautua eri linjoille.
+
+  Aiempi `datakansio.txt` (pelkkä polku, ei avaimia) päivittyy itsestään
+  ensimmäisellä ajolla, ja vanha tiedosto poistetaan vasta kun uusi on
   kirjoitettu. Uudelleenkirjoitus rakentaa myös tiedoston sisällä olevan
-  ohjeen, joten omat kommentit eivät säily muodon vaihtuessa.
+  ohjeen, joten omat kommentit eivät säily version vaihtuessa — asetukset
+  säilyvät.
 
   Saman voi kertoa myös ympäristömuuttujalla `RAHAPUTKI_DATA`, joka voittaa
   tiedoston — kätevä kertakokeiluun. Pysyvään käyttöön tiedosto on parempi,
