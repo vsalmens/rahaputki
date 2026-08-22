@@ -28,9 +28,7 @@ fi
 "$PY" "$KOODI/kirjanpito.py" aja
 echo
 
-if "$PY" -c "import pathlib, sys
-p = pathlib.Path('data/tapahtumat.csv')
-sys.exit(0 if p.exists() and len(p.read_text(encoding='utf-8').splitlines()) > 1 else 1)"; then
+if "$PY" "$KOODI/kirjanpito.py" onko-dataa; then
     echo "Avataan raportti selaimeen. Sulje ikkuna kun olet valmis."
     echo
     "$PY" "$KOODI/kirjanpito.py" selaa

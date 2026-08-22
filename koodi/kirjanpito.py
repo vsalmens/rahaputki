@@ -6435,6 +6435,22 @@ def cmd_selaa(args):
         print("\nSuljettu.")
 
 
+def cmd_onko_dataa(args):
+    """Käynnistimen kysymys: avataanko raportti vai näytetäänkö aloitusohje?
+
+    Käynnistin ei voi katsoa tiedostoa itse, koska pääkirja voi olla aivan eri
+    kansiossa kuin ohjelma (datakansio.txt). Aiemmin se katsoi polkua
+    data/tapahtumat.csv omasta kansiostaan, mikä erotetussa asennuksessa on
+    aina väärä paikka — raportti jäi avaamatta, vaikka ajo onnistui.
+
+    Vastaus on paluuarvo eikä tuloste: 0 = pääkirjassa on rivejä."""
+    try:
+        rivit = LEDGER.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        rivit = []
+    sys.exit(0 if len(rivit) > 1 else 1)
+
+
 def main():
     p = argparse.ArgumentParser(description="Kevyt henkilökohtainen rahaputki")
     ala = p.add_subparsers(dest="komento", required=True)
@@ -6472,6 +6488,7 @@ def main():
     s.add_argument("--portti", type=int, default=8765)
     k = ala.add_parser("kurkista", help="näytä miten CSV tulkittaisiin")
     k.add_argument("tiedosto")
+    ala.add_parser("onko-dataa", help=argparse.SUPPRESS)  # käynnistimen sisäinen
     args = p.parse_args()
     varmista_aloitus()
     with paakirjalukko(args.komento, getattr(args, "pakota", False)):
@@ -6479,7 +6496,8 @@ def main():
          "pankkihaku": cmd_pankkihaku,
          "budjetti-ehdotus": cmd_budjetti, "kurkista": cmd_kurkista,
          "selaa": cmd_selaa, "tarkista-kortit": cmd_tarkista_kortit,
-         "siivoa-kopiot": cmd_siivoa_kopiot, "luokittele": cmd_luokittele}[args.komento](args)
+         "siivoa-kopiot": cmd_siivoa_kopiot, "luokittele": cmd_luokittele,
+         "onko-dataa": cmd_onko_dataa}[args.komento](args)
 
 
 if __name__ == "__main__":

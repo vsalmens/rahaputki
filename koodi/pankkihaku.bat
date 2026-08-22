@@ -29,7 +29,7 @@ echo.
 %PY% "%KOODI%\kirjanpito.py" aja
 echo.
 
-%PY% -c "import pathlib, sys; p = pathlib.Path('data/tapahtumat.csv'); sys.exit(0 if p.exists() and len(p.read_text(encoding='utf-8').splitlines()) > 1 else 1)"
+%PY% "%KOODI%\kirjanpito.py" onko-dataa
 if errorlevel 1 goto tyhja
 
 echo Avataan raportti selaimeen. Sulje tama ikkuna kun olet valmis.
