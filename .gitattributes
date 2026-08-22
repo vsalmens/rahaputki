@@ -3,3 +3,6 @@
 *.bat text eol=crlf
 *.command text eol=lf
 *.sh text eol=lf
+
+# Kehittäjän tiedosto: ei kuulu ladattavaan pakettiin.
+CLAUDE.md export-ignore
