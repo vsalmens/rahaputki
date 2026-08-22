@@ -1013,8 +1013,30 @@ def paakirjalukko(komento, pakota=False):
                     f"⚠ Pääkirja on lukittu: {tiedot.get('kone', '?')} "
                     f"({tiedot.get('komento', '?')}), {ika:.0f} min sitten.\n"
                     f"  Odota että ajo valmistuu ja synkka ehtii perille. Jos lukko on\n"
-                    f"  jäänyt jumiin: python3 koodi/kirjanpito.py --pakota {komento}")
-            print(f"ℹ Vanhentunut lukko ({tiedot.get('kone', '?')}, {ika:.0f} min) ohitettu.")
+                    f"  jäänyt jumiin: {_komentorivi()} --pakota {komento}")
+            # Vanha lukko on melkein aina jäänne keskeytyneestä ajosta. "Melkein
+            # aina" ei silti riitä perusteeksi ohittaa sitä käyttäjän puolesta:
+            # jos toinen kone on yhä työn touhussa, molemmat kirjoittavat
+            # pääkirjaa yhtä aikaa, ja sen huomaa vasta kun toinen on hävinnyt.
+            # Kysytään siis, ja oletus on ettei ohiteta. Putkitetussa ajossa
+            # kysymys jää vastaamatta ja oletus pitää — se on oikea suunta.
+            print(f"⚠ Toisen koneen lukko on vanha: {tiedot.get('kone', '?')} "
+                  f"({tiedot.get('komento', '?')}), {ika:.0f} min sitten.\n"
+                  "  Yleensä ajo on keskeytynyt ja lukko jäänyt roikkumaan.\n"
+                  "  Jos se sen sijaan on yhä käynnissä, ohittaminen tarkoittaa\n"
+                  "  kahta konetta saman pääkirjan kimpussa yhtä aikaa.")
+            if not _kylla("Ohitetaanko vanha lukko?", oletus=False):
+                _vapauta_paikallinen(kahva)
+                _lukko_seis("Ei ohitettu. Yritä uudelleen kun toinen ajo on "
+                            f"valmis — tai {_komentorivi()} --pakota {komento}")
+            # Keskeytyneen ajon jättämä lukko ei vanhene pois itsestään, joten
+            # ilman poistoa sama kysymys toistuisi joka ajolla. Poistetaan vasta
+            # luvan saatuaan — se on koko luvan sisältö.
+            try:
+                (DATA / f".lukko.{tiedot.get('kone', '')}.json").unlink()
+            except OSError:
+                pass
+            print(f"→ Vanha lukko ({tiedot.get('kone', '?')}) ohitettu luvallasi.")
     tunniste = uuid.uuid4().hex
     _kirjoita_lukko(komento, tunniste)
     try:

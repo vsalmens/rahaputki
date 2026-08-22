@@ -588,9 +588,11 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   aja putkea kahdesti yhtä aikaa. Jaettu tila lisää siihen lukkotiedoston
   (`data/.lukko.<kone>.json`), jonka toinen kone näkee pilvisynkan kautta:
   päällekkäinen ajo kertoo kuka on liikkeellä ja millä komennolla sen sijaan,
-  että kaksi versiota pääkirjasta törmäisivät äänettömästi. Lukko vanhenee
-  itsestään 30 minuutissa, ja jumiin jääneen ohittaa `--pakota`:
-  `python3 koodi/kirjanpito.py --pakota aja`. Synkka ei ole hetkellinen,
+  että kaksi versiota pääkirjasta törmäisivät äänettömästi. Yli 30 minuutin
+  ikäistä lukkoa ei ohiteta puolestasi: ohjelma kertoo kenen lukko on ja kysyy
+  luvan, oletuksena ei. Luvan saatuaan se poistaa roikkumaan jääneen
+  lukkotiedoston, joten kysymys ei toistu joka ajolla. Kysymyksen ohi pääsee
+  suoraan lipulla: `python3 koodi/kirjanpito.py --pakota aja`. Synkka ei ole hetkellinen,
   joten tämä on varoitin eikä tae — älä silti aloita ajoa toisella koneella
   ennen kuin edellinen on valmis. Lukkoon törmätessään käynnistin pysähtyy
   siihen: se ei jatka raportin avaamiseen, vaan jättää varoituksen ruudulle
