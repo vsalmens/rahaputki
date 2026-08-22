@@ -5951,9 +5951,39 @@ window.addEventListener('DOMContentLoaded',function(){
     const kat=s?s.value:'';
     (TARKKAT[kat]||[]).forEach(function(t){const o=document.createElement('option');o.value=t;dl.appendChild(o);});
   });
+  function palvelinSuljettu(){
+    if(document.getElementById('suljettu'))return;
+    SERVER=false;
+    document.getElementById('tila').textContent='selaa-tila p\u00e4\u00e4ttyi';
+    window.close();  // toimii vain jos selain on itse avannut t\u00e4m\u00e4n ikkunan
+    var d=document.createElement('div');d.id='suljettu';
+    d.setAttribute('style','position:fixed;inset:0;z-index:9999;display:flex;'+
+      'align-items:center;justify-content:center;background:rgba(0,0,0,.72)');
+    d.innerHTML='<div style="background:#fff;color:#222;max-width:30em;padding:2em;'+
+      'border-radius:12px;font:16px/1.5 system-ui,sans-serif;text-align:center">'+
+      '<h2 style="margin:0 0 .5em">Rahaputki suljettu</h2>'+
+      '<p style="margin:0 0 .5em">Selaa-tila p\u00e4\u00e4ttyi, eiv\u00e4tk\u00e4 '+
+      'muutokset en\u00e4\u00e4 tallennu.</p>'+
+      '<p style="margin:0">Voit sulkea t\u00e4m\u00e4n v\u00e4lilehden.</p></div>';
+    document.body.appendChild(d);
+  }
+  function valvoPalvelinta(){
+    // Ctrl-C lopettaa palvelimen, mutta selain j\u00e4\u00e4 auki n\u00e4ytt\u00e4m\u00e4\u00e4n
+    // sivua, joka ei en\u00e4\u00e4 tallenna mit\u00e4\u00e4n. Kysyt\u00e4\u00e4n kahden sekunnin
+    // v\u00e4lein; kun vastaus j\u00e4\u00e4 kahdesti tulematta, kerrotaan se heti eik\u00e4
+    // vasta seuraavan klikkauksen ep\u00e4onnistuessa.
+    var hukassa=0;
+    setInterval(function(){
+      fetch('api/ping',{cache:'no-store'}).then(function(r){
+        hukassa=r.ok?0:hukassa+1;
+      }).catch(function(){hukassa++;}).then(function(){
+        if(hukassa>=2)palvelinSuljettu();
+      });
+    },2000);
+  }
   fetch('api/ping').then(function(r){return r.json();}).then(function(v){
     if(v.ok){SERVER=true;document.getElementById('tila').textContent=
-      'selaa-tila \u2713 muutokset tallentuvat heti';}
+      'selaa-tila \u2713 muutokset tallentuvat heti';valvoPalvelinta();}
   }).catch(function(){
     document.getElementById('tila').textContent=
       'tiedostotila: muokkaukset ker\u00e4t\u00e4\u00e4n ja ladataan muutokset.csv:n\u00e4';
