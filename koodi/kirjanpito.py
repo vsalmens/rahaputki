@@ -59,8 +59,20 @@ KOODIJUURI = KOODI.parent if KOODI.name == "koodi" else KOODI
 # on varmasti konekohtainen: asetukset/ on itse datakansion sisällä (eikä sieltä
 # voisi lukea, missä datakansio on), ja kotihakemisto on koneen kaikkien
 # asennusten yhteinen. Tiedosto ei seuraa mukana repossa eikä päivityksessä.
-PAIKALLISET_TIEDOSTO = "paikalliset.txt"
-DATAKANSIO_TIEDOSTO = "datakansio.txt"  # vanha muoto: pelkkä polku, ei avaimia
+# Nimi on pari jaetulle asetukset/-kansiolle: siellä ovat asetukset jotka
+# seuraavat kirjanpitoa, täällä ne jotka jäävät koneelle. Pääte on .txt eikä
+# .ini tai .conf, koska molemmat käyttöjärjestelmät avaavat sen
+# kaksoisklikkauksella ilman kysymyksiä — .ini:llä ei ole macOS:ssä
+# oletussovellusta lainkaan, ja .conf on kehittäjien tapa, ei kenenkään muun.
+PAIKALLISET_TIEDOSTO = "koneen-asetukset.txt"
+# Aiemmat nimet luetaan yhä ja kirjoitetaan uudella nimellä. Osoitin
+# datakansioon ei saa kadota kesken päivityksen: ilman sitä ohjelma aloittaisi
+# tyhjän kirjanpidon väärässä paikassa.
+PAIKALLISET_VANHAT = ("paikalliset.txt",)
+DATAKANSIO_TIEDOSTO = "datakansio.txt"  # vanhin muoto: pelkkä polku, ei avaimia
+# Avaimen vanha nimi. "datakansio" luetaan helposti data/-kansioksi, vaikka
+# kyse on kansiosta jonka sisällä data/ on.
+AVAINTEN_VANHAT_NIMET = {"datakansio": "tietokansio"}
 # Leima kertoo, minkä version ohjelma tiedoston kirjoitti. Se on kommentissa
 # eikä avaimena, koska se ei ole käyttäjän asetettavissa: jos versio ei täsmää,
 # tiedosto kirjoitetaan uudelleen, ja käsin muutettu arvo katoaisi silloin
@@ -77,9 +89,13 @@ PAIKALLISET_OHJE = """\
 # Muoto: avain = arvo, yksi per rivi. Rivi joka alkaa #-merkillä on kommentti.
 #
 # Tunnetut avaimet:
-#   datakansio   polku kansioon, jossa asetukset/, data/ ja raportit/ ovat.
-#                Tyhjä tai puuttuva = ohjelman oma kansio (tavallisin).
-#                Kirjoita polku kokonaisena tai ~/-alkuisena.
+#   tietokansio  kansio, jonka SISÄLLÄ ovat asetukset/, data/ ja raportit/.
+#                Oletus on tämän tiedoston oma kansio, eli kaikki yhdessä
+#                paikassa — niin sen kuuluu useimmiten olla. Toisin sanoen:
+#                    tietokansio = .
+#                Muuta tämä vain jos haluat kirjanpidon eri paikkaan kuin
+#                ohjelman, esimerkiksi jaettuun pilvikansioon. Kirjoita polku
+#                kokonaisena tai ~/-alkuisena.
 #
 # Alla oleva versioleima on ohjelman omaa kirjanpitoa: sitä ei tarvitse
 # muuttaa, eikä muutoksesta seuraa mitään. Kun ohjelma päivittyy, se
@@ -106,6 +122,18 @@ def _lue_avainarvot(polku):
     return arvot
 
 
+def _nimea_avaimet(arvot):
+    """Vanhalla nimellä kirjoitettu avain luetaan uudella nimellä. Käyttäjän
+    tiedostoon ei tarvitse koskea heti: se kirjoitetaan uusiksi seuraavan
+    version leiman yhteydessä, ja siihen asti molemmat toimivat."""
+    for vanha_nimi, uusi_nimi in AVAINTEN_VANHAT_NIMET.items():
+        if vanha_nimi in arvot and uusi_nimi not in arvot:
+            arvot[uusi_nimi] = arvot.pop(vanha_nimi)
+        else:
+            arvot.pop(vanha_nimi, None)
+    return arvot
+
+
 def _lue_paikalliset():
     """Koneen omat asetukset: arvot, luettu muotoversio ja tiedosto josta ne
     tulivat (None jos tiedostoa ei ole — se on täysin normaalia, koska yhden
@@ -114,25 +142,27 @@ def _lue_paikalliset():
     Versio on se, jolla tiedosto on kirjoitettu (tyhjä jos leimaa ei ole, eli
     tiedosto on vanhaa muotoa). Vanha datakansio.txt luetaan yhä: siinä on
     pelkkä polku ilman avainta. varmista_aloitus kirjoittaa sen uudelleen."""
-    uusi = KOODIJUURI / PAIKALLISET_TIEDOSTO
-    if uusi.is_file():
-        arvot = _lue_avainarvot(uusi)
+    for nimi in (PAIKALLISET_TIEDOSTO,) + PAIKALLISET_VANHAT:
+        polku = KOODIJUURI / nimi
+        if not polku.is_file():
+            continue
+        arvot = _nimea_avaimet(_lue_avainarvot(polku))
         try:
-            osuma = PAIKALLISET_LEIMA.search(uusi.read_text(encoding="utf-8"))
+            osuma = PAIKALLISET_LEIMA.search(polku.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError):
             osuma = None
-        return arvot, (osuma.group(1) if osuma else ""), uusi
-    vanha = KOODIJUURI / DATAKANSIO_TIEDOSTO
-    if vanha.is_file():
+        return arvot, (osuma.group(1) if osuma else ""), polku
+    vanhin = KOODIJUURI / DATAKANSIO_TIEDOSTO
+    if vanhin.is_file():
         try:
-            rivit = vanha.read_text(encoding="utf-8").splitlines()
+            rivit = vanhin.read_text(encoding="utf-8").splitlines()
         except (OSError, UnicodeDecodeError):
             rivit = []
         for rivi in rivit:
             rivi = rivi.strip()
             if rivi and not rivi.startswith("#"):
-                return {"datakansio": rivi}, "", vanha
-        return {}, "", vanha
+                return {"tietokansio": rivi}, "", vanhin
+        return {}, "", vanhin
     return {}, "", None
 
 
@@ -173,10 +203,10 @@ def _datajuuri():
     arvo = _siisti_polkuarvo(os.environ.get("RAHAPUTKI_DATA", ""))
     lahde = "ympäristömuuttuja RAHAPUTKI_DATA"
     if not arvo:
-        arvo = _siisti_polkuarvo(PAIKALLISET.get("datakansio", ""))
+        arvo = _siisti_polkuarvo(PAIKALLISET.get("tietokansio", ""))
         lahde = str(PAIKALLISET_LAHDE)
-        if PAIKALLISET_LAHDE is not None and PAIKALLISET_LAHDE.name == PAIKALLISET_TIEDOSTO:
-            lahde += " (avain datakansio)"
+        if PAIKALLISET_LAHDE is not None and PAIKALLISET_LAHDE.name != DATAKANSIO_TIEDOSTO:
+            lahde += " (avain tietokansio)"
     if not arvo:
         return KOODIJUURI, None, ""
     polku = Path(arvo).expanduser()
@@ -331,7 +361,9 @@ def _paivita_paikalliset():
 
     Vanha datakansio.txt oli pelkkä polku ilman avainta, eikä siihen olisi
     mahtunut mitään muuta; se luetaan yhä ja kirjoitetaan uuteen tiedostoon."""
-    if PAIKALLISET_LAHDE is None or PAIKALLISET_VERSIO == VERSIO:
+    if PAIKALLISET_LAHDE is None:
+        return
+    if PAIKALLISET_VERSIO == VERSIO and PAIKALLISET_LAHDE.name == PAIKALLISET_TIEDOSTO:
         return
     try:
         _kirjoita_paikalliset(PAIKALLISET)

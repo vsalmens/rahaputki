@@ -16,6 +16,7 @@ budjetti.csv
 budjetti_ehdotus.csv
 
 # Koneen omat asetukset — eri jokaisella koneella
+koneen-asetukset.txt
 paikalliset.txt
 datakansio.txt
 
