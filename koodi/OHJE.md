@@ -592,7 +592,17 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   ikäistä lukkoa ei ohiteta puolestasi: ohjelma kertoo kenen lukko on ja kysyy
   luvan, oletuksena ei. Luvan saatuaan se poistaa roikkumaan jääneen
   lukkotiedoston, joten kysymys ei toistu joka ajolla. Kysymyksen ohi pääsee
-  suoraan lipulla: `python3 koodi/kirjanpito.py --pakota aja`. Synkka ei ole hetkellinen,
+  suoraan lipulla: `python3 koodi/kirjanpito.py --pakota aja`.
+
+  Ohitus näkyy myös toiseen suuntaan: jos oma lukko katoaa kesken ajon (toinen
+  kone otti sen, tai synkka vei tiedoston alta), kirjoitus pysähtyy ennen kuin
+  se tapahtuu. Komentorivillä ohjelma kertoo syyn ja kysyy, keskeytetäänkö vai
+  otetaanko lukko takaisin — oletus on keskeyttää. `selaa`-tilassa kysymystä ei
+  voi esittää konsolissa, joten kirjoitus estetään ja syy näkyy selaimessa.
+  Keskeytys ei riko mitään: pääkirjaan ei kirjoiteta, ja saman ajon voi toistaa
+  sellaisenaan.
+
+  Synkka ei ole hetkellinen,
   joten tämä on varoitin eikä tae — älä silti aloita ajoa toisella koneella
   ennen kuin edellinen on valmis. Lukkoon törmätessään käynnistin pysähtyy
   siihen: se ei jatka raportin avaamiseen, vaan jättää varoituksen ruudulle

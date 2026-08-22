@@ -30,6 +30,7 @@ import socket
 import statistics
 import sys
 import tempfile
+import threading
 import uuid
 from collections import Counter, defaultdict
 from contextlib import contextmanager
@@ -816,6 +817,7 @@ KIRJOITTAVAT = {"aja", "hae", "opi", "luokittele", "siivoa-kopiot", "selaa",
                 "tarkista-kortit", "pankkihaku"}
 LUKKO_VANHENEE_MIN = 30
 LUKKO_TUNNISTE = None
+LUKKO_KOMENTO = None
 
 
 LUKKO_KOODI = 4  # paluuarvo, josta käynnistin tunnistaa lukon muista virheistä
@@ -958,6 +960,36 @@ def _varmista_omistus(tunniste, varmistus_s):
                     f"({voittaja.get('komento', '?')}). Yritä hetken päästä uudelleen.")
 
 
+def _lukko_vietiin():
+    """Oma lukko on kadonnut kesken ajon — mitä tehdään?
+
+    Syitä on kaksi, eikä niitä voi täältä käsin erottaa toisistaan: toinen kone
+    ohitti lukon luvalla, tai pilvisynkka vei tiedoston hetkeksi alta.
+    Ensimmäisessä tapauksessa jatkaminen tarkoittaa kahta konetta saman
+    pääkirjan kimpussa. Jälkimmäisessä keskeytys on turha, mutta harmiton:
+    putki on idempotentti, ja saman ajon voi toistaa sellaisenaan. Siksi
+    oletus on keskeyttää, ja jatkaminen vaatii sanotun luvan.
+
+    Selaimesta tulevaa kirjoitusta ei voi kysyä konsolista: käyttäjä katsoo
+    selainta, ja pyyntö jäisi roikkumaan odottamaan vastausta, jota kukaan ei
+    ole antamassa. Siellä kirjoitus estetään ja syy kerrotaan selaimeen."""
+    syy = ("Lukkosi on kadonnut kesken ajon: joko toinen kone otti sen luvalla,\n"
+           "  tai pilvisynkka vei tiedoston alta. Jos toinen kone kirjoittaa nyt\n"
+           "  samaa pääkirjaa, jatkaminen sekoittaa molempien työn keskenään.")
+    if threading.current_thread() is not threading.main_thread():
+        print(f"\n⚠ {syy}\n  Kirjoitus estetty.")
+        raise RuntimeError("Lukkosi vietiin toisella koneella — kirjoitusta ei "
+                           "tehty. Sulje raportti ja aja uudelleen, kun tiedät "
+                           "kumpi kone on liikkeellä.")
+    print(f"\n⚠ {syy}")
+    if _valikko("Mitä tehdään?",
+                [("keskeyta", "Keskeytä — pääkirjaan ei kirjoiteta mitään"),
+                 ("jatka", "Ota lukko takaisin ja jatka")], oletus=1) != "jatka":
+        _lukko_seis("Keskeytetty. Pääkirjaan ei kirjoitettu mitään.")
+    _kirjoita_lukko(LUKKO_KOMENTO or "", LUKKO_TUNNISTE)
+    print("→ Lukko otettu takaisin, jatketaan.")
+
+
 def lukon_virkistys():
     """Pitkä ajo (selaa voi olla auki tunteja) pitää lukkonsa tuoreena joka
     kirjoituksella. Samalla tarkistetaan, ettei lukko ole vaihtanut omistajaa
@@ -970,8 +1002,10 @@ def lukon_virkistys():
         _lukko_seis(f"⚠ Toinen kone ({voittaja.get('kone', '?')}) otti lukon kesken "
                     f"ajon. Kirjoitus keskeytetty, jotta muutokset eivät mene ristiin.")
     tiedot = _lue_lukko()
-    if tiedot and tiedot.get("tunniste") == LUKKO_TUNNISTE:
-        _kirjoita_lukko(tiedot.get("komento", ""), LUKKO_TUNNISTE)
+    if tiedot is None or tiedot.get("tunniste") != LUKKO_TUNNISTE:
+        _lukko_vietiin()
+        return
+    _kirjoita_lukko(tiedot.get("komento", ""), LUKKO_TUNNISTE)
 
 
 @contextmanager
@@ -986,7 +1020,7 @@ def paakirjalukko(komento, pakota=False):
     Toinen taso on käytössä vain, jos config.jsonissa on "lukitus": "jaettu".
     Yhden koneen asennus on tavallisin, eikä sen kansioon kannata kirjoittaa
     lukkotiedostoja eikä sen ajoon lisätä odotusta."""
-    global LUKKO_TUNNISTE
+    global LUKKO_TUNNISTE, LUKKO_KOMENTO
     if komento not in KIRJOITTAVAT:
         yield
         return
@@ -1049,7 +1083,7 @@ def paakirjalukko(komento, pakota=False):
         _lukkotiedosto().unlink(missing_ok=True)
         _vapauta_paikallinen(kahva)
         raise
-    LUKKO_TUNNISTE = tunniste
+    LUKKO_TUNNISTE, LUKKO_KOMENTO = tunniste, komento
     try:
         yield
     finally:
@@ -1059,7 +1093,7 @@ def paakirjalukko(komento, pakota=False):
                 _lukkotiedosto().unlink(missing_ok=True)
         except OSError:
             pass
-        LUKKO_TUNNISTE = None
+        LUKKO_TUNNISTE, LUKKO_KOMENTO = None, None
         _vapauta_paikallinen(kahva)
 
 
