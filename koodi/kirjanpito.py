@@ -33,7 +33,7 @@ import tempfile
 import threading
 import uuid
 from collections import Counter, defaultdict
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -495,6 +495,27 @@ def lue_teksti(polku: Path):
         if p > paras_p:
             paras, paras_enc, paras_p = t, enc, p
     return paras, paras_enc
+
+
+@contextmanager
+def _hidas_vahti(viesti, sekuntia=4.0):
+    """Kertoo käyttäjälle, jos pilvikansio ei vastaa heti.
+
+    Ensimmäinen kosketus Driveen tai iCloudiin voi kestää sekunteja: File
+    Provider hakee tiedostot palvelimelta, ja jos toinen kone on juuri
+    kirjoittanut pääkirjan ja raportit, luku jonottaa niiden latauksen perässä.
+    Ohjelma näyttää silloin jumittuneelta, vaikka se odottaa levyä — ja
+    tyhjälle ruudulle painetaan Ctrl-C.
+
+    Viesti tulostuu vain jos odotus venyy. Ajastin on daemon-säie, joten se ei
+    pidä prosessia hengissä eikä sillä ole väliä, ehtiikö se koskaan laueta."""
+    ajastin = threading.Timer(sekuntia, lambda: print(viesti))
+    ajastin.daemon = True
+    ajastin.start()
+    try:
+        yield
+    finally:
+        ajastin.cancel()
 
 
 TURVAKIRJOITUS_YRITYKSET = 4
@@ -6783,8 +6804,17 @@ def main():
     k.add_argument("tiedosto")
     ala.add_parser("onko-dataa", help=argparse.SUPPRESS)  # käynnistimen sisäinen
     args = p.parse_args()
-    varmista_aloitus()
-    with paakirjalukko(args.komento, getattr(args, "pakota", False)):
+    # Käynnistys koskee tietokansiota ensimmäistä kertaa: kansiot, config ja
+    # lukko. Pilvikansiossa juuri se on hitain hetki, ja siihen asti ruudulla
+    # ei ole mitään. Vahti kertoo, mitä odotetaan, jos odotus venyy.
+    vahti = _hidas_vahti(f"\u23f3 Odotetaan tietokansiota: {DATAJUURI}\n"
+                         "   Pilvikansio hakee tiedostoja \u2014 t\u00e4m\u00e4 ei ole jumi. "
+                         "Anna sille hetki.")
+    with ExitStack() as pino:
+        with vahti:
+            varmista_aloitus()
+            pino.enter_context(paakirjalukko(args.komento,
+                                             getattr(args, "pakota", False)))
         {"aja": cmd_aja, "hae": cmd_hae, "opi": cmd_opi, "raportti": cmd_raportti,
          "pankkihaku": cmd_pankkihaku,
          "budjetti-ehdotus": cmd_budjetti, "kurkista": cmd_kurkista,
