@@ -449,6 +449,9 @@ def lue_teksti(polku: Path):
     return paras, paras_enc
 
 
+TURVAKIRJOITUS_YRITYKSET = 4
+
+
 def turvakirjoita(polku, teksti):
     """Kirjoita tiedosto niin, ettei siitä voi jäädä puolikasta.
 
@@ -460,21 +463,40 @@ def turvakirjoita(polku, teksti):
     Käytetään tiedostoihin, jotka ovat käyttäjän totuus: pääkirja, säännöt,
     config, pankkihaun tunnukset, yhteistalouden tila ja pankista noudetut
     CSV:t. Raportit syntyvät joka ajossa uudelleen, joten niitä ei tarvitse
-    suojata."""
+    suojata.
+
+    Pilvikansiossa (Drive, iCloud, OneDrive) juuri luotu tilapäistiedosto voi
+    kadota käsistä ennen kuin se ehditään vaihtaa paikalleen: tiedostojärjestelmä
+    on palvelimen välityspalvelin eikä levy, ja se materialisoi tiedostot omaan
+    tahtiinsa. Silloin os.replace kaatuu virheeseen "No such file or directory"
+    tiedostoon, joka kirjoitettiin rivi sitten. Siksi koko kirjoitus yritetään
+    uudelleen muutaman kerran, joka kerta uudella tilapäisnimellä. Vanha versio
+    on koko ajan tallessa: replace joko onnistuu tai ei tapahdu lainkaan."""
     polku = Path(polku)
     polku.parent.mkdir(parents=True, exist_ok=True)
-    tilapainen = polku.with_name(f"{polku.name}.uusi{os.getpid()}")
-    try:
-        with open(tilapainen, "w", encoding="utf-8", newline="") as f:
-            f.write(teksti)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tilapainen, polku)
-    finally:
+    viimeisin = None
+    for yritys in range(TURVAKIRJOITUS_YRITYKSET):
+        tilapainen = polku.with_name(f"{polku.name}.uusi{os.getpid()}-{yritys}")
         try:
-            tilapainen.unlink(missing_ok=True)
-        except OSError:
-            pass
+            with open(tilapainen, "w", encoding="utf-8", newline="") as f:
+                f.write(teksti)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tilapainen, polku)
+            return
+        except OSError as e:
+            viimeisin = e
+            try:
+                tilapainen.unlink(missing_ok=True)
+            except OSError:
+                pass
+            if yritys + 1 < TURVAKIRJOITUS_YRITYKSET:
+                time.sleep(0.4 * (yritys + 1))
+    raise RuntimeError(
+        f"Tiedostoa {polku.name} ei saatu kirjoitettua ({viimeisin}).\n"
+        f"  Kansio: {polku.parent}\n"
+        "  Pilvisynkka voi viedä juuri luodun tiedoston hetkeksi alta. Vanha\n"
+        "  versio on tallessa eikä mitään rikkoutunut — kokeile uudelleen.")
 
 
 def turvakirjoita_json(polku, data):
