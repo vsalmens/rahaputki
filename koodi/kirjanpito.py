@@ -411,7 +411,7 @@ def varmista_aloitus():
     for kohde, malli_nimi in ALOITUSMALLIT:
         malli = KOODI / malli_nimi
         if not kohde.exists() and malli.exists():
-            shutil.copyfile(malli, kohde)
+            turvakirjoita_kopio(malli, kohde)
             print(f"Luotu {kohde.parent.name}/{kohde.name} tiedostosta {malli_nimi} "
                   "— muokkaa omaksesi kun haluat.")
     if not CONFIG.exists():
@@ -553,12 +553,17 @@ def turvakirjoita(polku, teksti):
                 os.fsync(f.fileno())
             os.replace(tilapainen, polku)
             return
-        except OSError as e:
-            viimeisin = e
+        except BaseException as e:
+            # Myös Ctrl-C kesken kirjoituksen: tilapäistiedosto siivotaan aina,
+            # ja keskeytys päästetään sen jälkeen menemään. Kohdetiedosto on
+            # koskematon, koska replacea ei ehditty tehdä.
             try:
                 tilapainen.unlink(missing_ok=True)
             except OSError:
                 pass
+            if not isinstance(e, OSError):
+                raise
+            viimeisin = e
             if yritys + 1 < TURVAKIRJOITUS_YRITYKSET:
                 time.sleep(0.4 * (yritys + 1))
     raise RuntimeError(
@@ -566,6 +571,26 @@ def turvakirjoita(polku, teksti):
         f"  Kansio: {polku.parent}\n"
         "  Pilvisynkka voi viedä juuri luodun tiedoston hetkeksi alta. Vanha\n"
         "  versio on tallessa eikä mitään rikkoutunut — kokeile uudelleen.")
+
+
+def turvakirjoita_kopio(lahde, kohde):
+    """Kopioi tiedosto niin, ettei kohteeksi voi jäädä puolikasta.
+
+    shutil.copy2 kirjoittaa suoraan kohteeseen: keskeytys kesken kopion jättää
+    katkaistun tiedoston, jolla on oikea nimi. Varmuuskopiossa se on pahin
+    mahdollinen lopputulos — tiedosto näyttää varmuuskopiolta mutta ei ole.
+    Kopio menee siis viereen ja vaihdetaan paikalleen yhdellä replacella."""
+    kohde = Path(kohde)
+    tilapainen = kohde.with_name(f"{kohde.name}.uusi{os.getpid()}")
+    try:
+        shutil.copy2(lahde, tilapainen)
+        os.replace(tilapainen, kohde)
+    except BaseException:
+        try:
+            tilapainen.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def turvakirjoita_json(polku, data):
@@ -627,7 +652,7 @@ def varmuuskopioi(polku, etuliite=None):
     try:
         kansio.mkdir(parents=True, exist_ok=True)
         if not kohde.exists():
-            shutil.copy2(polku, kohde)
+            turvakirjoita_kopio(polku, kohde)
     except OSError:
         return
     _karsi_varmuuskopiot(kansio, etuliite, polku.suffix)
@@ -1338,7 +1363,7 @@ def _varmuuskopioi_ledger():
         try:
             kansio.mkdir(parents=True, exist_ok=True)
             if not kohde.exists():
-                shutil.copy2(LEDGER, kohde)
+                turvakirjoita_kopio(LEDGER, kohde)
             break
         except OSError as e:
             # Pilvisynkka (esim. Google Drive) voi hetkellisesti viedä kansion alta.
@@ -1964,7 +1989,7 @@ def _talleta_avain(pem):
         return pem
     try:
         kohde.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(pem, kohde)
+        turvakirjoita_kopio(pem, kohde)
         os.chmod(kohde, 0o600)
     except OSError as e:
         print(f"⚠ siirto ei onnistunut ({e}) — jätetään avain paikalleen")
@@ -1981,7 +2006,7 @@ def _talleta_uusi_avain(pem_teksti, app_id):
     """Itse luotu avain suoraan oikeaan paikkaan — se ei käy latauskansiossa."""
     kohde, _ = _avaimen_kohde(Path(f"{app_id}.pem"))
     kohde.parent.mkdir(parents=True, exist_ok=True)
-    kohde.write_text(pem_teksti, encoding="utf-8")
+    turvakirjoita(kohde, pem_teksti)
     try:
         os.chmod(kohde, 0o600)
     except OSError:
@@ -6284,10 +6309,11 @@ def cmd_budjetti(args):
         rivit.append((k, ehdotus))
         print(f"  {k:<24} {fmt_eur(ehdotus):>10} €/kk   (mediaani {fmt_eur(med)})")
     polku = ASETUKSET / "budjetti_ehdotus.csv"
-    with open(polku, "w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f, delimiter=";")
-        w.writerow(["kategoria", "kk_raami"])
-        w.writerows(rivit)
+    puskuri = io.StringIO()
+    w = csv.writer(puskuri, delimiter=";")
+    w.writerow(["kategoria", "kk_raami"])
+    w.writerows(rivit)
+    turvakirjoita(polku, puskuri.getvalue())
     print(f"\nTallennettu: asetukset/{polku.name} — kopioi haluamasi rivit "
           "tiedostoon asetukset/budjetti.csv (ja muokkaa vapaasti).")
 
