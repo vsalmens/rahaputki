@@ -487,9 +487,18 @@ klikattavan läsnäoloruudukon mukaan toimitusviikoille, palautus-tarkenteet
 ovat jäsenten maksuja pankkiirille, ja kaikki muut tarkenteet (netti,
 sähkö, …) jaetaan tasan. Kuukausittaiset vakiohyvitykset (esim. auton
 lataussähkö) ja kertaluontoiset käsikirjaukset osallistujavalintoineen
-lisätään lomakkeilla. Saldot summautuvat aina nollaan, ja 🖨-linkki avaa
+lisätään lomakkeilla. Poimittuun riviin voi kirjoittaa oman kuvauksen
+(*lisää kuvaus* rivin nimen alla) — se tallentuu pääkirjaan ja näkyy myös
+tulostettavassa erittelyssä, jotta "K-rauta Lanterna 184,75" ei ole puolen
+vuoden päästä arvoitus kenellekään. Saldot summautuvat aina nollaan, ja 🖨-linkki avaa
 tulostettavan erittelyn (selaimen tulostuksesta PDF). Asetukset ja
 läsnäolot elävät tiedostossa `data/yhteistalous.json`.
+
+**Kuka maksaa kenelle.** Toimenpiteet-lista näyttää vähimmän määrän
+siirtoja, joilla saldot menevät nollaan: suurin velallinen maksaa suoraan
+suurimmalle saatavalle. Rahaa ei siis kierrätetä pankkiirin kautta eikä
+kenenkään tarvitse olla välikätenä. Lisää jäsenten tilinumerot tiedostoon
+`data/yhteistalous.json` → `jasenet[].tili`, niin ne näkyvät maksuohjeissa.
 
 **Kaudet ja laskut.** Kun lasku on lähetetty, sulje kausi: anna sen alku- ja
 loppupäivä ja paina *sulje kausi ja laskuta*. Päivät ovat mukaan lukevia —

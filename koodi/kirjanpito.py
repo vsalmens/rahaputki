@@ -282,10 +282,13 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.30"
+VERSIO = "v0.31"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
-                 "tarkenne", "peruste", "lahde", "tila"]
+                 "tarkenne", "peruste", "lahde", "tila", "muistiinpano"]
+# muistiinpano: käyttäjän oma selite riville. Ei vaikuta luokitteluun eikä
+# rivin tunnisteeseen — se on vain sitä varten, että "K-rauta Lanterna 184,75"
+# muistetaan puoli vuotta myöhemmin oikein.
 # tila: tyhjä = pankin kirjaama, "varaus" = vasta varattu (ei vielä kirjattu)
 VARAUS = "varaus"
 VARAUKSET = DATA / "varaukset.json"
@@ -1769,6 +1772,7 @@ def kirjoita_ledger(rivit):
         r["tarkenne"] = siisti(r.get("tarkenne", "")).lower()
         r.setdefault("peruste", "")
         r.setdefault("tila", "")
+        r.setdefault("muistiinpano", "")
     rivit.sort(key=lambda r: (r["pvm"], r["tili"], r["id"]))
     puskuri = io.StringIO()
     w = csv.DictWriter(puskuri, fieldnames=LEDGER_KENTAT, delimiter=";")
@@ -4553,6 +4557,57 @@ def kausi_alku_rajaksi(nayton):
         return str(nayton)
 
 
+def tasausmaksut(netto, kynnys=0.005):
+    """Vähin määrä siirtoja, joilla saldot menevät nollaan.
+
+    Aiemmin kaikki kierrätettiin pankkiirin kautta: velalliset maksoivat
+    hänelle ja hän maksoi eteenpäin. Sama raha liikkui kahdesti ja
+    pankkiirin tilillä makasi turhaan muiden rahaa. Nyt suurin velallinen
+    maksaa suoraan suurimmalle saatavalle, ja niin edelleen — siirtoja
+    tulee korkeintaan yksi vähemmän kuin jäseniä, eikä kenenkään tarvitse
+    olla välikätenä.
+
+    netto: {jäsen: euroa}, positiivinen = maksaa, negatiivinen = saa.
+    Palauttaa listan (maksaja, saaja, summa)."""
+    velalliset = sorted(((nm, v) for nm, v in netto.items() if v > kynnys),
+                        key=lambda x: (-x[1], x[0]))
+    saatavat = sorted(((nm, -v) for nm, v in netto.items() if v < -kynnys),
+                      key=lambda x: (-x[1], x[0]))
+    maksut, i, j = [], 0, 0
+    while i < len(velalliset) and j < len(saatavat):
+        vn, va = velalliset[i]
+        sn, sa = saatavat[j]
+        maara = min(va, sa)
+        if maara > kynnys:
+            maksut.append((vn, sn, round(maara, 2)))
+        velalliset[i] = (vn, va - maara)
+        saatavat[j] = (sn, sa - maara)
+        if velalliset[i][1] <= kynnys:
+            i += 1
+        if saatavat[j][1] <= kynnys:
+            j += 1
+    return maksut
+
+
+def oly_netto(L):
+    """Jäsenten kokonaissaldot: avoin kausi plus aiemmilta laskuilta maksamatta.
+    Positiivinen = maksaa muille, negatiivinen = saa muilta."""
+    netto = {nm: L["velka"].get(nm, 0.0) for nm in L["nimet"]}
+    vanhat = {}
+    for kt in L["kaudet"]:
+        for nm, jaljella in kt.get("jaljella", {}).items():
+            if jaljella > 0.005:
+                vanhat[nm] = vanhat.get(nm, 0.0) + jaljella
+    yht = sum(vanhat.values())
+    for nm in netto:
+        netto[nm] += vanhat.get(nm, 0.0)
+    # Sama saatava vastakkaismerkkisenä pankkiirille: hän on maksanut ne kulut,
+    # joista muut ovat vielä velkaa, joten summan on mentävä nollaan.
+    if L["pankkiiri"] in netto:
+        netto[L["pankkiiri"]] -= yht
+    return netto, vanhat
+
+
 def kausivali(alku_txt, loppu_txt):
     """Kauden päivät luettavana välinä. Juuri suljetun kauden jälkeen uusi
     kausi alkaa huomenna, jolloin väli olisi takaperin — silloin kerrotaan
@@ -4667,7 +4722,7 @@ def olympos_laskelma(ledger, oly, tanaan=None, alku_yli=None):
         return str(r.get("id") or avain(r.get("tili", ""), r.get("pvm", ""),
                                         float(r.get("summa", 0) or 0), r.get("saaja", "")))
 
-    def viikkojako(p, m, kuvaus="", rid="", jalki=""):
+    def viikkojako(p, m, kuvaus="", rid="", jalki="", note=""):
         # Ruokaboksi veloittaa 2-5 pv ennen maanantaitoimitusta; kulu kuuluu
         # toimitusviikolle eli maksua seuraavalle maanantaille.
         siirto = (8 - p.isoweekday()) % 7 or 7
@@ -4680,17 +4735,19 @@ def olympos_laskelma(ledger, oly, tanaan=None, alku_yli=None):
             maksettu[pankkiiri] += m
         viikot.setdefault(vk, {"boksi": 0.0})["boksi"] += m
         poimitut.append({"pvm": p.isoformat(), "kuvaus": kuvaus, "summa": m,
-                         "tyyppi": "boksi", "vk": vk, "rid": rid, "jalki": jalki})
+                         "tyyppi": "boksi", "vk": vk, "rid": rid, "jalki": jalki,
+                         "note": note})
         return m
 
-    def tasajako(m, tark, pvm="", kuvaus="", rid="", jalki=""):
+    def tasajako(m, tark, pvm="", kuvaus="", rid="", jalki="", note=""):
         for nm in nimet:
             osuus[nm] += m / n
         if pankkiiri in maksettu:
             maksettu[pankkiiri] += m
         jaetut[tark or "(muu)"] = jaetut.get(tark or "(muu)", 0.0) + m
         poimitut.append({"pvm": pvm, "kuvaus": kuvaus, "summa": m,
-                         "tyyppi": tark or "(muu)", "rid": rid, "jalki": jalki})
+                         "tyyppi": tark or "(muu)", "rid": rid, "jalki": jalki,
+                         "note": note})
 
     for r in ledger:
         try:
@@ -4725,11 +4782,14 @@ def olympos_laskelma(ledger, oly, tanaan=None, alku_yli=None):
                 jalki = next((k["loppu"] for k in kausi_tila
                               if k["alku"] < p.isoformat() <= k["loppu"]), alku.isoformat())
         if rid in poisjoukko:
-            poissuljetut_rivit.append({"pvm": p.isoformat(), "kuvaus": r.get("saaja", ""),
-                                       "summa": s,
-                                       "tyyppi": ("palautus" if on_palautus else
-                                                  "boksi" if on_boksi else (tark or "(muu)")),
-                                       "rid": rid})
+            # Suljetulle kaudelle kuuluvaa poissuljettua riviä ei enää listata:
+            # se on käsitelty kertaalleen eikä palaa mihinkään laskuun.
+            if p > alku:
+                poissuljetut_rivit.append(
+                    {"pvm": p.isoformat(), "kuvaus": r.get("saaja", ""), "summa": s,
+                     "tyyppi": ("palautus" if on_palautus else
+                                "boksi" if on_boksi else (tark or "(muu)")),
+                     "rid": rid})
             continue
         if on_palautus:
             for j in jasenet:
@@ -4739,10 +4799,11 @@ def olympos_laskelma(ledger, oly, tanaan=None, alku_yli=None):
                     palautukset.append((p, s, j["nimi"], r.get("saaja", ""), rid))
                     break
             continue
+        note = siisti(str(r.get("muistiinpano", "") or ""))
         if on_boksi:
-            boksi_yht += viikkojako(p, -s, r.get("saaja", ""), rid, jalki)
+            boksi_yht += viikkojako(p, -s, r.get("saaja", ""), rid, jalki, note)
         elif on_tasan:
-            tasajako(-s, tark, p.isoformat(), r.get("saaja", ""), rid, jalki)
+            tasajako(-s, tark, p.isoformat(), r.get("saaja", ""), rid, jalki, note)
     # --- maksujen täsmäytys: ensin vanhimman lähetetyn laskun saatava ---
     for pvm_m, summa_m, jasen_m, kuvaus_m, rid_m in sorted(palautukset,
                                                            key=lambda x: x[0]):
@@ -4889,6 +4950,14 @@ def oly_avaa_kausi(oly):
     return viim
 
 
+def _note_html(x):
+    """Käyttäjän oma kuvaus rivin perään erittelyssä. Ilman tätä lasku kertoo
+    vain kauppiaan nimen, ja "K-rauta Lanterna 184,75" on puolen vuoden
+    päästä arvoitus myös maksajalle."""
+    note = siisti(str(x.get("note", "") or ""))
+    return f' <span class="pikku">— {html.escape(note)}</span>' if note else ""
+
+
 def olympos_erittely_html(ledger, alku=None, loppu=None, alkupaiva=None):
     """Itsenäinen, tulostusystävällinen erittely (selaimesta: tulosta → PDF).
 
@@ -4971,36 +5040,25 @@ def olympos_erittely_html(ledger, alku=None, loppu=None, alkupaiva=None):
             tili_map[j.get("nimi", "")] = t
     # Aiemmilta laskuilta avoinna oleva kulkee mukana: muuten uusi lasku
     # näyttäisi pienemmältä kuin mitä maksettavaa oikeasti on.
-    vanhat = {}
-    for kt in L["kaudet"]:
-        for nm, jaljella in kt.get("jaljella", {}).items():
-            if jaljella > 0.005:
-                vanhat[nm] = vanhat.get(nm, 0.0) + jaljella
+    netto, vanhat = oly_netto(L)
     toimet = []
-    for nm in L["nimet"]:
-        v = L["velka"][nm] + vanhat.get(nm, 0.0)
-        if nm == pankkiiri or abs(v) <= 0.005:
-            continue
-        vanha_txt = (f' <span class="pikku">(sis. {eur2(vanhat[nm])} € aiemmilta '
-                     f'laskuilta)</span>' if vanhat.get(nm, 0.0) > 0.005 else "")
-        if v > 0:
-            kohde = tili_map.get(pankkiiri, "")
-            kohde_txt = f' tilille {e(kohde)}' if kohde else ""
-            toimet.append(f'<li><b>{e(nm)}</b> maksaa <b>{eur2(v)} €</b> '
-                          f'{e(pankkiiri)}lle{kohde_txt}.{vanha_txt}</li>')
-        else:
-            kohde = tili_map.get(nm, "")
-            kohde_txt = f' tilille {e(kohde)}' if kohde else ""
-            toimet.append(f'<li><b>{e(pankkiiri)}</b> palauttaa <b>{eur2(-v)} €</b> '
-                          f'{e(nm)}lle{kohde_txt}.</li>')
+    for maksaja, saaja, summa in tasausmaksut(netto):
+        kohde = tili_map.get(saaja, "")
+        kohde_txt = (f' tilille {e(kohde)}' if kohde else
+                     ' <span class="pikku">(tili puuttuu)</span>')
+        vanha_txt = (f' <span class="pikku">(sis. {eur2(vanhat[maksaja])} € aiemmilta '
+                     f'laskuilta)</span>' if vanhat.get(maksaja, 0.0) > 0.005 else "")
+        toimet.append(f'<li><b>{e(maksaja)}</b> maksaa <b>{eur2(summa)} €</b> '
+                      f'{e(saaja)}lle{kohde_txt}.{vanha_txt}</li>')
     o.append('<h2>Toimenpiteet</h2>')
     if toimet:
         o.append('<ul>' + "".join(toimet) + '</ul>')
-        puuttuu = [nm for nm in L["nimet"] if nm != pankkiiri
-                   and abs(L["velka"][nm]) > 0.005 and nm not in tili_map and L["velka"][nm] < 0]
-        if pankkiiri not in tili_map and any(L["velka"][nm] > 0.005 for nm in L["nimet"] if nm != pankkiiri):
-            o.append(f'<p class="pieni">Lisää maksutili {e(pankkiiri)}lle '
-                     f'(data/yhteistalous.json → jasenet[].tili), niin se näkyy tässä.</p>')
+        puuttuu = sorted({saaja for _, saaja, _ in tasausmaksut(netto)
+                          if saaja not in tili_map})
+        if puuttuu:
+            o.append(f'<p class="pieni">Lisää maksutili '
+                     f'{e(", ".join(puuttuu))}: data/yhteistalous.json → '
+                     f'jasenet[].tili, niin se näkyy tässä.</p>')
     else:
         o.append('<p class="pieni">Kaikki tasan — ei siirrettävää.</p>')
     boksit = [x for x in L["poimitut"] if x["tyyppi"] == "boksi"]
@@ -5012,7 +5070,7 @@ def olympos_erittely_html(ledger, alku=None, loppu=None, alkupaiva=None):
         for x in boksit:
             lo = [nm for nm in L["nimet"] if lasna.get(x["vk"], {}).get(nm, 1)] or L["nimet"]
             o.append(f'<tr><td>{e(viikkovali(x["vk"]))}</td>'
-                     f'<td>{e(x["pvm"])}</td><td>{e(str(x["kuvaus"]))}</td>'
+                     f'<td>{e(x["pvm"])}</td><td>{e(str(x["kuvaus"]))}{_note_html(x)}</td>'
                      f'<td class="pieni">{e(", ".join(lo))}</td>'
                      f'<td class="num">{eur2(x["summa"])}</td>'
                      f'<td class="num">{eur2(x["summa"] / len(lo))}</td></tr>')
@@ -5045,7 +5103,7 @@ def olympos_erittely_html(ledger, alku=None, loppu=None, alkupaiva=None):
                  '<th class="num">€</th><th class="num">€/osallinen</th></tr>')
         n = max(len(L["nimet"]), 1)
         for x in tasan:
-            o.append(f'<tr><td>{e(str(x["pvm"]))}</td><td>{e(str(x["kuvaus"]))}</td>'
+            o.append(f'<tr><td>{e(str(x["pvm"]))}</td><td>{e(str(x["kuvaus"]))}{_note_html(x)}</td>'
                      f'<td>{e(str(x["tyyppi"]))}</td><td class="num">{eur2(x["summa"])}</td>'
                      f'<td class="num">{eur2(x["summa"] / n)}</td></tr>')
         o.append('</table>')
@@ -5057,7 +5115,7 @@ def olympos_erittely_html(ledger, alku=None, loppu=None, alkupaiva=None):
         for x in kirj:
             jako = str(x.get("jako", ""))
             m = len([t for t in jako.split(",") if t.strip()]) or 1
-            o.append(f'<tr><td>{e(str(x["pvm"]))}</td><td>{e(str(x["kuvaus"]))}</td>'
+            o.append(f'<tr><td>{e(str(x["pvm"]))}</td><td>{e(str(x["kuvaus"]))}{_note_html(x)}</td>'
                      f'<td>{e(str(x.get("jasen", "")))}</td><td class="pieni">{e(jako)}</td>'
                      f'<td class="num">{eur2(x["summa"])}</td>'
                      f'<td class="num">{eur2(x["summa"] / m)}</td></tr>')
@@ -5068,7 +5126,7 @@ def olympos_erittely_html(ledger, alku=None, loppu=None, alkupaiva=None):
                  '<table><tr><th>pvm</th><th>jäsen</th><th>kuvaus</th><th class="num">€</th></tr>')
         for x in pal:
             o.append(f'<tr><td>{e(str(x["pvm"]))}</td><td>{e(str(x.get("jasen", "")))}</td>'
-                     f'<td>{e(str(x["kuvaus"]))}</td><td class="num">{eur2(x["summa"])}</td></tr>')
+                     f'<td>{e(str(x["kuvaus"]))}{_note_html(x)}</td><td class="num">{eur2(x["summa"])}</td></tr>')
         o.append('</table>')
     o.append('</body></html>')
     return "".join(o)
@@ -5098,7 +5156,13 @@ def olympos_osio(ledger, cfg=None):
         merkki = (f' <span class="pikkuteksti" title="päivämäärä osuu jo laskutetulle '
                   f'kaudelle, joten rivi siirtyy tälle laskulle">↩ myöhässä kaudelta '
                   f'{e(str(x["jalki"]))}</span>' if x.get("jalki") else "")
-        rt.append(f'<tr><td>{e(str(x["pvm"]))}{merkki}</td><td>{e(str(x["kuvaus"]))}</td>'
+        note = siisti(str(x.get("note", "") or ""))
+        note_html = (f'<span class="olnote">{e(note)}</span>' if note else
+                     '<span class="olnote tyhja">lisää kuvaus</span>')
+        rt.append(f'<tr><td>{e(str(x["pvm"]))}{merkki}</td>'
+                  f'<td>{e(str(x["kuvaus"]))}<br>'
+                  f'<a href="#" class="olnotemuokkaa" data-rid="{e(str(x["rid"]))}" '
+                  f'data-note="{e(note)}" title="oma kuvaus tälle riville">{note_html}</a></td>'
                   f'<td>{e(str(x["tyyppi"]))}</td><td class="num">{eur2(abs(x["summa"]))}</td>'
                   f'<td><a href="#" class="olpoissulje" data-rid="{e(str(x["rid"]))}">sulje pois</a></td></tr>')
     for x in L.get("poissuljetut_rivit", []):
@@ -5110,11 +5174,7 @@ def olympos_osio(ledger, cfg=None):
         rt.append('<tr><td colspan="5" class="pikkuteksti">ei poimittuja rivejä</td></tr>')
     rt.append("</table>")
     rivitaulu = "".join(rt)
-    vanhat = {}
-    for kt in L["kaudet"]:
-        for nm_v, jaljella in kt.get("jaljella", {}).items():
-            if jaljella > 0.005:
-                vanhat[nm_v] = vanhat.get(nm_v, 0.0) + jaljella
+    netto, vanhat = oly_netto(L)
     st = ['<table><tr><th>jäsen</th><th class="num">osuus kuluista</th>'
           '<th class="num">maksanut</th><th class="num">saldo</th>'
           '<th class="num">avoin lasku</th><th class="num">yhteensä</th>'
@@ -5125,13 +5185,11 @@ def olympos_osio(ledger, cfg=None):
         # Pankkiirin puolella sama saatava näkyy miinuksena, jotta sarake
         # summautuu nollaan eikä velka näytä katoavan matkalla.
         vanha = vanhat.get(nm, 0.0) - (vanhat_yht if nm == pankkiiri else 0.0)
-        yht = v + vanha
+        yht = netto.get(nm, v + vanha)
         if abs(yht) <= 0.005:
             sanoitus = "tasan"
-        elif nm == pankkiiri:
-            sanoitus = "saatavaa muilta" if yht < 0 else "velkaa yhteisölle"
         else:
-            sanoitus = f"maksettava {pankkiiri}lle" if yht > 0 else "etukäteen maksettua"
+            sanoitus = "maksaa muille" if yht > 0 else "saa muilta"
         st.append(f'<tr><td>{e(nm)}</td><td class="num">{eur2(L["osuus"][nm])}</td>'
                   f'<td class="num">{eur2(L["maksettu"][nm])}</td>'
                   f'<td class="num">{eur2(v)}</td>'
@@ -5139,6 +5197,27 @@ def olympos_osio(ledger, cfg=None):
                   f'<td class="num"><b>{eur2(yht)}</b></td>'
                   f'<td class="pikkuteksti">{sanoitus}</td></tr>')
     st.append("</table>")
+    tilit = {}
+    for j in oly.get("jasenet", []):
+        t = siisti(str(j.get("tili", "")))
+        if t:
+            tilit[j.get("nimi", "")] = t
+    maksut = tasausmaksut(netto)
+    if maksut:
+        mt = ['<p class="pikkuteksti">Näin saldot menevät nollaan ilman että rahaa '
+              'kierrätetään kenenkään kautta:</p><ul class="olmaksut">']
+        for maksaja, saaja, summa in maksut:
+            tili = tilit.get(saaja, "")
+            mt.append(f'<li><b>{e(maksaja)}</b> maksaa <b>{eur2(summa)} €</b> '
+                      f'{e(saaja)}lle'
+                      + (f' <span class="pikkuteksti">{e(tili)}</span>' if tili else
+                         ' <span class="pikkuteksti">(tili puuttuu: '
+                         'data/yhteistalous.json → jasenet[].tili)</span>')
+                      + '</li>')
+        mt.append("</ul>")
+        st.append("".join(mt))
+    else:
+        st.append('<p class="pikkuteksti">Kaikki tasan — ei siirrettävää.</p>')
     n_j = max(len(nimet), 1)
     vt = ['<table><tr><th>kuvaus</th><th>jäseneltä</th><th class="num">€/kk</th>'
           '<th class="num">kk</th><th class="num">yht. kaudella</th>'
@@ -5163,7 +5242,7 @@ def olympos_osio(ledger, cfg=None):
     if len(vt) == 1:
         vt.append('<tr><td colspan="7" class="pikkuteksti">ei vakioita</td></tr>')
     vt.append("</table>")
-    lt = ['<table><tr><th>viikko</th>'] + [f"<th>{e(nm)}</th>" for nm in nimet]
+    lt = ['<table><tr><th>viikko</th>'] + [f'<th class="kesk">{e(nm)}</th>' for nm in nimet]
     lt.append('<th class="num">boksi €</th><th class="num">€/läsnäolija</th></tr>')
     for vk in L["vk_lista"]:
         raw = lasna.get(vk, {})
@@ -7181,6 +7260,37 @@ document.addEventListener('click',function(ev){
         if(!v.ok){alert(v.virhe||'virhe');return;}
         paivitaSivu('yhteistalous','vakio poistettu \u2713');});
     return;}
+  const on=ev.target.closest('.olnotemuokkaa');
+  if(on){ev.preventDefault();
+    if(!SERVER){alert('Muokkaus vaatii selaa-tilan.');return;}
+    if(on.querySelector('input'))return;
+    const vanha=on.getAttribute('data-note')||'';
+    const sisalto=on.innerHTML;
+    const k=document.createElement('input');
+    k.type='text';k.className='olnotekentta';k.value=vanha;k.maxLength=200;
+    k.placeholder='oma kuvaus';
+    on.innerHTML='';on.appendChild(k);k.focus();k.select();
+    let valmis=false;
+    const lopeta=function(tallenna){
+      if(valmis)return; valmis=true;
+      const teksti=k.value.trim();
+      if(!tallenna||teksti===vanha){on.innerHTML=sisalto;return;}
+      on.textContent='tallennetaan\u2026';
+      fetch('api/muistiinpano',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id:on.getAttribute('data-rid'),teksti:teksti})})
+        .then(function(r){return r.json();}).then(function(v){
+          if(!v.ok){on.innerHTML=sisalto;alert(v.virhe||'virhe');return;}
+          on.setAttribute('data-note',v.teksti);
+          on.innerHTML='<span class="olnote'+(v.teksti?'':' tyhja')+'">'+
+            (v.teksti?v.teksti.replace(/&/g,'&amp;').replace(/</g,'&lt;'):
+             'lis\u00e4\u00e4 kuvaus')+'</span>';
+        }).catch(function(err){on.innerHTML=sisalto;alert('ei onnistunut: '+err);});
+    };
+    k.addEventListener('keydown',function(ke){
+      if(ke.key==='Enter'){ke.preventDefault();lopeta(true);}
+      else if(ke.key==='Escape'){ke.preventDefault();lopeta(false);}});
+    k.addEventListener('blur',function(){lopeta(true);});
+    return;}
   const op=ev.target.closest('.olpres');
   if(op){ev.preventDefault();
     if(!SERVER){alert('Muokkaus vaatii selaa-tilan.');return;}
@@ -7566,7 +7676,7 @@ window.addEventListener('DOMContentLoaded',function(){
     otsikko.innerHTML='<b>'+kat.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</b> raami';
     const syote=document.createElement('input');
     syote.type='text';syote.inputMode='decimal';syote.value=nykyinen||'';
-    const eur=document.createElement('span');eur.textContent='\u20ac';
+    const eur=document.createElement('span');eur.textContent='\u20ac  tallenna:';
     function luku(){
       const n=parseFloat(String(syote.value).replace(',','.').replace(/\\s/g,''));
       if(!isFinite(n)||n<0){alert('anna raami euroina');return null;}
@@ -7581,6 +7691,12 @@ window.addEventListener('DOMContentLoaded',function(){
     pysyva.title='muuttaa perusraamin kaikille kuukausille';
     pysyva.onclick=function(){const n=luku();if(n===null)return;
       budPyynto({kategoria:kat,raami:n},pysyva);};
+    // Enter tallentaa kuukausiraamin, Esc peruu. Kaksi tallennusnappia on
+    // tarkoituksella (kuukausi / pysyvä), joten Enter tekee sen kumman
+    // käyttäjä yhdeksän kertaa kymmenestä haluaa.
+    syote.addEventListener('keydown',function(ke){
+      if(ke.key==='Enter'){ke.preventDefault();kk.click();}
+      else if(ke.key==='Escape'){ke.preventDefault();d.remove();}});
     d.appendChild(otsikko);d.appendChild(syote);d.appendChild(eur);
     d.appendChild(kk);d.appendChild(pysyva);
     if(onPoikkeus){
@@ -7604,8 +7720,9 @@ window.addEventListener('DOMContentLoaded',function(){
     d.appendChild(peru);
     const ohje=document.createElement('span');
     ohje.className='pikkuteksti';
-    ohje.textContent='Kuukausiraami koskee vain '+KUUNIMI+'ta ja tallentuu omalle '+
-      'rivilleen tiedostoon asetukset/budjetti.csv. Perusraami j\u00e4\u00e4 ennalleen.';
+    ohje.textContent='Enter tallentaa '+KUUNIMI+'lle, Esc peruu. Kuukausiraami '+
+      'koskee vain '+KUUNIMI+'ta ja tallentuu omalle rivilleen tiedostoon '+
+      'asetukset/budjetti.csv \u2014 perusraami j\u00e4\u00e4 ennalleen.';
     d.appendChild(ohje);
     if(rivi){rivi.parentNode.insertBefore(d,rivi.nextSibling);}
     else{const s=document.getElementById('budjetti');s.appendChild(d);}
@@ -7780,6 +7897,16 @@ td.num.klik {{ text-decoration:none }}
   border:1px solid var(--muste); background:#fff; cursor:pointer }}
 .ol-aiemmat {{ margin:.5rem 0 }}
 .ol-aiemmat summary {{ cursor:pointer; font-size:.9rem; color:#6b665c }}
+#yhteistalous th {{ text-align:left }}
+#yhteistalous th.num {{ text-align:right }}
+#yhteistalous th.kesk {{ text-align:center }}
+ul.olmaksut {{ margin:.2rem 0 .8rem; padding-left:1.2rem }}
+ul.olmaksut li {{ margin:.15rem 0 }}
+.olnotemuokkaa {{ text-decoration:none }}
+.olnote {{ font-size:.85em; color:#5c574c; border-bottom:1px dotted #c9c3b8 }}
+.olnote.tyhja {{ color:#a49d8e; font-style:italic }}
+.olnotekentta {{ font:inherit; font-size:.85em; width:16rem; max-width:100%;
+  padding:.1rem .3rem; border:1px solid #cfc7b6; border-radius:4px }}
 .bud-editori {{ display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;
   margin:.1rem 0 .5rem; padding:.55rem .7rem; border-radius:10px;
   background:#fffdf8; border:1px solid #e2dbcb; font-size:.85rem }}
@@ -7876,7 +8003,7 @@ code {{ font-family:ui-monospace,Menlo,monospace }}
 <p class="meta">Rahaputki {VERSIO} · päivitetty {date.today().strftime('%d.%m.%Y')} · {len(ledger)} tapahtumaa ·
 kategorian nimeä, matriisin solua tai kaavion palkkia klikkaamalla pääset katsomaan ja muokkaamaan rivejä</p>
 {huomio}
-<div class="tyokalut"><input id="haku" type="search" placeholder="hae tapahtumia… (Esc tyhjentää)" size="26"><span id="tila" class="pikkuteksti"></span><span id="ajonapit" hidden> <button type="button" id="nappi-hae"{hae_pois}>Hae pankkitapahtumat</button> <button type="button" id="nappi-aja">Lue tiliotteet</button> <a href="velho" id="nappi-velho">Yhdistä pankkeihin</a></span></div>
+<div class="tyokalut"><input id="haku" type="search" placeholder="hae tapahtumia… (Esc tyhjentää)" size="26"><span id="tila" class="pikkuteksti"></span><span id="ajonapit" hidden> <button type="button" id="nappi-hae"{hae_pois}>Hae pankkitapahtumat</button> <a href="velho" id="nappi-velho">Yhdistä pankkeihin</a> <button type="button" id="nappi-aja">Lue tiliotteet</button></span></div>
 <div id="ajoloki" hidden><div id="ajoloki-otsikko" class="pikkuteksti"></div><pre id="ajoloki-teksti"></pre><button type="button" id="ajoloki-nappi" hidden>Päivitä raportti</button> <button type="button" id="ajoloki-piilota">Piilota</button></div>
 <div id="paneeli"></div>
 {budjetti_html}
@@ -9251,6 +9378,15 @@ def cmd_selaa(args):
                     kirjoita_ledger(ledger)
                     kirjoita_tarkistettavat(ledger)
                     return self._json({"ok": True, "paivitetty": n})
+                if self.path == "/api/muistiinpano":
+                    rid = siisti(str(pyynto.get("id", "")))
+                    ledger = lue_ledger()
+                    r = {x["id"]: x for x in ledger}.get(rid)
+                    if not r:
+                        return self._json({"ok": False, "virhe": "riviä ei löydy"})
+                    r["muistiinpano"] = siisti(str(pyynto.get("teksti", "")))[:200]
+                    kirjoita_ledger(ledger)
+                    return self._json({"ok": True, "teksti": r["muistiinpano"]})
                 if self.path == "/api/saanto":
                     kat = siisti(pyynto.get("kategoria", ""))
                     malli = normalisoi(pyynto.get("malli", ""))
