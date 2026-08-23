@@ -27,6 +27,9 @@ datakansio.txt
 *.csv
 !koodi/saannot.esimerkki.csv
 
+# Claude Coden omat asetukset — kehittäjän työkalu, ei osa ohjelmaa
+.claude/
+
 # Pythonin välimuisti ja käyttöjärjestelmän roskat
 __pycache__/
 *.pyc
