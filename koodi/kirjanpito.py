@@ -241,7 +241,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.6"
+VERSIO = "v0.7"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -2031,7 +2031,15 @@ def _komentorivi():
 
 
 def _kysy(kysymys, oletus=""):
-    """input(), joka ei kaadu putkitettuun tyhjään syötteeseen."""
+    """input(), joka ei kaadu putkitettuun tyhjään syötteeseen.
+
+    Palvelimen säikeessä kysyminen on aina virhe: input() jäisi odottamaan
+    vastausta, jota kukaan ei ole antamassa, ja pyyntö jäisi roikkumaan
+    ikuisesti. Kaatuminen on siinä kohdassa parempi kuin jumi — se näkyy
+    käyttäjälle ja korjattavana on yksi puuttuva parametri, ei mysteeri."""
+    if threading.current_thread() is not threading.main_thread():
+        raise RuntimeError("kysymystä ei voi esittää palvelimen säikeessä: "
+                           + siisti(str(kysymys))[:80])
     try:
         vastaus = siisti(input(kysymys))
     except EOFError:
@@ -2295,9 +2303,13 @@ def _vapaa_nimi(kohde, pem):
     return kohde
 
 
-def _talleta_avain(pem):
+def _talleta_avain(pem, siirra=None):
     """Siirrä avain pois Lataukset-kansiosta (jonka ihmiset tyhjentävät)
     sinne, minne se tässä asennuksessa kuuluu.
+
+    siirra=None kysyy (terminaali), True/False päättää kysymättä. Selaimessa
+    kysyminen ei ole vaihtoehto: input() jäisi odottamaan HTTP-säikeessä eikä
+    kukaan olisi vastaamassa.
 
     Jos avain jo asuu järkevässä paikassa, se jätetään sinne: sama avain voi
     olla toisenkin asennuksen käytössä, eikä sitä saa siirtää sen alta."""
@@ -2322,7 +2334,7 @@ def _talleta_avain(pem):
         print(f"Se kuuluu kansioon {kohde.parent} — samaan paikkaan muiden")
         print("asetustesi kanssa, jolloin se seuraa kansiota mukana.")
         print("(Jos siirrät kansion pilvitallennukseen, siirrä avain pois sieltä.)")
-    if not _kylla("Siirretäänkö avain sinne?"):
+    if not (siirra if siirra is not None else _kylla("Siirretäänkö avain sinne?")):
         return pem
     try:
         kohde.parent.mkdir(parents=True, exist_ok=True)
@@ -7285,7 +7297,7 @@ var T = null, kesken = false;
    löytynyttä avainta ehti valita. Kenttien arvot säilyvät samasta syystä —
    pitkää liitettyä komentoa ei saa joutua liittämään uudelleen virheen takia. */
 var AVATTU = '';
-var SYOTE = {curl:'', sposti:'', polku:'', haku:'', koodi:'', psu:''};
+var SYOTE = {curl:'', sposti:'', polku:'', haku:'', koodi:'', psu:'', appid:''};
 
 function e(s){ var d=document.createElement('div'); d.textContent=s==null?'':String(s);
                return d.innerHTML; }
@@ -7360,8 +7372,8 @@ function ilmoitukset(){
 /* ---------------- vaihe 1: sovellus ---------------- */
 function paneeliSovellus(){
   var s = T.sovellus, h = vaiheOtsikko('sovellus');
-  h += '<p>Tapahtumat haetaan <em>sinun omalla</em> sovelluksellasi: tilitietosi ' +
-       'kulkevat siis suoraan koneellesi eikä välissä ole muita palveluita. ' +
+  h += '<p>Tapahtumat haetaan <em>sinun omalla</em> Rahaputki-sovelluksellasi: ' +
+       'tilitietosi kulkevat suoraan koneellesi eikä välissä ole muita palveluita. ' +
        'Sovelluksen avain jää tälle koneelle.</p>';
   h += ilmoitukset();
 
@@ -7435,6 +7447,18 @@ function alilomakeAvain(){
         '<td style="text-align:right"><button class="toiminto" data-t="kayta_avainta" ' +
         'data-polku="' + e(a.polku) + '">Käytä tätä</button></td></tr>';
     }).join('') + '</tbody></table>';
+  }
+  if(T.avain_odottaa){
+    h += '<div class="kortti"><h4>' + e(T.avain_odottaa.nimi) + '</h4>' +
+      '<p>Tiedoston nimi ei kerro sovelluksen tunnusta. Löydät sen ' +
+      'portaalin sovellussivulta kohdasta Application ID.</p>' +
+      '<label for="appid">Sovelluksen tunnus (Application ID)</label>' +
+      '<input type="text" id="appid" data-syote="appid" value="' + e(SYOTE.appid) +
+      '" placeholder="590999ea-6025-4378-8b24-fcb3d8b99804">' +
+      '<div class="rivi"><button class="toiminto paa" data-t="kayta_avainta" ' +
+      'data-polku="' + e(T.avain_odottaa.polku) + '">Käytä tätä avainta</button>' +
+      '<a class="pikku" target="_blank" rel="noopener" ' +
+      'href="https://enablebanking.com/cp/applications">Avaa portaali</a></div></div>';
   }
   h += '<label for="polku">tai kirjoita polku</label>' +
        '<input type="text" id="polku" data-syote="polku" value="' + e(SYOTE.polku) + '" placeholder="~/Lataukset/590999ea-….pem">' +
@@ -7583,7 +7607,7 @@ function sido(){
         return;
       }
       else if(t === 'kayta_avainta'){
-        d.polku = b.dataset.polku || SYOTE.polku;
+        d.polku = b.dataset.polku || SYOTE.polku; d.app_id = SYOTE.appid;
       }
       else if(t === 'luo_sovellus'){
         d.curl = SYOTE.curl; d.sposti = SYOTE.sposti;
@@ -7630,7 +7654,7 @@ def _velho_alkutila():
             "kirjastot": None,
             "sovellus": {"app_id": "", "avain": "", "varmistettu": False,
                          "nimi": "", "reitti": ""},
-            "avainehdokkaat": [],
+            "avainehdokkaat": [], "avain_odottaa": None,
             "maa": "FI", "haku": "", "pankit": [],
             "pankkivaihe": "valinta", "valinta": None,
             "auth": {"url": "", "redirect": ""},
@@ -7694,6 +7718,7 @@ def velho_julkinen():
     v = VELHO
     return {"ok": True, "vaihe": v["vaihe"], "kirjastot": v["kirjastot"],
             "sovellus": v["sovellus"], "avainehdokkaat": v["avainehdokkaat"],
+            "avain_odottaa": v["avain_odottaa"],
             "maa": v["maa"], "haku": v["haku"],
             "pankit": [{"name": a.get("name", ""), "country": a.get("country", ""),
                         "psu": _psu_tyypit(a)} for a in v["pankit"]],
@@ -7733,14 +7758,14 @@ def velho_toiminto(nimi, p):
             v["viesti"] = "Avaintiedostoa ei löytynyt tavallisista kansioista."
 
     elif nimi == "kayta_avainta":
-        polku = Path(_siisti_polku(str(p.get("polku", "")))).expanduser()
+        polku = Path(_siivoa_polku(str(p.get("polku", "")))).expanduser()
         if not polku.is_file():
             v["virhe"] = f"Tiedostoa ei löydy: {polku}"
         elif not UUID_KUVIO.match(polku.stem):
             v["virhe"] = ("Avaimen nimen pitäisi olla sovelluksen tunnus "
                           "(esim. 590999ea-….pem). Tämä on: " + polku.name)
         else:
-            kohde = _talleta_avain(polku)
+            kohde = _talleta_avain(polku, siirra=True)
             _kirjoita_env({"EB_APP_ID": polku.stem,
                            "EB_KEY_PATH": _lyhenna_polku(kohde)})
             v["sovellus"].update(app_id=polku.stem, avain=_lyhenna_polku(kohde),
@@ -7759,7 +7784,8 @@ def velho_toiminto(nimi, p):
                                                gdpr_email=siisti(str(p.get("sposti", ""))))
                 app_id = _sovellus_id(vastaus)
                 if not app_id:
-                    v["virhe"] = "Sovellus luotiin, mutta tunnusta ei löytynyt vastauksesta."
+                    v["virhe"] = ("Rekisteröinti meni läpi, mutta tunnusta ei "
+                                  "löytynyt vastauksesta.")
                 else:
                     polku = _talleta_uusi_avain(pem_teksti, app_id)
                     _kirjoita_env({"EB_APP_ID": app_id,
@@ -7767,14 +7793,15 @@ def velho_toiminto(nimi, p):
                                    "EB_SOVELLUS_OK": app_id})
                     v["sovellus"].update(app_id=app_id, avain=_lyhenna_polku(polku),
                                          reitti="uusi", varmistettu=False, nimi="")
-                    v["viesti"] = "Sovellus luotu ja avain tallennettu tälle koneelle."
+                    v["viesti"] = ("Rahaputki rekisteröity. Avain tallennettu "
+                                   "tälle koneelle.")
             except EBVirhe as e:
                 v["virhe"] = ("Tunnus ei kelvannut (se vanhenee tunnissa). Lataa "
                               "portaalin sivu uudelleen ja kopioi komento uudestaan."
                               if e.koodi in (401, 403) else
-                              f"Sovelluksen luonti epäonnistui ({e.koodi}): {e.runko}")
+                              f"Rekisteröinti epäonnistui ({e.koodi}): {e.runko}")
             except (OSError, ValueError) as e:
-                v["virhe"] = f"Sovelluksen luonti epäonnistui: {e}"
+                v["virhe"] = f"Rekisteröinti epäonnistui: {e}"
 
     elif nimi == "varmista":
         try:
@@ -8264,8 +8291,14 @@ def cmd_selaa(args):
                     return self._json(ankkuroi(lue_ledger(), cfg, aid))
                 if self.path == "/api/velho":
                     with VELHO_LUKKO:
-                        return self._json(velho_toiminto(
-                            siisti(str(pyynto.get("toiminto", ""))), pyynto))
+                        # Sivu piirtää aina koko tilan, joten sen on saatava
+                        # koko tila myös silloin kun toiminto kaatuu.
+                        try:
+                            return self._json(velho_toiminto(
+                                siisti(str(pyynto.get("toiminto", ""))), pyynto))
+                        except Exception as e:
+                            VELHO["virhe"] = f"Toiminto epäonnistui: {e}"
+                            return self._json(velho_julkinen())
                 if self.path == "/api/komento":
                     komento = siisti(pyynto.get("komento", ""))
                     if komento not in ("hae", "aja"):
