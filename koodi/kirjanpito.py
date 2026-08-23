@@ -281,7 +281,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.16"
+VERSIO = "v0.17"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -1437,10 +1437,14 @@ def _kesto(minuutteja):
 
 
 def _lukon_polku(tiedot):
-    """Lukkotiedoston nimi tietokansiosta katsottuna: sen voi poistaa käsin, jos
-    kone on lopullisesti poissa, eikä nimeä muuten arvaa."""
+    """Lukkotiedoston koko polku: sen voi poistaa käsin, jos kone on
+    lopullisesti poissa.
+
+    Polku on kokonaisena eikä tietokansiosta suhteutettuna. Erotetussa
+    asennuksessa "data/.lukko…" on harhaanjohtava: data/ ei ole ohjelman
+    kansiossa vaan tietokansiossa, ja sitä lähtee etsimään väärästä paikasta."""
     kone = str(tiedot.get("kone", "")) or "kone"
-    return (DATA / f".lukko.{kone}.json").relative_to(DATAJUURI)
+    return DATA / f".lukko.{kone}.json"
 
 
 def _jarjestysavain(tiedot):
