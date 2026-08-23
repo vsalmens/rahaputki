@@ -429,10 +429,18 @@ Kaksi tapaa, sama näkymä:
    Valikon "+ uusi kategoria…" lisää kategorian asetukset/config.json:iin lennossa.
    Taulukot ja käyrät päivittyvät kun lataat sivun uudelleen. Ctrl-C sammuttaa.
 
-   **Yhdistä pankkeihin** avaa ohjatun käyttöönoton selaimessa (`/velho`). Se on sama velho kuin komennossa
-   `pankkihaku`: kysymykset vain tulevat sivulle nappeina ja tekstikenttinä,
-   ja liittäminen (curl-komento, pankin paluuosoite) onnistuu suoraan
-   kenttään ilman leikepöydän lukemista. Terminaalivelho toimii ennallaan.
+   **Yhdistä pankkeihin** avaa pankkiyhteyssivun (`/velho`). Se ei ole
+   kysymysjono vaan **tila, jota voi muuttaa**: vasemmalla on kolme vaihetta
+   (Sovellus, Pankit, Valmis), joista jokaiseen voi palata milloin tahansa, ja
+   tehdyn valinnan voi vaihtaa. Vaiheen tila näkyy rivin alla ("yhteys
+   toimii", "2 kaipaa uusintaa"). Vaihe 2 näyttää aina jo yhdistetyt pankit ja
+   kunkin valtuutuksen voimassaolon, ja rivin *Uusi valtuutus* vie suoraan sen
+   pankin tunnistautumiseen.
+
+   Terminaalivelho (`pankkihaku`) on ennallaan. Sivu ja terminaali käyttävät
+   samoja funktioita (`eb_pankkilista`, `eb_aloita_valtuutus`,
+   `eb_viimeistele_valtuutus`, `tallenna_tilit_nimilla`), jotka eivät kysy
+   eivätkä tulosta mitään — kysyminen kuuluu käyttöliittymälle, tekeminen ei.
 
    Hakukentän vieressä on kolme toimintoa:
 
