@@ -281,7 +281,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.14"
+VERSIO = "v0.15"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -313,11 +313,6 @@ MIN_PYTHON = (3, 9)
 ALOITUSKANSIOT = (INBOX, DATA, RAPORTIT, ASETUKSET)
 ALOITUSMALLIT = ((CONFIG, "config.esimerkki.json"),
                  (SAANNOT, "saannot.esimerkki.csv"))
-# Koneen omat asetukset syntyvät mallipohjasta koodin juureen. Tiedosto on
-# paketissa mukana mallina mutta ei valmiina: sen sisältö on konekohtainen,
-# eikä päivitys saa kirjoittaa käyttäjän omaa arvoa yli. Siksi mallipohja on
-# koodi/-kansiossa (joka korvataan) ja tiedosto juuressa (jota ei korvata).
-PAIKALLISET_MALLI = "koneen-asetukset.esimerkki.txt"
 
 # Aiemmat versiot pitivät nämä juuressa; siirretään kerran asetukset-kansioon.
 VANHAT_ASETUKSET = (("config.json", CONFIG), ("saannot.csv", SAANNOT),
@@ -411,25 +406,6 @@ def _palauta_tietokansio():
 Näin käy, jos päivityksessä korvataan koko kansio eikä vain koodi/-kansiota.
 Käynnistä ohjelma uudelleen, niin se lukee kirjanpitosi oikeasta paikasta.""")
     raise SystemExit(0)
-
-
-def _luo_paikalliset_mallista():
-    """Luo koneen-asetukset.txt mallipohjasta, jos sitä ei ole.
-
-    Tiedoston olemassaolo on itsessään ohje: käyttäjä näkee mitä voi asettaa,
-    ilman että sitä pitää lukea dokumentaatiosta. Oletusarvo on piste eli
-    ohjelman oma kansio, joten tiedoston syntyminen ei muuta mitään."""
-    kohde = KOODIJUURI / PAIKALLISET_TIEDOSTO
-    if kohde.exists():
-        return
-    malli = KOODI / PAIKALLISET_MALLI
-    try:
-        if malli.is_file():
-            turvakirjoita_kopio(malli, kohde)
-        else:
-            _kirjoita_paikalliset({"tietokansio": "."})
-    except (OSError, RuntimeError):
-        pass
 
 
 def _varmista_datajuuri():
@@ -548,7 +524,6 @@ def varmista_aloitus():
     traceback-tulosteeseen ennen kuin on edes päässyt alkuun. Olemassa olevaa
     ei kosketa koskaan, joten tämän voi ajaa turvallisesti joka kerta."""
     _palauta_tietokansio()
-    _luo_paikalliset_mallista()
     _varmista_datajuuri()
     _muista_tietokansio(DATAJUURI)
     _paivita_paikalliset()
