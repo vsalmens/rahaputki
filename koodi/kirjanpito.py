@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.32"
+VERSIO = "v0.33"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila", "muistiinpano"]
@@ -4877,11 +4877,15 @@ def olympos_laskelma(ledger, oly, tanaan=None, alku_yli=None):
         for nm in nimet:
             if nm != ja:
                 velka[nm] -= s / (n - 1)
+    # Ruudukkoon otetaan ne viikot, joilla läsnäolo voi vaikuttaa johonkin:
+    # kaudella olevat viikot ja viikot joiden boksi on maksettu kaudella
+    # (maksu voi osua kauden loppuun ja toimitus sen jälkeiselle viikolle).
+    # Tulevia tyhjiä viikkoja ei listata — niistä ei ole mitään jaettavaa,
+    # ja jokainen ylimääräinen rivi on ruksi jota joku luulee tarvittavan.
     vk_lista = set(viikot)
     p = alku + timedelta(days=1)
     p = p - timedelta(days=p.isocalendar()[2] - 1)
-    loppu = tanaan + timedelta(days=21)
-    while p <= loppu:
+    while p <= tanaan:
         vk_lista.add(vkavain(p))
         p += timedelta(days=7)
     for kt in kausi_tila:
@@ -5381,7 +5385,9 @@ def olympos_osio(ledger, cfg=None):
             f'nimestä kategoriasta riippumatta. Asetukset: data/yhteistalous.json.</p>'
             f'{vihje}<h3>Saldot</h3>{"".join(st)}'
             f'<h3>Läsnäolo viikoittain</h3><p class="pikkuteksti">Klikkaa solua: ✓ läsnä / – poissa. '
-            f'Viikon boksi jaetaan läsnäolijoiden kesken (jos kaikki poissa, jaetaan kaikille).</p>'
+            f'Viikon boksi jaetaan läsnäolijoiden kesken (jos kaikki poissa, jaetaan kaikille). '
+            f'Listassa ovat kauden viikot sekä ne viikot, joiden boksi on maksettu '
+            f'kaudella — viikolla ilman veloitusta läsnäolo ei vaikuta mihinkään.</p>'
             f'{"".join(lt)}'
             f'<p class="pikkuteksti"><button type="button" id="ol-paivita" hidden>'
             f'päivitä eurot</button> <span id="ol-lasnatila"></span></p>'

@@ -483,7 +483,8 @@ itsestään seuraavalla kirjoituskerralla.
 Raportin **Yhteistalous**-osio on kimppatalouden reskontra: valitse valikosta
 poimintakategoria (esim. `Yhteistalous`), niin sen rivit jaetaan tarkenteen
 mukaan — viikkojako-tarkenteet (oletuksena `ruokaboksi`) painotetaan
-klikattavan läsnäoloruudukon mukaan toimitusviikoille, palautus-tarkenteet
+klikattavan läsnäoloruudukon mukaan toimitusviikoille (ruudukossa ovat kauden
+viikot sekä ne viikot, joiden veloitus on maksettu kaudella), palautus-tarkenteet
 ovat jäsenten maksuja pankkiirille, ja kaikki muut tarkenteet (netti,
 sähkö, …) jaetaan tasan. Kuukausittaiset vakiohyvitykset (esim. auton
 lataussähkö) ja kertaluontoiset käsikirjaukset osallistujavalintoineen
