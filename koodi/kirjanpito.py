@@ -241,7 +241,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.9"
+VERSIO = "v0.10"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -7255,6 +7255,7 @@ button.paa { background:var(--muste); color:var(--paperi); border-color:var(--mu
 button.paa:hover:enabled { background:#3d3a33 }
 a.paalinkki { display:inline-block; text-decoration:none; color:var(--paperi);
               background:var(--muste); border-radius:6px; padding:.45rem 1rem }
+a.pikkupaa { padding:.15rem .6rem; font-size:.9em; margin:0 .2rem 0 0 }
 input[type=text], textarea, select { font:inherit; width:100%; padding:.45rem .6rem;
        border:1px solid var(--raja); border-radius:6px; background:#fff }
 textarea { min-height:5.5rem; font:12.5px/1.5 ui-monospace,Menlo,Consolas,monospace }
@@ -7295,7 +7296,7 @@ var T = null, kesken = false;
    sen mukana. Juuri niin kävi: "Etsi koneelta" sulki lomakkeen ennen kuin
    löytynyttä avainta ehti valita. Kenttien arvot säilyvät samasta syystä —
    pitkää liitettyä komentoa ei saa joutua liittämään uudelleen virheen takia. */
-var AVATTU = '';
+var AVATTU = '', VIIME = '';
 var SYOTE = {curl:'', sposti:'', polku:'', haku:'', koodi:'', psu:'', appid:''};
 
 function e(s){ var d=document.createElement('div'); d.textContent=s==null?'':String(s);
@@ -7304,7 +7305,7 @@ function el(id){ return document.getElementById(id); }
 
 function toiminto(nimi, data){
   if(kesken) return;
-  kesken = true; piirra();
+  kesken = true; VIIME = nimi; piirra();
   return fetch('api/velho', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify(Object.assign({toiminto:nimi}, data||{}))})
     .then(function(r){ return r.json(); })
@@ -7361,10 +7362,21 @@ function piirraRail(){
   });
 }
 
-function ilmoitukset(){
+/* Palaute kuuluu sinne, missä toiminto tehtiin. Paneelin yläreunaan
+   piirretty ilmoitus jää näkymättä, kun nappi on pitkän lomakkeen alalaidassa:
+   vastaus ilmestyy paikkaan, jota kukaan ei katso. Jokainen ilmoitus tietää
+   siksi alueensa, ja alueet piirtävät sen omalla kohdallaan. */
+function alue(){
+  if(VIIME === 'luo_sovellus') return 'uusi';
+  if(VIIME === 'kayta_avainta' || VIIME === 'avaimet') return 'avain';
+  if(VIIME === 'tallenna' || VIIME === 'viimeistele' || VIIME === 'aloita') return 'pankki';
+  return 'yla';
+}
+function ilmoitukset(mika){
+  if((mika || 'yla') !== alue()) return '';
   var h = '';
-  if(T.virhe) h += '<p class="virhe">' + e(T.virhe) + '</p>';
-  if(T.viesti) h += '<p class="viesti">' + e(T.viesti) + '</p>';
+  if(T.virhe) h += '<p class="virhe ilmo">' + e(T.virhe) + '</p>';
+  if(T.viesti) h += '<p class="viesti ilmo">' + e(T.viesti) + '</p>';
   return h;
 }
 
@@ -7417,9 +7429,17 @@ function paneeliSovellus(){
 
 function alilomakeUusi(){
   return '<h3>Rekisteröi Rahaputki</h3>' +
+    (T.sovellus.app_id ?
+      '<p class="virhe">Sinulla on jo rekisteröity sovellus (' + e(T.sovellus.app_id) +
+      '). Uusi rekisteröinti <strong>korvaa sen tunnukset tällä koneella</strong>, ja ' +
+      'uusi sovellus pitää aktivoida portaalissa ennen kuin haku toimii. Vanha ' +
+      'sovellus jää Enable Bankingiin ennalleen — voit palata siihen valitsemalla ' +
+      '"Rahaputki on jo rekisteröity" ja antamalla sen tunnuksen.</p>' : '') +
     '<ol class="ohjeet">' +
-    '<li>Avaa portaali alta ja <strong>kirjaudu sähköpostiosoitteellasi</strong>. ' +
-      'Salasanaa ei ole — saat sähköpostiisi linkin, jota klikkaamalla pääset sisään.</li>' +
+    '<li><a class="paalinkki pikkupaa" target="_blank" rel="noopener" ' +
+      'href="https://enablebanking.com/cp/applications">Avaa portaali</a> ja ' +
+      '<strong>kirjaudu sähköpostiosoitteellasi</strong>. Salasanaa ei ole — saat ' +
+      'sähköpostiisi linkin, jota klikkaamalla pääset sisään.</li>' +
     '<li>Vieritä sivun alaosaan. Siellä lukee, että sovelluksen voi rekisteröidä ' +
       'rajapinnan kautta tai <strong>command line interface</strong> -tavalla. ' +
       'Klikkaa tuota korostettua tekstiä.</li>' +
@@ -7428,13 +7448,12 @@ function alilomakeUusi(){
     '<li>Liitä komento alla olevaan kenttään.</li></ol>' +
     '<p class="pikku">Komento sisältää tunnin voimassa olevan tunnuksen. Käsittele ' +
     'sitä kuin salasanaa: se ei mene minnekään muualle kuin tälle koneelle.</p>' +
-    '<div class="rivi"><a class="paalinkki" target="_blank" rel="noopener" ' +
-    'href="https://enablebanking.com/cp/applications">Avaa portaali</a></div>' +
     '<label for="curl">Portaalista kopioitu komento</label>' +
     '<textarea id="curl" data-syote="curl" placeholder="curl -X POST https://enablebanking.com/api/applications ...">' + e(SYOTE.curl) + '</textarea>' +
     '<label for="sposti">Sähköpostiosoitteesi tietosuoja-asioita varten (vapaaehtoinen)</label>' +
     '<input type="text" id="sposti" data-syote="sposti" value="' + e(SYOTE.sposti) + '" placeholder="oma@osoite.fi">' +
-    '<div class="rivi"><button class="toiminto paa" data-t="luo_sovellus">Rekisteröi</button></div>';
+    '<div class="rivi"><button class="toiminto paa" data-t="luo_sovellus">Rekisteröi</button></div>' +
+    ilmoitukset('uusi');
 }
 
 function alilomakeAvain(){
@@ -7465,7 +7484,7 @@ function alilomakeAvain(){
   h += '<label for="polku">tai kirjoita polku</label>' +
        '<input type="text" id="polku" data-syote="polku" value="' + e(SYOTE.polku) + '" placeholder="~/Lataukset/590999ea-….pem">' +
        '<div class="rivi"><button class="toiminto" data-t="kayta_avainta">Käytä</button></div>';
-  return h;
+  return h + ilmoitukset('avain');
 }
 
 /* ---------------- vaihe 2: pankit ---------------- */
@@ -7528,7 +7547,8 @@ function paneeliPankit(){
       }
       h += '<div class="rivi"><button class="toiminto paa" data-t="aloita">' +
            'Aloita tunnistautuminen</button>' +
-           '<button class="toiminto" data-t="peru_pankki">Valitse toinen pankki</button></div>';
+           '<button class="toiminto" data-t="peru_pankki">Valitse toinen pankki</button></div>' +
+           ilmoitukset('pankki');
     } else {
       h += '<p>Avaa tunnistautuminen ja kirjaudu pankkiisi. Pankki palauttaa sinut ' +
            'sivulle, joka näyttää tyhjältä — se on kunnossa. <strong>Kopioi silloin ' +
@@ -7538,7 +7558,7 @@ function paneeliPankit(){
            '<label for="koodi">Osoiterivi pankista palanneelta sivulta</label>' +
            '<input type="text" id="koodi" data-syote="koodi" value="' + e(SYOTE.koodi) + '" placeholder="https://…?code=…">' +
            '<div class="rivi"><button class="toiminto paa" data-t="viimeistele">Jatka</button>' +
-           '<button class="toiminto" data-t="peru_pankki">Peru</button></div>';
+           '<button class="toiminto" data-t="peru_pankki">Peru</button></div>' + ilmoitukset('pankki');
     }
   }
 
@@ -7553,7 +7573,7 @@ function paneeliPankit(){
           '<td><input type="text" class="nimi" data-i="' + i + '" value="' + e(t.ehdotus) + '"></td></tr>';
       }).join('') + '</tbody></table>' +
       '<div class="rivi"><button class="toiminto paa" data-t="tallenna">Tallenna tilit</button>' +
-      '<button class="toiminto" data-t="peru_pankki">Peru</button></div>';
+      '<button class="toiminto" data-t="peru_pankki">Peru</button></div>' + ilmoitukset('pankki');
   }
   return h;
 }
@@ -7586,6 +7606,8 @@ function piirra(){
       function(b){ b.disabled = true; b.textContent = b.textContent; });
   }
   sido();
+  var ilmo = document.querySelector('.ilmo');
+  if(ilmo) ilmo.scrollIntoView({block:'nearest'});
 }
 
 function sido(){
@@ -7735,6 +7757,18 @@ def _velho_nollaa_pankki():
                  auth={"url": "", "redirect": ""}, istunto=None, tilit=[])
 
 
+def _velho_tunnusrivi():
+    """Millä tunnuksilla kutsu tehtiin. Kun sama kutsu onnistuu terminaalissa
+    ja epäonnistuu selaimessa, ero on käytännössä aina tässä — ja ilman tätä
+    riviä sitä ei voi nähdä, vain arvata."""
+    try:
+        a = _eb_asetukset()
+        tunnus = a["EB_APP_ID"] or "(puuttuu)"
+        return f"sovellus {tunnus}, tunnukset {_env_polku()}"
+    except (OSError, ValueError):
+        return "tunnuksia ei saatu luettua"
+
+
 def velho_toiminto(nimi, p):
     """Yksi toiminto, uusi tila. Jokainen palaa samaan muotoon, joten sivu ei
     tarvitse tietoa siitä mikä onnistui — se piirtää tilan uudelleen."""
@@ -7845,6 +7879,7 @@ def velho_toiminto(nimi, p):
         except EBVirhe as e:
             if e.koodi == 403 and "not active" in str(e.runko).lower():
                 v["virhe"] = (
+                    f"({_velho_tunnusrivi()}) "
                     "Avain kelpaa, mutta Enable Banking ei ole aktivoinut "
                     "sovellusta: haku ei vielä toimi. Käy portaalin "
                     "sovellussivulla ja liitä tilisi sovellukseen (Link "
@@ -7852,7 +7887,8 @@ def velho_toiminto(nimi, p):
                     "se on se vaihe, joka puuttuu useimmiten. Tarkista sitten "
                     "yhteys uudelleen.")
             else:
-                v["virhe"] = f"Haku ei toimi vielä ({e.koodi}): {e.runko}"
+                v["virhe"] = (f"Haku ei toimi vielä ({e.koodi}): {e.runko} — "
+                              f"{_velho_tunnusrivi()}")
             return velho_julkinen()
         except (OSError, ValueError) as e:
             v["virhe"] = f"Yhteys ei toiminut: {e}"
@@ -7866,7 +7902,7 @@ def velho_toiminto(nimi, p):
         try:
             v["pankit"] = eb_pankkilista(v["maa"])
         except (EBVirhe, OSError, ValueError) as e:
-            v["virhe"] = f"Pankkilistaa ei saatu: {e}"
+            v["virhe"] = f"Pankkilistaa ei saatu: {e} — {_velho_tunnusrivi()}"
 
     elif nimi == "valitse":
         haettu = siisti(str(p.get("pankki", "")))
