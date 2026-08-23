@@ -241,7 +241,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.11"
+VERSIO = "v0.12"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -7272,6 +7272,13 @@ label { display:block; margin:.8rem 0 .3rem; font-size:.9em; color:#6b665c }
 table { width:100%; border-collapse:collapse; margin:.6rem 0 }
 th, td { text-align:left; padding:.35rem .5rem .35rem 0; border-bottom:1px solid var(--vaalea) }
 .pikku { font-size:.85em; color:#6b665c }
+.seuraavaksi { background:#f4f1e9; border:1px solid var(--raja); border-radius:8px;
+               padding:.9rem 1.1rem; margin:1rem 0 }
+.seuraavaksi .iso { font-weight:bold; margin:0 0 .3rem }
+.seuraavaksi p { margin:0 0 .5rem }
+.kortti.tulos { background:#fbfaf7 }
+details.vaihda { margin:1.4rem 0 0; border-top:1px solid var(--vaalea); padding-top:.8rem }
+details.vaihda summary { cursor:pointer; color:#6b665c; font-size:.92em }
 code.arvo { background:var(--vaalea); padding:.1rem .35rem; border-radius:4px;
             font:12.5px ui-monospace,Menlo,Consolas,monospace; word-break:break-all }
 table.kentat th { font-weight:normal; color:#6b665c; white-space:nowrap;
@@ -7386,54 +7393,84 @@ function ilmoitukset(mika){
 
 /* ---------------- vaihe 1: sovellus ---------------- */
 function paneeliSovellus(){
+  /* Vaihe 1 on kolme eri tilannetta, ei yksi lomake. Aiemmin sivu näytti aina
+     kaikki vaihtoehdot, ja rekisteröinnin jälkeen käyttäjä jäi lomakkeen
+     alalaitaan ilman tietoa siitä, mitä seuraavaksi pitää tehdä — vaikka
+     seuraava askel on pakollinen: tilit on liitettävä sovellukseen portaalissa,
+     tai haku ei toimi koskaan. Nyt jokaisessa tilanteessa on yksi selvä
+     seuraava teko, ja loput ovat sen alla. */
   var s = T.sovellus, h = vaiheOtsikko('sovellus');
-  h += '<p>Tapahtumat haetaan <em>sinun omalla</em> Rahaputki-sovelluksellasi: ' +
-       'tilitietosi kulkevat suoraan koneellesi eikä välissä ole muita palveluita. ' +
-       'Sovelluksen avain jää tälle koneelle.</p>';
-  h += ilmoitukset();
 
-  h += '<h3>Kirjastot</h3>';
-  if(T.kirjastot === null){
-    h += '<p class="pikku">Pankkihaku tarvitsee kirjastot pyjwt ja cryptography.</p>' +
-         '<div class="rivi"><button class="toiminto" data-t="kirjastot">Tarkista</button></div>';
-  } else if(T.kirjastot){
-    h += '<p class="pikku">✓ Kirjastot ovat asennettuna.</p>';
+  if(!s.app_id){
+    h += '<p>Tapahtumat haetaan <em>sinun omalla</em> Rahaputki-sovelluksellasi: ' +
+         'tilitietosi kulkevat suoraan koneellesi eikä välissä ole muita palveluita. ' +
+         'Sovelluksen avain jää tälle koneelle.</p>';
+    h += kirjastolohko();
+    h += '<h3>Valitse tapa</h3>' + reittikortit() + avattuLomake();
+    return h;
+  }
+
+  h += '<div class="kortti tulos">' +
+       '<h4>' + (s.varmistettu ? '\u2713 ' : '') + e(s.nimi || 'Rahaputki') +
+       (s.ymparisto ? ' (' + e(s.ymparisto) + ')' : '') + '</h4>' +
+       '<p>Tunnus: ' + e(s.app_id) + '<br>Avain: ' + e(s.avain || '\u2014') + '</p></div>';
+
+  if(s.varmistettu){
+    h += '<div class="seuraavaksi"><p class="iso">Yhteys toimii ja haku on käytettävissä</p>' +
+         '<div class="rivi"><button class="toiminto paa" data-t="vaihe" data-vaihe="pankit">' +
+         'Siirry yhdistämään pankit</button>' +
+         '<button class="toiminto" data-t="varmista">Tarkista uudelleen</button></div></div>';
   } else {
-    h += '<p class="pikku">Kirjastot puuttuvat. Asennus tehdään samalla Pythonilla, ' +
-         'jolla tämä ohjelma pyörii.</p>' +
-         '<div class="rivi"><button class="toiminto paa" data-t="asenna">Asenna nyt</button></div>';
+    h += '<div class="seuraavaksi">' +
+         '<p class="iso">Seuraavaksi: liitä tilit portaalissa</p>' +
+         '<p>Enable Banking ei salli hakua ennen kuin tilisi on liitetty tähän ' +
+         'sovellukseen. Avaa portaali, valitse sovellus ja liitä tilit ' +
+         '(<strong>Link accounts</strong>). Palaa sitten tähän ja tarkista yhteys.</p>' +
+         '<div class="rivi"><a class="paalinkki" target="_blank" rel="noopener" href="' +
+         e(T.vakiot.portaali) + '">Avaa portaali</a>' +
+         '<button class="toiminto paa" data-t="varmista">Tarkista yhteys</button></div>' +
+         ilmoitukset('yla') + '</div>';
   }
 
-  if(s.app_id){
-    h += '<h3>Rekisteröinti käytössä</h3><div class="kortti">' +
-         '<h4>' + e(s.nimi || 'Rahaputki') + (s.ymparisto ? ' (' + e(s.ymparisto) + ')' : '') +
-         '</h4><p>Tunnus: ' + e(s.app_id) + '<br>Avain: ' + e(s.avain || '—') + '<br>' +
-         (s.varmistettu ? '✓ Yhteys toimii ja haku on käytettävissä'
-                        : 'Yhteyttä ei ole vielä tarkistettu') +
-         '</p></div><div class="rivi">' +
-         '<button class="toiminto ' + (s.varmistettu ? '' : 'paa') + '" data-t="varmista">' +
-         'Tarkista yhteys</button></div>';
-  }
-
-  h += '<h3>' + (s.app_id ? 'Rekisteröi uudelleen tai vaihda avainta' : 'Aloita') + '</h3>';
-  h += '<div class="kortti valinta" role="button" tabindex="0" data-avaa="uusi"' +
-       (AVATTU === 'uusi' ? ' aria-pressed="true"' : '') +
-       '><h4>Rekisteröi Rahaputki puolestani</h4><p>Nopein tapa. Rahaputki ' +
-       'rekisteröityy sinun omaksi sovelluksekseksi, ja avain syntyy tällä ' +
-       'koneella eikä käy selaimen kautta.</p></div>' +
-       '<div class="kortti valinta" role="button" tabindex="0" data-avaa="avain"' +
-       (AVATTU === 'avain' ? ' aria-pressed="true"' : '') +
-       '><h4>Rahaputki on jo rekisteröity</h4><p>Otetaan käyttöön rekisteröinnin ' +
-       '.pem-avaintiedosto.</p></div>' +
-       '<div class="kortti valinta" role="button" tabindex="0" data-avaa="lomake"' +
-       (AVATTU === 'lomake' ? ' aria-pressed="true"' : '') +
-       '><h4>Rekisteröin itse portaalin lomakkeella</h4><p>Täytät kentät käsin. ' +
-       'Rahaputki kertoo mitä niihin kuuluu.</p></div>';
-
-  if(AVATTU === 'uusi'){ h += alilomakeUusi(); }
-  else if(AVATTU === 'avain'){ h += alilomakeAvain(); }
-  else if(AVATTU === 'lomake'){ h += alilomakeLomake(); }
+  h += kirjastolohko();
+  h += '<details class="vaihda"' + (AVATTU ? ' open' : '') + '>' +
+       '<summary>Rekisteröi uudelleen tai vaihda avainta</summary>' +
+       reittikortit() + avattuLomake() + '</details>';
   return h;
+}
+
+function kirjastolohko(){
+  var h = '<h3>Kirjastot</h3>';
+  if(T.kirjastot === null){
+    return h + '<p class="pikku">Pankkihaku tarvitsee kirjastot pyjwt ja cryptography.</p>' +
+      '<div class="rivi"><button class="toiminto" data-t="kirjastot">Tarkista</button></div>';
+  }
+  if(T.kirjastot){ return h + '<p class="pikku">\u2713 Kirjastot ovat asennettuna.</p>'; }
+  return h + '<p class="pikku">Kirjastot puuttuvat. Asennus tehdään samalla Pythonilla, ' +
+    'jolla tämä ohjelma pyörii.</p>' +
+    '<div class="rivi"><button class="toiminto paa" data-t="asenna">Asenna nyt</button></div>';
+}
+
+function reittikortit(){
+  function kortti(avain, otsikko, selite){
+    return '<div class="kortti valinta" role="button" tabindex="0" data-avaa="' + avain + '"' +
+      (AVATTU === avain ? ' aria-pressed="true"' : '') + '><h4>' + otsikko +
+      '</h4><p>' + selite + '</p></div>';
+  }
+  return kortti('uusi', 'Rekisteröi Rahaputki puolestani',
+      'Nopein tapa. Rahaputki rekisteröityy sinun omaksi sovellukseksesi, ja avain ' +
+      'syntyy tällä koneella eikä käy selaimen kautta.') +
+    kortti('avain', 'Rahaputki on jo rekisteröity',
+      'Otetaan käyttöön rekisteröinnin .pem-avaintiedosto.') +
+    kortti('lomake', 'Rekisteröin itse portaalin lomakkeella',
+      'Täytät kentät käsin. Rahaputki kertoo mitä niihin kuuluu.');
+}
+
+function avattuLomake(){
+  if(AVATTU === 'uusi') return alilomakeUusi();
+  if(AVATTU === 'avain') return alilomakeAvain();
+  if(AVATTU === 'lomake') return alilomakeLomake();
+  return '';
 }
 
 function alilomakeUusi(){
@@ -7462,7 +7499,21 @@ function alilomakeUusi(){
     '<label for="sposti">Sähköpostiosoitteesi tietosuoja-asioita varten (vapaaehtoinen)</label>' +
     '<input type="text" id="sposti" data-syote="sposti" value="' + e(SYOTE.sposti) + '" placeholder="oma@osoite.fi">' +
     '<div class="rivi"><button class="toiminto paa" data-t="luo_sovellus">Rekisteröi</button></div>' +
-    ilmoitukset('uusi');
+    ilmoitukset('uusi') + rekisterointiTulos();
+}
+
+function rekisterointiTulos(){
+  /* Onnistuminen ei ole pelkkä vihreä rivi: se on kohta, jossa käyttäjän pitää
+     tietää mitä seuraavaksi tapahtuu. Seuraava teko on tässä, ei ylhäällä. */
+  if(VIIME !== 'luo_sovellus' || T.virhe || !T.sovellus.app_id) return '';
+  return '<div class="seuraavaksi"><p class="iso">Rekisteröity</p>' +
+    '<p>Tunnus <code class="arvo">' + e(T.sovellus.app_id) + '</code>, avain ' +
+    'tallennettu tälle koneelle.</p>' +
+    '<p><strong>Seuraavaksi:</strong> liitä tilisi tähän sovellukseen portaalissa ' +
+    '(Link accounts). Ilman sitä haku ei toimi.</p>' +
+    '<div class="rivi"><a class="paalinkki" target="_blank" rel="noopener" href="' +
+    e(T.vakiot.portaali) + '">Avaa portaali</a>' +
+    '<button class="toiminto paa" data-t="varmista">Tarkista yhteys</button></div></div>';
 }
 
 function kentta(nimi, arvo){
