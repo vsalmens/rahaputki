@@ -247,6 +247,16 @@ VARAUKSET = DATA / "varaukset.json"
 # tililtä viimeksi saatiin tapahtumia ja mihin asti pankin antama valtuutus on
 # voimassa. Siksi data/-kansiossa eikä config.jsonissa, jota käyttäjä muokkaa.
 PANKKITILA = DATA / "pankkitila.json"
+# Pankkiyhteyden loki: milloin rajapintaa kutsuttiin, mitä vastattiin ja kuinka
+# kauan siinä meni. Tästä näkee jälkikäteen, miten pankin päivittäinen hakuraja
+# oikeasti käyttäytyy — liukuuko ikkuna vai nollautuuko kiintiö — eikä sitä
+# tarvitse arvata. Lokiin ei kirjoiteta salaisuuksia: ei tunnuksia, ei
+# pyyntöjen runkoja, ei tilinumeroita. Tilin tunnus lyhennetään tiivisteeksi,
+# joka erottaa tilit toisistaan mutta ei kelpaa miksikään muuksi.
+PANKKILOKI = DATA / "pankkiloki.csv"
+PANKKILOKI_KENTAT = ["aika", "toiminto", "kohde", "tulos", "koodi", "kesto_s",
+                     "vastaus_tavua", "lisatieto"]
+PANKKILOKI_RIVEJA = 2000
 # Varaukset vanhenevat: jos hae ei ole käynyt hetkeen, niitä ei pidetä yllä.
 VARAUS_VANHENEE_PV = 3
 PVM_MUODOT = ["%d.%m.%Y", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y", "%d.%m.%y"]
@@ -576,6 +586,77 @@ def turvakirjoita(polku, teksti):
         f"  Kansio: {polku.parent}\n"
         "  Pilvisynkka voi viedä juuri luodun tiedoston hetkeksi alta. Vanha\n"
         "  versio on tallessa eikä mitään rikkoutunut — kokeile uudelleen.")
+
+
+def _lokitunnus(teksti):
+    """Tilin tunnisteesta lyhyt tiiviste: erottaa tilit toisistaan lokissa,
+    mutta ei ole tilin tunnus eikä palaudu siksi."""
+    return hashlib.sha1(str(teksti).encode("utf-8")).hexdigest()[:8]
+
+
+def _lokipolku(polku):
+    """Rajapintapolku lokiin: tilin uid korvataan tiivisteellä ja kyselyosa
+    pudotetaan (siellä on päivämäärärajat ja sivutusavaimet, ei asiaa lokiin)."""
+    polku = str(polku).partition("?")[0]
+    osat = [_lokitunnus(o) if len(o) >= 20 else o for o in polku.split("/")]
+    return "/".join(osat)
+
+
+# Lokiin päätyvästä virhetekstistä siivotaan kaikki, mikä voisi olla tunnus.
+# Järjestys on tärkeä: ensin tunnetut muodot (JWT, avain: arvo -parit), sitten
+# kaikki riittävän pitkät merkkijonot varmuuden vuoksi. Väärä positiivinen on
+# harmiton — lokiin ei tarvita tunnuksia, ei edes vahingossa.
+_JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}(?:\.[A-Za-z0-9_-]+){1,2}")
+# "Authorization: Bearer <tunnus>" tarvitsee oman sääntönsä: muuten yleinen
+# avain–arvo-sääntö nappaa arvokseen sanan "Bearer" ja jättää tunnuksen näkyviin.
+_BEARER = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{6,}")
+_AVAINARVO = re.compile(
+    r"(?i)\b(bearer|token|access_token|id_token|code|secret|password|authorization|"
+    r"api[_-]?key)\b[\"'\s:=]*(?!bearer\b)([A-Za-z0-9._~+/=-]{6,})")
+_PITKA = re.compile(r"[A-Za-z0-9_-]{24,}")
+
+
+def _siivoa_lokiteksti(teksti):
+    """Virheen runko lokiin: ei tunnuksia, ei rivinvaihtoja, ei pitkiä pötköjä."""
+    teksti = _JWT.sub("<tunnus>", str(teksti or ""))
+    teksti = _BEARER.sub("Bearer <poistettu>", teksti)
+    teksti = _AVAINARVO.sub(lambda m: f"{m.group(1)} <poistettu>", teksti)
+    teksti = _PITKA.sub("<pitkä>", teksti)
+    return siisti(teksti)[:200]
+
+
+def pankkiloki(toiminto, kohde, tulos, koodi="", kesto_s=None, tavuja=None,
+               lisatieto=""):
+    """Yksi rivi pankkiyhteyden lokiin. Epäonnistuminen ei saa haitata hakua."""
+    rivi = {"aika": datetime.now().isoformat(timespec="seconds"),
+            "toiminto": toiminto, "kohde": kohde, "tulos": tulos, "koodi": koodi,
+            "kesto_s": f"{kesto_s:.2f}" if kesto_s is not None else "",
+            "vastaus_tavua": tavuja if tavuja is not None else "",
+            "lisatieto": _siivoa_lokiteksti(lisatieto)}
+    try:
+        DATA.mkdir(parents=True, exist_ok=True)
+        uusi = not PANKKILOKI.exists()
+        with open(PANKKILOKI, "a", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=PANKKILOKI_KENTAT, delimiter=";")
+            if uusi:
+                w.writeheader()
+            w.writerow(rivi)
+        _karsi_pankkiloki()
+    except OSError:
+        pass
+
+
+def _karsi_pankkiloki():
+    """Loki ei saa kasvaa rajatta. Karsitaan harvakseltaan, ei joka rivillä."""
+    try:
+        if PANKKILOKI.stat().st_size < 300 * 1024:
+            return
+        rivit = PANKKILOKI.read_text(encoding="utf-8").splitlines(keepends=True)
+        if len(rivit) <= PANKKILOKI_RIVEJA + 1:
+            return
+        turvakirjoita(PANKKILOKI, rivit[0] + "".join(rivit[-PANKKILOKI_RIVEJA:]))
+    except (OSError, ValueError, RuntimeError):
+        pass
 
 
 def lue_pankkitila():
@@ -1577,15 +1658,34 @@ def _eb_kutsu(polku, token, runko=None):
     req = urllib.request.Request(EB_API + polku, data=data,
                                  headers={"Authorization": f"Bearer {token}",
                                           "Content-Type": "application/json"})
+    kohde = _lokipolku(polku)
+    toiminto = ("POST " if data is not None else "GET ") + kohde
+    alku = time.time()
     try:
         with urllib.request.urlopen(req, timeout=30) as v:
-            return json.loads(v.read().decode())
+            vastaus = v.read()
+            pankkiloki(toiminto, kohde, "ok", v.status, time.time() - alku, len(vastaus))
+            return json.loads(vastaus.decode())
     except urllib.error.HTTPError as e:
         try:
             teksti = e.read().decode()[:300]
         except OSError:
             teksti = ""
+        # Rajan ylityksessä pankki kertoo usein milloin seuraava haku sallitaan.
+        # Juuri se vastaa kysymykseen, jota muuten joutuisi arvailemaan.
+        odota = ""
+        try:
+            for otsake in ("Retry-After", "X-RateLimit-Reset", "RateLimit-Reset"):
+                if e.headers and e.headers.get(otsake):
+                    odota = f"{otsake}={e.headers.get(otsake)} "
+        except (AttributeError, TypeError):
+            pass
+        pankkiloki(toiminto, kohde, "virhe", e.code, time.time() - alku,
+                   len(teksti), odota + teksti)
         raise EBVirhe(e.code, teksti) from e
+    except OSError as e:
+        pankkiloki(toiminto, kohde, "katkos", "", time.time() - alku, None, str(e))
+        raise
 
 
 def eb_riveiksi(data, kerro=None, varaukset=None):
