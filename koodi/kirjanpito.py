@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.28"
+VERSIO = "v0.29"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -7316,6 +7316,16 @@ window.addEventListener('DOMContentLoaded',function(){
     const vm=sessionStorage.getItem('rahaputki_viesti');
     if(vm){merkitse(null,vm);sessionStorage.removeItem('rahaputki_viesti');}
   }catch(err){}
+  try{
+    if(sessionStorage.getItem('rahaputki_budjetti_alkuun')){
+      sessionStorage.removeItem('rahaputki_budjetti_alkuun');
+      // Selain palauttaa oman vierityksensä vasta latauksen jälkeen, joten
+      // alkuun palataan myös sen jälkeen.
+      const alkuun=function(){window.scrollTo(0,0);};
+      alkuun();
+      window.addEventListener('load',function(){setTimeout(alkuun,0);});
+    }
+  }catch(err){}
   const h=location.hash.slice(1);
   if(h==='yhteistalous'){const d=document.getElementById('yhteistalous');
     if(d){d.open=true;if(d.scrollIntoView){d.scrollIntoView();}}}
@@ -7474,12 +7484,26 @@ window.addEventListener('DOMContentLoaded',function(){
   });
   const KUUKAUSI=document.body.getAttribute('data-kuukausi')||'';
   const KUUNIMI=document.body.getAttribute('data-kuunimi')||'t\u00e4lle kuulle';
+  function budLataaUudelleen(viesti){
+    // Raamin säätämisen jälkeen jäädään budjettiin. Osoitteen tunniste
+    // tyhjennetään, ettei aiemmin avattu kategoria aukea uudelleen ja vie
+    // mukanaan, ja sivu palautetaan alkuun — budjetti on sivun ensimmäinen
+    // osio, joten mitään ei tarvitse etsiä vierittämällä.
+    try{
+      sessionStorage.setItem('rahaputki_budjetti_alkuun','1');
+      if(viesti){sessionStorage.setItem('rahaputki_viesti',viesti);}
+    }catch(err){}
+    if(location.hash){
+      history.replaceState(null,'',location.pathname+location.search);
+    }
+    location.reload();
+  }
   function budPyynto(runko,nappi){
     if(nappi){nappi.disabled=true;}
     fetch('api/budjetti',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify(runko)}).then(function(r){return r.json();}).then(function(v){
         if(!v.ok){if(nappi)nappi.disabled=false;alert(v.virhe||'ei onnistunut');return;}
-        location.reload();
+        budLataaUudelleen(v.viesti||'budjetti p\u00e4ivitetty \u2713');
       }).catch(function(e){if(nappi)nappi.disabled=false;alert('ei onnistunut: '+e);});
   }
   function budEditori(kat,rivi,nykyinen,onPoikkeus){
@@ -7557,7 +7581,8 @@ window.addEventListener('DOMContentLoaded',function(){
           s.textContent=' '+(v.virhe||'ei onnistunut');
           budNappi.parentNode.appendChild(s);return;}
         budNappi.textContent='Valmis \u2014 p\u00e4ivitet\u00e4\u00e4n\u2026';
-        location.reload();
+        budLataaUudelleen('budjetti alustettu: '+v.n+' kategoriaa '+
+                          v.kuukausia+' t\u00e4yden kuukauden mediaanista \u2713');
       }).catch(function(e){budNappi.disabled=false;
         budNappi.textContent='Alusta budjetti ('+e+')';});
   });
@@ -7567,8 +7592,13 @@ window.addEventListener('DOMContentLoaded',function(){
   document.getElementById('ajoloki-piilota').addEventListener('click',function(){
     lokiPaneeli().hidden=true;});
   fetch('api/ping').then(function(r){return r.json();}).then(function(v){
-    if(v.ok){SERVER=true;document.getElementById('tila').textContent=
-      'selaa-tila \u2713 muutokset tallentuvat heti';
+    if(v.ok){SERVER=true;
+      // Sivun latauksessa asetettu kuittaus ("raami p\u00e4ivitetty") saa n\u00e4ky\u00e4
+      // rauhassa; tilarivi palaa oletukseen vasta sen j\u00e4lkeen.
+      const t=document.getElementById('tila');
+      const oletus='selaa-tila \u2713 muutokset tallentuvat heti';
+      if(t.textContent){setTimeout(function(){t.textContent=oletus;},6000);}
+      else{t.textContent=oletus;}
       document.getElementById('ajonapit').hidden=false;
       if(budNappi)budNappi.hidden=false;
       document.querySelectorAll('.bud-muokkaa,.bud-lisaa').forEach(function(b){
