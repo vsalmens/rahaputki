@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.29"
+VERSIO = "v0.30"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -5172,8 +5172,9 @@ def olympos_osio(ledger, cfg=None):
         for nm in nimet:
             a = 1 if raw.get(nm, 1) else 0
             merkki = "✓" if a else "–"
-            solut += (f'<td class="olpres" data-vk="{e(vk)}" data-nimi="{e(nm)}" data-arvo="{a}" '
-                      f'style="cursor:pointer;text-align:center">{merkki}</td>')
+            solut += (f'<td class="olpres" data-vk="{e(vk)}" data-nimi="{e(nm)}" '
+                      f'data-arvo="{a}" title="klikkaa: läsnä / poissa">'
+                      f'<span class="olmerkki">{merkki}</span></td>')
         try:
             ma = date.fromisocalendar(int(vk[:4]), int(vk[6:]), 1)
             su = ma + timedelta(days=6)
@@ -5185,19 +5186,24 @@ def olympos_osio(ledger, cfg=None):
         except ValueError:
             nimio = e(vk)
         b = L["viikot"].get(vk, {}).get("boksi", 0.0)
-        lt.append(f'<tr><td>{nimio}</td>{solut}<td class="num">{eur2(b) if b else ""}</td>'
-                  f'<td class="num">{eur2(b / len(lo)) if b else ""}</td></tr>')
+        lt.append(f'<tr><td>{nimio}</td>{solut}'
+                  f'<td class="num olluku">{eur2(b) if b else ""}</td>'
+                  f'<td class="num olluku">{eur2(b / len(lo)) if b else ""}</td></tr>')
     if L["boksi_yht"]:
-        summat = "".join(f'<td class="num"><b>{eur2(L["boksi_osuus"][nm])}</b></td>' for nm in nimet)
+        summat = "".join(f'<td class="num olluku"><b>{eur2(L["boksi_osuus"][nm])}</b></td>'
+                         for nm in nimet)
         lt.append(f'<tr><td><b>Yhteensä €</b></td>{summat}'
-                  f'<td class="num"><b>{eur2(L["boksi_yht"])}</b></td><td></td></tr>')
+                  f'<td class="num olluku"><b>{eur2(L["boksi_yht"])}</b></td><td></td></tr>')
     lt.append("</table>")
-    kt = ['<table><tr><th>pvm</th><th>kuvaus</th><th>maksaja</th><th class="num">€</th><th>jaetaan</th><th class="num">€/osallinen</th><th></th></tr>']
+    KT_OTSIKKO = ('<table><tr><th>pvm</th><th>kuvaus</th><th>maksaja</th>'
+                  '<th class="num">€</th><th>jaetaan</th>'
+                  '<th class="num">€/osallinen</th><th></th></tr>')
+    kt, aiemmat = [KT_OTSIKKO], [KT_OTSIKKO]
     for i, k in enumerate(oly.get("kirjaukset", [])):
-        merkinta = ""
+        ennen = False
         try:
-            if date.fromisoformat(str(k.get("pvm", ""))) <= date.fromisoformat(L["alku"]):
-                merkinta = ' <span class="pikkuteksti">(ennen kautta)</span>'
+            ennen = (date.fromisoformat(str(k.get("pvm", "")))
+                     <= date.fromisoformat(L["alku"]))
         except ValueError:
             pass
         k_summa = float(k.get("summa", 0) or 0)
@@ -5216,14 +5222,25 @@ def olympos_osio(ledger, cfg=None):
         else:
             m_jako = max(len(nimet), 1)
         per = eur2(k_summa / m_jako) if m_jako else ""
-        kt.append(f'<tr><td>{e(str(k.get("pvm", "")))}{merkinta}</td><td>{e(str(k.get("kuvaus", "")))}</td>'
-                  f'<td>{e(str(k.get("maksaja", "")))}</td><td class="num">{eur2(k_summa)}</td>'
-                  f'<td>{e(", ".join(k.get("osallistujat") or []) or ("läsnäviikko" if k.get("jako") == "lasna" else "kaikki"))}</td>'
-                  f'<td class="num">{per}</td>'
-                  f'<td><a href="#" class="olpoisto" data-i="{i}">poista</a></td></tr>')
+        rivi = (f'<tr><td>{e(str(k.get("pvm", "")))}</td><td>{e(str(k.get("kuvaus", "")))}</td>'
+                f'<td>{e(str(k.get("maksaja", "")))}</td><td class="num">{eur2(k_summa)}</td>'
+                f'<td>{e(", ".join(k.get("osallistujat") or []) or ("läsnäviikko" if k.get("jako") == "lasna" else "kaikki"))}</td>'
+                f'<td class="num">{per}</td>'
+                f'<td><a href="#" class="olpoisto" data-i="{i}">poista</a></td></tr>')
+        (aiemmat if ennen else kt).append(rivi)
     if len(kt) == 1:
-        kt.append('<tr><td colspan="7" class="pikkuteksti">ei kirjauksia</td></tr>')
+        kt.append('<tr><td colspan="7" class="pikkuteksti">ei kirjauksia tällä kaudella</td></tr>')
     kt.append("</table>")
+    # Aiempien kausien kirjaukset eivät kuulu tämän kauden laskelmaan eivätkä
+    # sen näkymään — mutta ne pysyvät poistettavissa, joten ne ovat taitoksen
+    # takana eivätkä poissa.
+    if len(aiemmat) > 1:
+        aiemmat.append("</table>")
+        kt.append(f'<details class="ol-aiemmat"><summary>Aiempien kausien '
+                  f'kirjaukset ({len(aiemmat) - 2} kpl)</summary>'
+                  f'<p class="pikkuteksti">Nämä on laskutettu jo aiemmalla kaudella '
+                  f'eivätkä vaikuta nykyisiin saldoihin.</p>'
+                  + "".join(aiemmat) + "</details>")
     osallistujaruudut = "".join(f'<label style="margin-right:.5rem"><input type="checkbox" '
                                 f'class="ol-osall" value="{e(nm)}" checked> {e(nm)}</label>'
                                 for nm in nimet)
@@ -5278,7 +5295,10 @@ def olympos_osio(ledger, cfg=None):
             f'nimestä kategoriasta riippumatta. Asetukset: data/yhteistalous.json.</p>'
             f'{vihje}<h3>Saldot</h3>{"".join(st)}'
             f'<h3>Läsnäolo viikoittain</h3><p class="pikkuteksti">Klikkaa solua: ✓ läsnä / – poissa. '
-            f'Viikon boksi jaetaan läsnäolijoiden kesken (jos kaikki poissa, jaetaan kaikille).</p>{"".join(lt)}'
+            f'Viikon boksi jaetaan läsnäolijoiden kesken (jos kaikki poissa, jaetaan kaikille).</p>'
+            f'{"".join(lt)}'
+            f'<p class="pikkuteksti"><button type="button" id="ol-paivita" hidden>'
+            f'päivitä eurot</button> <span id="ol-lasnatila"></span></p>'
             f'<h3>Vakiot (kk-hyvitykset)</h3>'
             f'<p class="pikkuteksti">Jäsenen saldoa veloitetaan summa joka kuukausi ja muille '
             f'hyvitetään tasan — esim. autolataus: Ville korvaa yhteisölle sähköstä. '
@@ -7164,12 +7184,43 @@ document.addEventListener('click',function(ev){
   const op=ev.target.closest('.olpres');
   if(op){ev.preventDefault();
     if(!SERVER){alert('Muokkaus vaatii selaa-tilan.');return;}
+    // Merkki vaihtuu heti ja jää odottavaan tilaan; palvelimen kuittaus tekee
+    // siitä pysyvän. Koko sivua ei ladata uudelleen, koska ruudukkoa
+    // klikkaillaan monta solua peräkkäin — sen sijaan viikon eurot himmenevät
+    // vanhentuneina ja "päivitä eurot" laskee ne uudelleen.
+    const m=op.querySelector('.olmerkki')||op;
+    const vanhaArvo=op.getAttribute('data-arvo')==='1'?1:0;
+    const uusiArvo=vanhaArvo?0:1;
+    op.setAttribute('data-arvo',String(uusiArvo));
+    m.textContent=uusiArvo?'\u2713':'\u2013';
+    op.classList.remove('olvalmis');op.classList.add('olkesken');
+    op.closest('tr').querySelectorAll('.olluku').forEach(function(td){
+      td.classList.add('olvanha');});
+    document.querySelectorAll('#yhteistalous tr:last-child .olluku').forEach(
+      function(td){td.classList.add('olvanha');});
     fetch('api/olympos',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({lasna_vk:op.getAttribute('data-vk'),lasna_nimi:op.getAttribute('data-nimi'),
-        lasna_arvo:op.getAttribute('data-arvo')==='1'?0:1})})
+      body:JSON.stringify({lasna_vk:op.getAttribute('data-vk'),
+        lasna_nimi:op.getAttribute('data-nimi'),lasna_arvo:uusiArvo})})
       .then(function(r){return r.json();}).then(function(v){
-        if(!v.ok){alert(v.virhe||'virhe');return;}
-        paivitaSivu('yhteistalous');});
+        op.classList.remove('olkesken');
+        if(!v.ok){
+          op.setAttribute('data-arvo',String(vanhaArvo));
+          m.textContent=vanhaArvo?'\u2713':'\u2013';
+          alert(v.virhe||'virhe');return;}
+        op.classList.add('olvalmis');
+        const n=document.getElementById('ol-paivita');
+        if(n){n.hidden=false;}
+        const t=document.getElementById('ol-lasnatila');
+        if(t){t.textContent='l\u00e4sn\u00e4olo tallennettu \u2713 \u2014 '+
+          'eurot p\u00e4ivittyv\u00e4t napista';}
+      }).catch(function(e){
+        op.classList.remove('olkesken');
+        op.setAttribute('data-arvo',String(vanhaArvo));
+        m.textContent=vanhaArvo?'\u2713':'\u2013';
+        alert('ei onnistunut: '+e);});
+    return;}
+  if(ev.target.id==='ol-paivita'){ev.preventDefault();
+    paivitaSivu('yhteistalous','l\u00e4sn\u00e4olot p\u00e4ivitetty \u2713');
     return;}
   const od=ev.target.closest('.olpoisto');
   if(od){ev.preventDefault();
@@ -7718,6 +7769,17 @@ td.num.klik {{ text-decoration:none }}
 .bud-muokkaa:hover, .bud-lisaa:hover {{ border-color:#d5cdbc; background:#fff; color:var(--muste) }}
 .bud-vailla {{ white-space:nowrap }}
 .bud-nimi.klik {{ width:fit-content; max-width:100% }}
+.olpres {{ cursor:pointer; text-align:center; user-select:none }}
+.olpres .olmerkki {{ display:inline-block; min-width:1.4em; padding:.05rem .25rem;
+  border-radius:5px; transition:background .15s, opacity .15s }}
+.olpres:hover .olmerkki {{ background:var(--vaalea) }}
+.olpres.olkesken .olmerkki {{ opacity:.45; background:var(--vaalea) }}
+.olpres.olvalmis .olmerkki {{ background:#d8ecdf; color:#1f5b41 }}
+.olluku.olvanha {{ opacity:.35 }}
+#ol-paivita {{ font:inherit; font-size:.85rem; padding:.2rem .6rem; border-radius:6px;
+  border:1px solid var(--muste); background:#fff; cursor:pointer }}
+.ol-aiemmat {{ margin:.5rem 0 }}
+.ol-aiemmat summary {{ cursor:pointer; font-size:.9rem; color:#6b665c }}
 .bud-editori {{ display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;
   margin:.1rem 0 .5rem; padding:.55rem .7rem; border-radius:10px;
   background:#fffdf8; border:1px solid #e2dbcb; font-size:.85rem }}
