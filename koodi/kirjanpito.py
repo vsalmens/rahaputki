@@ -241,7 +241,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.7"
+VERSIO = "v0.8"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -7390,7 +7390,7 @@ function paneeliSovellus(){
   }
 
   if(s.app_id){
-    h += '<h3>Käytössä oleva sovellus</h3><div class="kortti">' +
+    h += '<h3>Rekisteröinti käytössä</h3><div class="kortti">' +
          '<h4>' + e(s.app_id) + (s.nimi ? ' — ' + e(s.nimi) : '') + '</h4>' +
          '<p>Avain: ' + e(s.avain || '—') + '<br>' +
          (s.varmistettu ? '✓ Yhteys tarkistettu' : 'Yhteyttä ei ole vielä tarkistettu') +
@@ -7399,14 +7399,16 @@ function paneeliSovellus(){
          'Tarkista yhteys</button></div>';
   }
 
-  h += '<h3>' + (s.app_id ? 'Vaihda toiseen sovellukseen' : 'Aloita') + '</h3>';
+  h += '<h3>' + (s.app_id ? 'Rekisteröi uudelleen tai vaihda avainta' : 'Aloita') + '</h3>';
   h += '<div class="kortti valinta" role="button" tabindex="0" data-avaa="uusi"' +
        (AVATTU === 'uusi' ? ' aria-pressed="true"' : '') +
-       '><h4>Luo minulle uusi sovellus</h4><p>Nopein tapa. Avain syntyy tällä koneella ' +
-       'eikä käy selaimen kautta.</p></div>' +
+       '><h4>Rekisteröi Rahaputki puolestani</h4><p>Nopein tapa. Rahaputki ' +
+       'rekisteröityy sinun omaksi sovelluksekseksi, ja avain syntyy tällä ' +
+       'koneella eikä käy selaimen kautta.</p></div>' +
        '<div class="kortti valinta" role="button" tabindex="0" data-avaa="avain"' +
        (AVATTU === 'avain' ? ' aria-pressed="true"' : '') +
-       '><h4>Minulla on jo sovellus</h4><p>Otetaan käyttöön sen .pem-avaintiedosto.</p></div>';
+       '><h4>Rahaputki on jo rekisteröity</h4><p>Otetaan käyttöön rekisteröinnin ' +
+       '.pem-avaintiedosto.</p></div>';
 
   if(AVATTU === 'uusi'){ h += alilomakeUusi(); }
   else if(AVATTU === 'avain'){ h += alilomakeAvain(); }
@@ -7414,7 +7416,7 @@ function paneeliSovellus(){
 }
 
 function alilomakeUusi(){
-  return '<h3>Uusi sovellus</h3>' +
+  return '<h3>Rekisteröi Rahaputki</h3>' +
     '<ol class="ohjeet">' +
     '<li>Avaa portaali alta ja <strong>kirjaudu sähköpostiosoitteellasi</strong>. ' +
       'Salasanaa ei ole — saat sähköpostiisi linkin, jota klikkaamalla pääset sisään.</li>' +
@@ -7432,7 +7434,7 @@ function alilomakeUusi(){
     '<textarea id="curl" data-syote="curl" placeholder="curl -X POST https://enablebanking.com/api/applications ...">' + e(SYOTE.curl) + '</textarea>' +
     '<label for="sposti">Sähköpostiosoitteesi tietosuoja-asioita varten (vapaaehtoinen)</label>' +
     '<input type="text" id="sposti" data-syote="sposti" value="' + e(SYOTE.sposti) + '" placeholder="oma@osoite.fi">' +
-    '<div class="rivi"><button class="toiminto paa" data-t="luo_sovellus">Luo sovellus</button></div>';
+    '<div class="rivi"><button class="toiminto paa" data-t="luo_sovellus">Rekisteröi</button></div>';
 }
 
 function alilomakeAvain(){
@@ -7759,18 +7761,30 @@ def velho_toiminto(nimi, p):
 
     elif nimi == "kayta_avainta":
         polku = Path(_siivoa_polku(str(p.get("polku", "")))).expanduser()
+        annettu = siisti(str(p.get("app_id", "")))
         if not polku.is_file():
             v["virhe"] = f"Tiedostoa ei löydy: {polku}"
-        elif not UUID_KUVIO.match(polku.stem):
-            v["virhe"] = ("Avaimen nimen pitäisi olla sovelluksen tunnus "
-                          "(esim. 590999ea-….pem). Tämä on: " + polku.name)
         else:
-            kohde = _talleta_avain(polku, siirra=True)
-            _kirjoita_env({"EB_APP_ID": polku.stem,
-                           "EB_KEY_PATH": _lyhenna_polku(kohde)})
-            v["sovellus"].update(app_id=polku.stem, avain=_lyhenna_polku(kohde),
-                                 reitti="avain", varmistettu=False, nimi="")
-            v["viesti"] = "Avain otettu käyttöön."
+            # Portaalin lomakkeesta ladatun avaimen nimi on sovelluksen tunnus,
+            # mutta rajapinnan kautta luodun tai käsin uudelleennimetyn ei ole.
+            # Silloin tunnus kysytään sen sijaan että avain hylättäisiin — juuri
+            # se avain, joka käyttäjällä on, ei saa olla se jota ei kelpuuteta.
+            app_id = polku.stem if UUID_KUVIO.match(polku.stem) else annettu
+            if not app_id:
+                v["avain_odottaa"] = {"polku": str(polku), "nimi": polku.name}
+                v["viesti"] = ("Tiedoston nimi ei ole sovelluksen tunnus. "
+                               "Kopioi tunnus (Application ID) portaalista alle.")
+            elif not UUID_KUVIO.match(app_id):
+                v["avain_odottaa"] = {"polku": str(polku), "nimi": polku.name}
+                v["virhe"] = ("Tunnus ei näytä sovelluksen tunnukselta. Se on "
+                              "muotoa 590999ea-6025-4378-8b24-fcb3d8b99804.")
+            else:
+                kohde = _talleta_avain(polku, siirra=True)
+                _kirjoita_env({"EB_APP_ID": app_id, "EB_KEY_PATH": _lyhenna_polku(kohde)})
+                v["sovellus"].update(app_id=app_id, avain=_lyhenna_polku(kohde),
+                                     reitti="avain", varmistettu=False, nimi="")
+                v["avain_odottaa"] = None
+                v["viesti"] = "Avain otettu käyttöön. Tarkista vielä yhteys."
 
     elif nimi == "luo_sovellus":
         token = _poimi_token(str(p.get("curl", "")))
