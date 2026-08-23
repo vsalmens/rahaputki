@@ -27,6 +27,7 @@ import os
 import queue
 import re
 import shutil
+import signal
 import socket
 import statistics
 import sys
@@ -281,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.17"
+VERSIO = "v0.18"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -1550,6 +1551,40 @@ def lukon_virkistys():
 
 
 @contextmanager
+def _signaalisuoja():
+    """Lopetussignaali käännetään poikkeukseksi, jotta lukko vapautuu.
+
+    Ctrl-C tulee KeyboardInterruptina ja ajaa finally-lohkot, mutta SIGTERM ja
+    SIGHUP eivät aja mitään: prosessi vain katoaa ja jättää lukkotiedoston
+    jälkeensä. Ne tulevat vastaan tavallisessa käytössä — käyttöjärjestelmän
+    sammutus, kill, ikkunan sulkeminen — eikä käyttäjän kuulu tietää, että
+    lopettamiseen on kaksi eri tapaa joista toinen jättää sotkun.
+
+    Signaalin voi asettaa vain pääsäikeestä, ja vanha käsittelijä palautetaan
+    lopuksi: ohjelma ei ole ainoa, joka niistä voi päättää."""
+    def kasittele(numero, _kehys):
+        raise SystemExit(f"\nLopetettu (signaali {numero}).")
+
+    vanhat = {}
+    for nimi in ("SIGTERM", "SIGHUP"):
+        sig = getattr(signal, nimi, None)
+        if sig is None:
+            continue
+        try:
+            vanhat[sig] = signal.signal(sig, kasittele)
+        except (ValueError, OSError, RuntimeError):
+            pass  # ei pääsäie tai käyttöjärjestelmä ei tunne signaalia
+    try:
+        yield
+    finally:
+        for sig, vanha in vanhat.items():
+            try:
+                signal.signal(sig, vanha)
+            except (ValueError, OSError, RuntimeError):
+                pass
+
+
+@contextmanager
 def paakirjalukko(komento, pakota=False):
     """Estää päällekkäiset ajot kahdella tasolla.
 
@@ -1572,8 +1607,12 @@ def paakirjalukko(komento, pakota=False):
     except (OSError, ValueError):
         cfg = {}
     if siisti(str(cfg.get("lukitus", "kone"))).lower() != "jaettu":
+        # Suoja koskee myös yhden koneen tilaa: paikallinen tiedostolukko
+        # vapautuu käyttöjärjestelmän toimesta, mutta muut finally-lohkot
+        # (esim. selaa-tilan odottava raportti) eivät ajaudu ilman tätä.
         try:
-            yield
+            with _signaalisuoja():
+                yield
         finally:
             _vapauta_paikallinen(kahva)
         return
@@ -1628,7 +1667,8 @@ def paakirjalukko(komento, pakota=False):
         raise
     LUKKO_TUNNISTE, LUKKO_KOMENTO = tunniste, komento
     try:
-        yield
+        with _signaalisuoja():
+            yield
     finally:
         # Lukkotiedoston nimessä on koneen nimi, ja saman koneen rinnakkaiset
         # ajot estää jo paikallinen tiedostolukko — poistettava tiedosto on siis
