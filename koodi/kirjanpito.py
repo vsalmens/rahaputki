@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.20"
+VERSIO = "v0.21"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -548,8 +548,9 @@ def varmista_aloitus():
         koodirivi = ("  koodi/      ohjelma; päivitys korvaa vain tämän kansion\n"
                      if erillinen else "")
         ohje = "koodi/OHJE.md" if erillinen else "OHJE.md"
-        seuraava = ("Seuraava askel: vie tiliotteet verkkopankista CSV-muodossa "
-                    f"kansioon inbox/\nja käynnistä uudelleen. Tarkemmat ohjeet: {ohje}")
+        seuraava = ("Seuraava askel: selain avautuu hetken päästä. Yhdistä pankkisi\n"
+                    "napista Yhdistä pankkeihin, tai vie tiliotteet CSV-muodossa\n"
+                    f"kansioon inbox/ ja paina Lue tiliotteet.\nTarkemmat ohjeet: {ohje}")
         if DATAJUURI == KOODIJUURI:
             print(f"""
 Tervetuloa. Kansio {DATAJUURI.name} on nyt valmis:
@@ -8690,7 +8691,8 @@ def cmd_selaa(args):
         kirjoita_ledger(ledger0)
         kirjoita_tarkistettavat(ledger0)
     rakenna_raportit(ledger0, cfg0, kk=13)
-    osoite = f"http://127.0.0.1:{portti}/raportti.html"
+    sivu = "velho" if getattr(args, "avaa", "raportti") == "velho" else "raportti.html"
+    osoite = f"http://127.0.0.1:{portti}/{sivu}"
     print(f"Selaa-tila {VERSIO}: {osoite}  (muutokset tallentuvat heti pääkirjaan; Ctrl-C lopettaa)")
     try:
         webbrowser.open(osoite)
@@ -8710,22 +8712,6 @@ def cmd_selaa(args):
                 _raportti_ajastin.cancel()
         if odottaa:
             _kirjoita_raportti_taustalla()  # viimeisin muutos myös levylle
-
-
-def cmd_onko_dataa(args):
-    """Käynnistimen kysymys: avataanko raportti vai näytetäänkö aloitusohje?
-
-    Käynnistin ei voi katsoa tiedostoa itse, koska pääkirja voi olla aivan eri
-    kansiossa kuin ohjelma (datakansio.txt). Aiemmin se katsoi polkua
-    data/tapahtumat.csv omasta kansiostaan, mikä erotetussa asennuksessa on
-    aina väärä paikka — raportti jäi avaamatta, vaikka ajo onnistui.
-
-    Vastaus on paluuarvo eikä tuloste: 0 = pääkirjassa on rivejä."""
-    try:
-        rivit = LEDGER.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        rivit = []
-    sys.exit(0 if len(rivit) > 1 else 1)
 
 
 def main():
@@ -8766,9 +8752,10 @@ def main():
     ala.add_parser("luokittele", help="aja säännöt uudelleen koko pääkirjalle (saannot.csv:n käsimuokkauksen jälkeen)")
     s = ala.add_parser("selaa", help="avaa raportti muokattavana selaimessa (paikallinen palvelin)")
     s.add_argument("--portti", type=int, default=8765)
+    s.add_argument("--avaa", choices=["raportti", "velho"], default="raportti",
+                   help="kumpi sivu avataan selaimeen (oletus: raportti)")
     k = ala.add_parser("kurkista", help="näytä miten CSV tulkittaisiin")
     k.add_argument("tiedosto")
-    ala.add_parser("onko-dataa", help=argparse.SUPPRESS)  # käynnistimen sisäinen
     args = p.parse_args()
     # Käynnistys koskee tietokansiota ensimmäistä kertaa: kansiot, config ja
     # lukko. Pilvikansiossa juuri se on hitain hetki, ja siihen asti ruudulla
@@ -8785,8 +8772,8 @@ def main():
          "pankkihaku": cmd_pankkihaku,
          "budjetti-ehdotus": cmd_budjetti, "kurkista": cmd_kurkista,
          "selaa": cmd_selaa, "tarkista-kortit": cmd_tarkista_kortit,
-         "siivoa-kopiot": cmd_siivoa_kopiot, "luokittele": cmd_luokittele,
-         "onko-dataa": cmd_onko_dataa}[args.komento](args)
+         "siivoa-kopiot": cmd_siivoa_kopiot,
+         "luokittele": cmd_luokittele}[args.komento](args)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,8 @@
 @echo off
 chcp 65001 >nul
 
-rem Rahaputki - varsinainen kaynnistyslogiikka. Paivittyy koodi-kansion mukana.
+rem Rahaputki - kaynnistin. Avaa ohjelman selaimeen; kaikki muu tapahtuu siella.
+rem Paivittyy koodi-kansion mukana.
 
 set "KOODI=%~dp0"
 set "KOODI=%KOODI:~0,-1%"
@@ -22,28 +23,11 @@ if not defined PY goto ei_pythonia
 %PY% -c "import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)" 2>nul
 if errorlevel 1 goto ei_pythonia
 
-%PY% "%KOODI%\kirjanpito.py" aja
-set "TILA=%errorlevel%"
-echo.
-
-rem Ajo ei mennyt lapi (lukko, puuttuva datakansio, ...): raportin avaaminen
-rem nayttaisi vanhan tilanteen ja vierittaisi syyn pois nakyvista.
-if not "%TILA%"=="0" goto keskeytyi
-
-%PY% "%KOODI%\kirjanpito.py" onko-dataa
-if errorlevel 1 goto tyhja
-
-echo Avataan raportti selaimeen. Sulje tama ikkuna kun olet valmis.
-echo.
-%PY% "%KOODI%\kirjanpito.py" selaa
+%PY% "%KOODI%\kirjanpito.py" selaa %*
+if errorlevel 1 goto keskeytyi
 goto loppu
 
 :keskeytyi
-echo.
-pause
-goto loppu
-
-:tyhja
 echo.
 pause
 goto loppu

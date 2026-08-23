@@ -1,6 +1,6 @@
 #!/bin/bash
-# Rahaputki - varsinainen kaynnistyslogiikka. Paivittyy koodi-kansion mukana.
-# Etsii Pythonin, lukee inbox-kansion ja avaa raportin selaimeen.
+# Rahaputki - kaynnistin. Avaa ohjelman selaimeen; kaikki muu tapahtuu siella.
+# Paivittyy koodi-kansion mukana.
 
 KOODI="$(cd "$(dirname "$0")" && pwd)"
 JUURI="$KOODI"
@@ -25,23 +25,10 @@ if [ -z "$PY" ]; then
     exit 0
 fi
 
-"$PY" "$KOODI/kirjanpito.py" aja
+"$PY" "$KOODI/kirjanpito.py" selaa "$@"
 TILA=$?
-echo
-
 if [ "$TILA" -ne 0 ]; then
-    # Ajo ei mennyt lapi (lukko, puuttuva datakansio, ...). Raportin avaaminen
-    # nayttaisi vanhan tilanteen ja vierittaisi juuri luetun syyn pois nakyvista.
-    read -r -p "Paina Enter sulkeaksesi..." || true
-    exit "$TILA"
-fi
-
-if "$PY" "$KOODI/kirjanpito.py" onko-dataa; then
-    echo "Avataan raportti selaimeen. Sulje ikkuna kun olet valmis."
-    echo
-    "$PY" "$KOODI/kirjanpito.py" selaa
-else
     echo
     read -r -p "Paina Enter sulkeaksesi..." || true
 fi
-exit 0
+exit "$TILA"

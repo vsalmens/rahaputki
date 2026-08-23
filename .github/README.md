@@ -34,10 +34,10 @@ jäit. Mikään ei mene rikki tauosta.
    noin 15 minuutissa tapahtumat alkavat tulla suoraan pankeistasi, eikä
    tiliotteita tarvitse viedä käsin koskaan. Velho hoitaa kaiken teknisen ja
    kertoo joka vaiheessa mitä tehdä — sinä vain kirjaudut pankkiisi.
-4. **Jatkossa kaksoisklikkaa jompaakumpaa:**
-   - `Pankkihaku` — hakee tuoreet tapahtumat pankista, luokittelee ne ja
-     avaa raportin
-   - `Aloita` — sama ilman hakua: lukee `inbox/`-kansion ja avaa raportin
+4. **Jatkossa kaksoisklikkaa `Aloita`-käynnistintä.** Se avaa Rahaputken
+   selaimeen, ja kaikki tapahtuu siellä: napista haet tuoreet tapahtumat
+   pankista, luokittelet rivit ja teet sääntöjä. `Pankkihaku`-käynnistin avaa
+   saman ohjelman suoraan pankkiyhteyssivulle.
 
 Ensimmäinen käynnistys luo kansiot ja mallitiedostot puolestasi. Raportti
 aukeaa selaimeen, ja voit luokitella tapahtumat suoraan siinä.
@@ -150,10 +150,11 @@ vaihtelevat pankeittain ja muuttuvat aika ajoin, joten aja aina ensin
 
 ## Rituaali jatkossa (~15–30 min, milloin huvittaa)
 
-1. Kaksoisklikkaa `Pankkihaku`-käynnistintä — se noutaa tuoreet tapahtumat ja
-   avaa raportin. (Ilman automaattihakua: vie tiliotteet kansioon `inbox/` ja
-   kaksoisklikkaa `Aloita`.)
-2. Luokittele avoimet rivit selaimessa — toistuvasta kauppiaasta tee sääntö,
+1. Kaksoisklikkaa `Aloita`-käynnistintä — Rahaputki avautuu selaimeen.
+2. Paina **Hae pankkitapahtumat**. Se noutaa tapahtumat pankista ja lukee ne
+   kirjanpitoon. (CSV-reitillä: vie tiliotteet kansioon `inbox/` ja paina
+   **Lue tiliotteet**.)
+3. Luokittele avoimet rivit selaimessa — toistuvasta kauppiaasta tee sääntö,
    niin se hoituu jatkossa itsestään
 
 Ensimmäinen kierros on työläin (vuoden datalle ehkä 30–60 min). Sen jälkeen
@@ -165,8 +166,8 @@ Juuressa on vain käynnistimet ja neljä kansiota. Jokaisella on yksi tehtävä:
 
 ```
 Rahaputki/
-  Pankkihaku.command  .bat          hae pankista + raportti  (tavallisin)
-  Aloita.command  Aloita.bat        lue inbox/ + raportti
+  Aloita.command  Aloita.bat        avaa Rahaputki selaimeen  (tavallisin)
+  Pankkihaku.command  .bat          avaa suoraan pankkiyhteyssivulle
   inbox/          tanne CSV-tiedostot, jos et kayta automaattihakua
   koodi/          ohjelma — päivitys korvaa vain tämän
   asetukset/      config.json, saannot.csv, budjetti.csv, pankkihaku.env
@@ -239,11 +240,19 @@ sudenkuopat.
 
 Käynnistin riittää useimpiin tarpeisiin, mutta kaikki toimii myös suoraan:
 
+Käynnistin ajaa käytännössä tämän:
+
 ```
-python3 koodi/kirjanpito.py pankkihaku # ohjattu käyttöönotto: haku suoraan pankista
+python3 koodi/kirjanpito.py selaa      # avaa Rahaputki selaimeen
+```
+
+Kaikki muu tehdään selaimessa. Samat toiminnot ovat myös omina komentoinaan,
+jos haluat ajastaa tai skriptata:
+
+```
 python3 koodi/kirjanpito.py hae        # nouda tuoreet tapahtumat pankeista
 python3 koodi/kirjanpito.py aja        # lue inbox/, luokittele, raportoi
-python3 koodi/kirjanpito.py selaa      # avaa raportti muokattavana selaimeen
+python3 koodi/kirjanpito.py pankkihaku # ohjattu käyttöönotto terminaalissa
 python3 koodi/kirjanpito.py opi        # lue täytetty tarkistettavat.csv takaisin
 ```
 
