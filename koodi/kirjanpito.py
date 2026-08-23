@@ -241,7 +241,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.3"
+VERSIO = "v0.4"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -2030,20 +2030,8 @@ def _komentorivi():
     return "py koodi\\kirjanpito.py" if os.name == "nt" else "python3 koodi/kirjanpito.py"
 
 
-# Velho kysyy kysymyksensä yhdellä tavalla, mutta vastaus voi tulla kahdesta
-# suunnasta. Kun VELHO_UI on asetettu, kysymykset menevät selaimeen ja
-# vastaukset palaavat sieltä; muuten käytetään input():ia kuten aina. Näin
-# velhosta on vain yksi toteutus — kaksi rinnakkaista versiota ajautuisi
-# vääjäämättä eri linjoille, ja juuri velho on se osa, jota kukaan ei muista
-# testata molemmilla tavoilla.
-VELHO_UI = None
-
-
 def _kysy(kysymys, oletus=""):
     """input(), joka ei kaadu putkitettuun tyhjään syötteeseen."""
-    if VELHO_UI is not None:
-        return VELHO_UI.kysy({"tyyppi": "teksti", "kysymys": kysymys,
-                              "oletus": oletus}) or oletus
     try:
         vastaus = siisti(input(kysymys))
     except EOFError:
@@ -2053,14 +2041,6 @@ def _kysy(kysymys, oletus=""):
 
 def _valikko(otsikko, vaihtoehdot, oletus=1):
     """Numeroitu valinta. Palauttaa valitun avaimen; Enter ottaa oletuksen."""
-    if VELHO_UI is not None:
-        vastaus = VELHO_UI.kysy({
-            "tyyppi": "valikko", "kysymys": otsikko, "oletus": str(oletus),
-            "vaihtoehdot": [{"arvo": str(i), "teksti": str(t)}
-                            for i, (_, t) in enumerate(vaihtoehdot, 1)]})
-        if vastaus.isdigit() and 1 <= int(vastaus) <= len(vaihtoehdot):
-            return vaihtoehdot[int(vastaus) - 1][0]
-        return vaihtoehdot[oletus - 1][0]
     print(f"\n{otsikko}")
     for i, (_, teksti) in enumerate(vaihtoehdot, 1):
         rivit = str(teksti).split("\n")
@@ -2075,20 +2055,11 @@ def _valikko(otsikko, vaihtoehdot, oletus=1):
 
 
 def _kylla(kysymys, oletus=True):
-    if VELHO_UI is not None:
-        vastaus = VELHO_UI.kysy({"tyyppi": "kylla", "kysymys": kysymys,
-                                 "oletus": "k" if oletus else "e"})
-        return oletus if not vastaus else vastaus[0].lower() in "kyj1"
     vastaus = _kysy(f"{kysymys} [{'K/e' if oletus else 'k/E'}] ").lower()
     return oletus if not vastaus else vastaus[0] in "kyj1"
 
 
 def _odota_enter(teksti="Paina Enter kun olet valmis..."):
-    if VELHO_UI is not None:
-        # Sama teksti, oikea ele: selaimessa ei ole Enteriä vaan nappi.
-        VELHO_UI.kysy({"tyyppi": "jatka", "oletus": "",
-                       "kysymys": teksti.replace("Paina Enter", "Klikkaa Jatka")})
-        return
     _kysy(f"\n{teksti} ")
 
 
@@ -2107,11 +2078,6 @@ def _leikepoydalta():
 
     tkinter kuuluu standardikirjastoon, mutta esim. Homebrew-Pythonista se
     puuttuu; siksi perässä on käyttöjärjestelmän oma komento."""
-    # Selainvelhossa koko kikka on tarpeeton: liittäminen tekstikenttään on se
-    # asia, jonka selain osaa ilman apua. Palautetaan None, jolloin velho
-    # kysyy sisältöä kuten se muutenkin kysyy epäonnistuneen luvun jälkeen.
-    if VELHO_UI is not None:
-        return None
     try:
         import tkinter
         ikkuna = tkinter.Tk()
@@ -2135,12 +2101,6 @@ def _leikepoydalta():
 
 
 def _avaa_selain(url):
-    # Selainvelhossa sivu avaa linkin itse: uusi välilehti syntyy käyttäjän
-    # klikkauksesta, jolloin ponnahdusikkunoiden esto ei ehdi väliin. Palvelin
-    # ei siis avaa mitään, vaan tarjoaa osoitteen sivulle.
-    if VELHO_UI is not None:
-        VELHO_UI.avaa(url)
-        return True
     try:
         import webbrowser
         if webbrowser.open(url):
@@ -7242,243 +7202,643 @@ def _kysely_luku(polku, nimi):
     return 0
 
 
-class SelainVelho:
-    """Velhon kysymykset selaimeen ja vastaukset takaisin.
-
-    Velho ajaa omassa säikeessään ja pysähtyy jokaisen kysymyksen kohdalla
-    odottamaan jonoa. Sivu kysyy tilaa säännöllisesti, näyttää kysymyksen ja
-    lähettää vastauksen, joka vapauttaa säikeen jatkamaan. Velhon oma koodi ei
-    tiedä tästä mitään — se kutsuu _kysy():ä kuten ennenkin."""
-
-    def __init__(self):
-        self.loki = []
-        self.kysymys = None
-        self.linkit = []
-        self.virhe = ""
-        self.kaynnissa = True
-        self._jono = queue.Queue()
-        self._laskuri = 0
-
-    def kysy(self, kysymys):
-        self._laskuri += 1
-        kysymys = dict(kysymys, id=self._laskuri)
-        self.kysymys = kysymys
-        while self.kaynnissa:
-            try:
-                tunnus, arvo = self._jono.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            if tunnus == kysymys["id"]:
-                self.kysymys = None
-                return siisti(str(arvo))
-        raise SystemExit("velho keskeytettiin selaimesta")
-
-    def vastaa(self, tunnus, arvo):
-        self._jono.put((tunnus, arvo))
-
-    def avaa(self, url):
-        # Sivu avaa linkin käyttäjän klikkauksesta: silloin ponnahdusikkunoiden
-        # esto ei ehdi väliin, ja käyttäjä näkee minne on menossa.
-        self.linkit.append(url)
-
-    def lopeta(self):
-        self.kaynnissa = False
-
-
-VELHO_AJO = {"ui": None}
-VELHO_LUKKO = threading.Lock()
-
-
-def velho_uusi_valtuutus(pankki):
-    """Vain valtuutuksen uusinta, ei koko käyttöönottoa.
-
-    Sovellus ja avain ovat jo olemassa, eikä tilejä tarvitse liittää
-    portaalissa uudelleen — uusittava on vain pankin antama lupa hakea
-    tapahtumia. Se koskee koko pankkia, ei yksittäistä tiliä, joten saman
-    pankin kaikki tilit uusiutuvat kerralla."""
-    cfg = lue_config()
-    print(f"""
-Valtuutuksen uusiminen — {pankki}
-
-Pankin antama lupa hakea tapahtumia vanhenee 90–180 päivän välein. Uusiminen
-on sama vaihe kuin käyttöönotossa: tunnistaudut pankkiisi, ja lupa jatkuu.
-Sovellusta ei luoda uudelleen eikä tilejä tarvitse liittää portaalissa.""")
-    if not _varmista_kirjastot():
-        return
-    app = _velho_tarkista()
-    if app is None:
-        return
-    eb_valtuuta(cfg, pankki, app)
-
-
-def _aja_velho(pankki=""):
-    """Käyttöönotto selaimesta: sama velho, eri käyttöliittymä."""
-    global VELHO_UI
-    ui = VELHO_AJO["ui"]
-    konsoli = sys.stdout
-    sys.stdout = _Haarukka(konsoli, ui.loki)
-    VELHO_UI = ui
-    try:
-        if pankki:
-            velho_uusi_valtuutus(pankki)
-        else:
-            cmd_pankkihaku(argparse.Namespace(uusi_sovellus=False, paivia=89,
-                                              palvelu=None, istunto=None, yhdista=None,
-                                              raaka=False, siivoa_alkaen=False,
-                                              pakota=False, ei_velhoa=True))
-    except SystemExit as e:
-        ui.loki.append(f"Keskeytyi: {e}")
-        ui.virhe = str(e)
-    except Exception as e:
-        ui.loki.append(f"⚠ käyttöönotto epäonnistui: {e}")
-        ui.virhe = str(e)
-    finally:
-        VELHO_UI = None
-        sys.stdout = konsoli
-        ui.kaynnissa = False
-        ui.kysymys = None
-
-
 VELHO_SIVU = r"""<!doctype html>
 <html lang="fi"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Rahaputki — pankkiyhteyden käyttöönotto</title>
+<title>Rahaputki — pankkiyhteys</title>
 <style>
-:root { --muste:#26241f; --paperi:#f7f5f0; --vaalea:#eae6dd; }
+:root { --muste:#26241f; --paperi:#f7f5f0; --vaalea:#eae6dd; --raja:#c9c3b8;
+        --hyva:#2e7d5b; --huono:#b3502d; }
 * { box-sizing:border-box }
 body { font:15px/1.55 "Iowan Old Style","Palatino Linotype",Georgia,serif;
-       color:var(--muste); background:var(--paperi); margin:0; padding:2rem 1rem 4rem }
-main { max-width:760px; margin:0 auto }
-h1 { font-size:1.5rem; margin:0 0 .2rem }
-.meta { color:#6b665c; margin:0 0 1.5rem }
-pre { font:12.5px/1.55 ui-monospace,Menlo,monospace; white-space:pre-wrap;
-      background:#fff; border:1px solid #c9c3b8; border-radius:8px;
-      padding:.8rem 1rem; max-height:26rem; overflow:auto; margin:0 0 1rem }
-button { font:inherit; font-size:.95em; padding:.35rem .9rem; border:1px solid #c9c3b8;
-         border-radius:6px; background:#fff; cursor:pointer }
-button:hover { background:var(--vaalea) }
-button.paa { background:#26241f; color:#f7f5f0; border-color:#26241f }
-button.paa:hover { background:#3d3a33 }
-#kysymys { background:#fff; border:1px solid #c9c3b8; border-radius:8px;
-           padding:1rem 1.2rem; margin:0 0 1rem }
-#kysymysteksti { white-space:pre-wrap; margin:0 0 .8rem }
-input[type=text] { font:inherit; width:100%; padding:.4rem .6rem; border:1px solid #c9c3b8;
-                   border-radius:6px; margin:0 0 .8rem }
-.valinnat button { display:block; width:100%; text-align:left; white-space:pre-wrap;
-                   margin:0 0 .4rem }
-#linkit a { display:inline-block; margin:0 .6rem .6rem 0 }
+       color:var(--muste); background:var(--paperi); margin:0; padding:2rem 1rem 5rem }
+main { max-width:900px; margin:0 auto; display:grid; grid-template-columns:210px 1fr;
+       gap:2.5rem; align-items:start }
+h1 { font-size:1.45rem; margin:0 0 .2rem; grid-column:1/-1 }
+.johdanto { color:#6b665c; margin:0 0 1.6rem; grid-column:1/-1; max-width:62ch }
+nav ol { list-style:none; margin:0; padding:0 }
+nav li { margin:0 0 .2rem }
+nav button { width:100%; text-align:left; font:inherit; background:none; cursor:pointer;
+             border:1px solid transparent; border-radius:8px; padding:.55rem .7rem;
+             display:flex; gap:.6rem; align-items:baseline }
+nav button:hover { background:var(--vaalea) }
+nav button[aria-current="step"] { background:#fff; border-color:var(--raja); font-weight:bold }
+nav .nro { font:12px ui-monospace,Menlo,Consolas,monospace; color:#8a8578 }
+nav .tila { display:block; font-size:.78em; color:#8a8578; font-weight:normal }
+nav .valmis .tila { color:var(--hyva) }
+nav .kesken .tila { color:var(--huono) }
+section.paneeli { background:#fff; border:1px solid var(--raja); border-radius:10px;
+                  padding:1.4rem 1.6rem }
+h2 { font-size:1.05rem; margin:0 0 .6rem }
+h3 { font-size:.95rem; margin:1.4rem 0 .4rem }
+p { max-width:62ch }
+button.toiminto { font:inherit; padding:.4rem .9rem; border:1px solid var(--raja);
+                  border-radius:6px; background:#fff; cursor:pointer }
+button.toiminto:hover:enabled { background:var(--vaalea) }
+button.toiminto:disabled { opacity:.45; cursor:not-allowed }
+button.paa { background:var(--muste); color:var(--paperi); border-color:var(--muste) }
+button.paa:hover:enabled { background:#3d3a33 }
+a.paalinkki { display:inline-block; text-decoration:none; color:var(--paperi);
+              background:var(--muste); border-radius:6px; padding:.45rem 1rem }
+input[type=text], textarea, select { font:inherit; width:100%; padding:.45rem .6rem;
+       border:1px solid var(--raja); border-radius:6px; background:#fff }
+textarea { min-height:5.5rem; font:12.5px/1.5 ui-monospace,Menlo,Consolas,monospace }
+label { display:block; margin:.8rem 0 .3rem; font-size:.9em; color:#6b665c }
+.rivi { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; margin:.8rem 0 0 }
+.viesti, .virhe { padding:.6rem .8rem; border-radius:6px; margin:0 0 1rem }
+.viesti { background:#e6f0e9; border:1px solid #b7d4c3 }
+.virhe { background:#f6e3dc; border:1px solid #dcae98 }
+.kortti { border:1px solid var(--raja); border-radius:8px; padding:.8rem 1rem; margin:0 0 .6rem }
+.kortti h4 { margin:0 0 .2rem; font-size:.95rem }
+.kortti p { margin:0; font-size:.9em; color:#6b665c }
+.valinta { cursor:pointer } .valinta:hover { background:var(--vaalea) }
+.valinta[aria-pressed="true"] { border-color:var(--muste); background:#fbfaf7 }
+table { width:100%; border-collapse:collapse; margin:.6rem 0 }
+th, td { text-align:left; padding:.35rem .5rem .35rem 0; border-bottom:1px solid var(--vaalea) }
+.pikku { font-size:.85em; color:#6b665c }
+.pankkilista { max-height:19rem; overflow:auto; border:1px solid var(--raja);
+               border-radius:8px; margin:.6rem 0 }
+.pankkilista button { display:block; width:100%; text-align:left; font:inherit;
+       background:none; border:0; border-bottom:1px solid var(--vaalea);
+       padding:.5rem .8rem; cursor:pointer }
+.pankkilista button:hover { background:var(--vaalea) }
+:focus-visible { outline:2px solid var(--muste); outline-offset:2px }
+@media (max-width:720px) { main { grid-template-columns:1fr; gap:1.2rem } }
 </style></head><body><main>
-<h1 id="otsikko">Yhdistä pankkeihin</h1>
-<p class="meta" id="selite">Sama ohjattu käyttöönotto kuin terminaalissa — kysymykset
-vain tulevat tänne. Voit sulkea sivun milloin tahansa; tehty ei katoa.</p>
-<div id="linkit"></div>
-<pre id="loki"></pre>
-<div id="kysymys" hidden>
-  <div id="kysymysteksti"></div>
-  <div id="kentat"></div>
-</div>
-<div id="alku"><button class="paa" id="aloita">Aloita käyttöönotto</button></div>
+<h1>Pankkiyhteys</h1>
+<p class="johdanto">Tapahtumat tulevat pankista suoraan koneellesi. Voit palata
+mihin tahansa vaiheeseen ja muuttaa valintaa — mikään ei lukitu.</p>
+<nav><ol id="rail"></ol></nav>
+<section class="paneeli" id="paneeli"></section>
+</main>
 <script>
-var alkaen = 0, vastattu = 0;
-var PANKKI = new URLSearchParams(location.search).get('pankki') || '';
-if (PANKKI) {
-  document.title = 'Rahaputki \u2014 uusi valtuutus: ' + PANKKI;
-  document.getElementById('otsikko').textContent = 'Uusi valtuutus: ' + PANKKI;
-  document.getElementById('aloita').textContent = 'Uusi valtuutus';
-  document.getElementById('selite').textContent =
-    'Pankin antama lupa hakea tapahtumia vanhenee 90\u2013180 p\u00e4iv\u00e4n v\u00e4lein. ' +
-    'Uusiminen on sama vaihe kuin k\u00e4ytt\u00f6\u00f6notossa: tunnistaudut pankkiisi ja lupa jatkuu. ' +
-    'Sovellusta ei luoda uudelleen eik\u00e4 tilej\u00e4 tarvitse liitt\u00e4\u00e4 portaalissa. ' +
-    'Uusiminen koskee koko pankkia, joten saman pankin kaikki tilit uusiutuvat kerralla.';
-}
+var T = null, kesken = false;
+
+function e(s){ var d=document.createElement('div'); d.textContent=s==null?'':String(s);
+               return d.innerHTML; }
 function el(id){ return document.getElementById(id); }
-function nayta(v){
-  if(v.rivit && v.rivit.length){
-    el('loki').textContent += v.rivit.join('\n') + '\n';
-    el('loki').scrollTop = el('loki').scrollHeight;
-    alkaen = v.seuraava;
-  }
-  var lk = el('linkit');
-  if(v.linkit && v.linkit.length > lk.childElementCount){
-    lk.innerHTML = '';
-    v.linkit.forEach(function(u){
-      var a = document.createElement('a');
-      a.href = u; a.target = '_blank'; a.rel = 'noopener';
-      a.innerHTML = '<button class="paa">Avaa: ' + u.slice(0, 60) + '…</button>';
-      lk.appendChild(a);
-    });
-  }
-  var k = v.kysymys;
-  if(!k || k.id === vastattu){ el('kysymys').hidden = true; return; }
-  el('kysymys').hidden = false;
-  el('kysymysteksti').textContent = k.kysymys;
-  var kentat = el('kentat');
-  if(kentat.dataset.id == k.id) return;
-  kentat.dataset.id = k.id;
-  kentat.innerHTML = '';
-  function laheta(arvo){
-    vastattu = k.id;
-    el('kysymys').hidden = true;
-    fetch('api/velho/vastaus', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id:k.id, arvo:arvo})});
-  }
-  if(k.tyyppi === 'valikko'){
-    var d = document.createElement('div'); d.className = 'valinnat';
-    k.vaihtoehdot.forEach(function(v2){
-      var b = document.createElement('button');
-      b.textContent = v2.arvo + ') ' + v2.teksti;
-      if(v2.arvo === k.oletus) b.className = 'paa';
-      b.onclick = function(){ laheta(v2.arvo); };
-      d.appendChild(b);
-    });
-    kentat.appendChild(d);
-  } else if(k.tyyppi === 'kylla'){
-    [['Kyllä','k'],['Ei','e']].forEach(function(par){
-      var b = document.createElement('button');
-      b.textContent = par[0];
-      if(par[1] === k.oletus) b.className = 'paa';
-      b.onclick = function(){ laheta(par[1]); };
-      b.style.marginRight = '.5rem';
-      kentat.appendChild(b);
-    });
-  } else if(k.tyyppi === 'jatka'){
-    var b = document.createElement('button');
-    b.className = 'paa'; b.textContent = 'Jatka';
-    b.onclick = function(){ laheta(''); };
-    kentat.appendChild(b);
-  } else {
-    var i = document.createElement('input');
-    i.type = 'text'; i.placeholder = k.oletus ? ('oletus: ' + k.oletus) : '';
-    var b2 = document.createElement('button');
-    b2.className = 'paa'; b2.textContent = 'Lähetä';
-    b2.onclick = function(){ laheta(i.value); };
-    i.onkeydown = function(e){ if(e.key === 'Enter') b2.onclick(); };
-    kentat.appendChild(i); kentat.appendChild(b2);
-    i.focus();
-  }
-}
-function seuraa(){
-  fetch('api/velho?alkaen=' + alkaen, {cache:'no-store'})
+
+function toiminto(nimi, data){
+  if(kesken) return;
+  kesken = true; piirra();
+  return fetch('api/velho', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(Object.assign({toiminto:nimi}, data||{}))})
     .then(function(r){ return r.json(); })
-    .then(function(v){
-      nayta(v);
-      if(v.kaynnissa){ setTimeout(seuraa, 600); }
-      else { el('alku').hidden = false;
-             el('aloita').textContent = 'Aloita alusta'; }
-    })
-    .catch(function(){ setTimeout(seuraa, 2000); });
+    .then(function(v){ T = v; kesken = false; piirra(); })
+    .catch(function(err){ kesken = false;
+      if(T) T.virhe = 'Yhteys palvelimeen katkesi: ' + err; piirra(); });
 }
-el('aloita').onclick = function(){
-  el('alku').hidden = true; el('loki').textContent = ''; alkaen = 0; vastattu = 0;
-  fetch('api/velho/aloita', {method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({pankki: PANKKI})}).then(function(){ seuraa(); });
-};
-fetch('api/velho?alkaen=0', {cache:'no-store'}).then(function(r){ return r.json(); })
-  .then(function(v){ if(v.kaynnissa){ el('alku').hidden = true; seuraa(); } });
-</script></main></body></html>
+
+var VAIHEET = [
+  {avain:'sovellus', nimi:'Sovellus', selite:'Enable Banking -tunnus ja avain'},
+  {avain:'pankit',   nimi:'Pankit',   selite:'Yhdistä ja uusi valtuutuksia'},
+  {avain:'valmis',   nimi:'Valmis',   selite:'Hae tapahtumat'}
+];
+
+function vaiheenTila(v){
+  if(v === 'sovellus'){
+    if(T.sovellus.varmistettu) return ['valmis', 'yhteys toimii'];
+    if(T.sovellus.app_id) return ['kesken', 'tarkistamatta'];
+    return ['', 'ei vielä tehty'];
+  }
+  if(v === 'pankit'){
+    var n = T.yhdistetyt.length;
+    if(!n) return ['', 'ei pankkeja'];
+    var huono = T.yhdistetyt.filter(function(p){ return p.paivia !== null && p.paivia <= 14; });
+    return huono.length ? ['kesken', huono.length + ' kaipaa uusintaa']
+                        : ['valmis', n + (n===1?' pankki':' pankkia')];
+  }
+  return T.yhdistetyt.length ? ['valmis', 'voit hakea'] : ['', 'odottaa pankkeja'];
+}
+
+function piirraRail(){
+  el('rail').innerHTML = VAIHEET.map(function(v, i){
+    var t = vaiheenTila(v.avain);
+    return '<li class="' + t[0] + '"><button type="button" data-vaihe="' + v.avain + '"' +
+      (T.vaihe === v.avain ? ' aria-current="step"' : '') + '>' +
+      '<span class="nro">' + (i+1) + '</span><span>' + e(v.nimi) +
+      '<span class="tila">' + e(t[1]) + '</span></span></button></li>';
+  }).join('');
+  Array.prototype.forEach.call(el('rail').querySelectorAll('button'), function(b){
+    b.onclick = function(){ toiminto('vaihe', {vaihe: b.dataset.vaihe}); };
+  });
+}
+
+function ilmoitukset(){
+  var h = '';
+  if(T.virhe) h += '<p class="virhe">' + e(T.virhe) + '</p>';
+  if(T.viesti) h += '<p class="viesti">' + e(T.viesti) + '</p>';
+  return h;
+}
+
+/* ---------------- vaihe 1: sovellus ---------------- */
+function paneeliSovellus(){
+  var s = T.sovellus, h = '<h2>Sovellus ja avain</h2>';
+  h += '<p>Rahaputki hakee tapahtumat <em>sinun omalla</em> Enable Banking ' +
+       '-sovelluksellasi. Se luodaan kerran, ja sen avain jää tälle koneelle.</p>';
+  h += ilmoitukset();
+
+  h += '<h3>Kirjastot</h3>';
+  if(T.kirjastot === null){
+    h += '<p class="pikku">Pankkihaku tarvitsee kirjastot pyjwt ja cryptography.</p>' +
+         '<div class="rivi"><button class="toiminto" data-t="kirjastot">Tarkista</button></div>';
+  } else if(T.kirjastot){
+    h += '<p class="pikku">✓ Kirjastot ovat asennettuna.</p>';
+  } else {
+    h += '<p class="pikku">Kirjastot puuttuvat. Asennus tehdään samalla Pythonilla, ' +
+         'jolla tämä ohjelma pyörii.</p>' +
+         '<div class="rivi"><button class="toiminto paa" data-t="asenna">Asenna nyt</button></div>';
+  }
+
+  if(s.app_id){
+    h += '<h3>Käytössä oleva sovellus</h3><div class="kortti">' +
+         '<h4>' + e(s.app_id) + (s.nimi ? ' — ' + e(s.nimi) : '') + '</h4>' +
+         '<p>Avain: ' + e(s.avain || '—') + '<br>' +
+         (s.varmistettu ? '✓ Yhteys tarkistettu' : 'Yhteyttä ei ole vielä tarkistettu') +
+         '</p></div><div class="rivi">' +
+         '<button class="toiminto ' + (s.varmistettu ? '' : 'paa') + '" data-t="varmista">' +
+         'Tarkista yhteys</button></div>';
+  }
+
+  h += '<h3>' + (s.app_id ? 'Vaihda toiseen sovellukseen' : 'Aloita') + '</h3>';
+  h += '<div class="kortti valinta" role="button" tabindex="0" data-avaa="uusi">' +
+       '<h4>Luo minulle uusi sovellus</h4><p>Nopein tapa. Avain syntyy tällä koneella ' +
+       'eikä käy selaimen kautta.</p></div>' +
+       '<div class="kortti valinta" role="button" tabindex="0" data-avaa="avain">' +
+       '<h4>Minulla on jo sovellus</h4><p>Otetaan käyttöön sen .pem-avaintiedosto.</p></div>';
+
+  h += '<div id="alilomake"></div>';
+  return h;
+}
+
+function alilomakeUusi(){
+  return '<h3>Uusi sovellus</h3>' +
+    '<p>Avaa Enable Bankingin portaali ja kirjaudu. Sivulla on valmis komento, joka ' +
+    'alkaa sanalla <code>curl</code> — kopioi se kokonaan ja liitä tähän. Komento ' +
+    'sisältää tunnin voimassa olevan tunnuksen; käsittele sitä kuin salasanaa.</p>' +
+    '<div class="rivi"><a class="paalinkki" target="_blank" rel="noopener" ' +
+    'href="https://enablebanking.com/cp/applications">Avaa portaali</a></div>' +
+    '<label for="curl">Portaalista kopioitu komento</label>' +
+    '<textarea id="curl" placeholder="curl -X POST https://enablebanking.com/api/applications ..."></textarea>' +
+    '<label for="sposti">Sähköpostiosoitteesi tietosuoja-asioita varten (vapaaehtoinen)</label>' +
+    '<input type="text" id="sposti" placeholder="oma@osoite.fi">' +
+    '<div class="rivi"><button class="toiminto paa" data-t="luo_sovellus">Luo sovellus</button></div>';
+}
+
+function alilomakeAvain(){
+  var h = '<h3>Olemassa oleva avain</h3>' +
+    '<p>Avaintiedoston nimi on sovelluksen tunnus, esimerkiksi ' +
+    '<code>590999ea-….pem</code>.</p>' +
+    '<div class="rivi"><button class="toiminto" data-t="avaimet">Etsi koneelta</button></div>';
+  if(T.avainehdokkaat.length){
+    h += '<table><tbody>' + T.avainehdokkaat.map(function(a){
+      return '<tr><td>' + e(a.lyhyt) + (a.oma ? '' :
+        ' <span class="pikku">(koneen yhteinen kansio)</span>') + '</td>' +
+        '<td style="text-align:right"><button class="toiminto" data-t="kayta_avainta" ' +
+        'data-polku="' + e(a.polku) + '">Käytä tätä</button></td></tr>';
+    }).join('') + '</tbody></table>';
+  }
+  h += '<label for="polku">tai kirjoita polku</label>' +
+       '<input type="text" id="polku" placeholder="~/Lataukset/590999ea-….pem">' +
+       '<div class="rivi"><button class="toiminto" data-t="kayta_avainta">Käytä</button></div>';
+  return h;
+}
+
+/* ---------------- vaihe 2: pankit ---------------- */
+function paneeliPankit(){
+  var h = '<h2>Pankit</h2>' + ilmoitukset();
+  if(!T.sovellus.app_id){
+    // Ei piiloteta sitä mitä käyttäjällä jo on: yhdistetyt pankit ovat
+    // tosiasia configissa, vaikka tämän koneen tunnukset puuttuisivat.
+    h += '<p class="virhe">Sovellus ja avain puuttuvat tältä koneelta, joten uutta ' +
+         'pankkia ei voi nyt yhdistää eikä valtuutusta uusia.</p>' +
+         '<div class="rivi"><button class="toiminto paa" data-t="vaihe" data-vaihe="sovellus">' +
+         'Tee vaihe 1</button></div>';
+  }
+  if(T.yhdistetyt.length){
+    h += '<h3>Yhdistetyt</h3><table><thead><tr><th>Pankki</th><th>Tilit</th>' +
+         '<th>Valtuutus</th><th></th></tr></thead><tbody>' +
+      T.yhdistetyt.map(function(p){
+        var tila = p.paivia === null ? 'ei tiedossa'
+                 : (p.paivia < 0 ? 'vanhentui ' + p.asti : p.paivia + ' pv jäljellä');
+        return '<tr><td>' + e(p.pankki) + '</td><td class="pikku">' + e(p.tilit.join(', ')) +
+          '</td><td' + (p.paivia !== null && p.paivia <= 14 ? ' style="color:var(--huono)"' : '') +
+          '>' + e(tila) + '</td><td style="text-align:right">' +
+          '<button class="toiminto" data-t="valitse-haku" data-pankki="' + e(p.pankki) +
+          '">Uusi valtuutus</button></td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+
+  if(T.pankkivaihe === 'valinta' && T.sovellus.app_id){
+    h += '<h3>' + (T.yhdistetyt.length ? 'Lisää pankki' : 'Yhdistä ensimmäinen pankki') + '</h3>';
+    h += '<label for="haku">Hae pankkia</label>' +
+         '<input type="text" id="haku" value="' + e(T.haku) + '" placeholder="esim. OP">' +
+         '<div class="rivi"><button class="toiminto" data-t="pankit">Hae lista</button>' +
+         '<span class="pikku">maa: ' + e(T.maa) + '</span></div>';
+    var lista = T.pankit;
+    if(T.haku){
+      var hs = T.haku.toLowerCase();
+      lista = lista.filter(function(a){ return a.name.toLowerCase().indexOf(hs) >= 0; });
+    }
+    if(lista.length){
+      h += '<div class="pankkilista">' + lista.map(function(a){
+        var yritys = (a.psu.length === 1 && a.psu[0] !== 'personal') ? ' — vain yritystilit' : '';
+        return '<button type="button" data-t="valitse" data-pankki="' + e(a.name) + '">' +
+               e(a.name) + '<span class="pikku">' + e(yritys) + '</span></button>';
+      }).join('') + '</div>';
+    }
+  }
+
+  if(T.pankkivaihe === 'tunnistaudu' && T.valinta){
+    h += '<h3>' + e(T.valinta.name) + '</h3>';
+    if(!T.auth.url){
+      if(T.valinta.psu.length > 1){
+        h += '<label for="psu">Tilityyppi</label><select id="psu">' +
+          T.valinta.psu.map(function(x){
+            return '<option value="' + e(x) + '">' +
+              (x === 'business' ? 'Yritystili' : x === 'personal' ? 'Henkilötili' : e(x)) +
+              '</option>'; }).join('') + '</select>';
+      } else {
+        h += '<p class="pikku">Tilityyppi: ' +
+             e(T.valinta.psu[0] === 'business' ? 'yritystili' : 'henkilötili') + '</p>';
+      }
+      h += '<div class="rivi"><button class="toiminto paa" data-t="aloita">' +
+           'Aloita tunnistautuminen</button>' +
+           '<button class="toiminto" data-t="peru_pankki">Valitse toinen pankki</button></div>';
+    } else {
+      h += '<p>Avaa tunnistautuminen ja kirjaudu pankkiisi. Pankki palauttaa sinut ' +
+           'sivulle, joka näyttää tyhjältä — se on kunnossa. <strong>Kopioi silloin ' +
+           'selaimen osoiterivi</strong> ja liitä se tähän.</p>' +
+           '<div class="rivi"><a class="paalinkki" target="_blank" rel="noopener" href="' +
+           e(T.auth.url) + '">Avaa pankin tunnistautuminen</a></div>' +
+           '<label for="koodi">Osoiterivi pankista palanneelta sivulta</label>' +
+           '<input type="text" id="koodi" placeholder="https://…?code=…">' +
+           '<div class="rivi"><button class="toiminto paa" data-t="viimeistele">Jatka</button>' +
+           '<button class="toiminto" data-t="peru_pankki">Peru</button></div>';
+    }
+  }
+
+  if(T.pankkivaihe === 'nimet' && T.tilit.length){
+    h += '<h3>Nimeä tilit</h3><p>Nimi näkyy raportissa. Nimet OP-tili ja S-Pankki ' +
+         'tulkitaan pankin omassa CSV-muodossa, muut yleisessä.</p>' +
+         '<table><thead><tr><th>Mukaan</th><th>Tili</th><th>Nimi raportissa</th></tr></thead><tbody>' +
+      T.tilit.map(function(t, i){
+        return '<tr><td><input type="checkbox" class="mukaan" data-i="' + i + '" checked></td>' +
+          '<td class="pikku">' + e(t.tunniste || t.uid.slice(0,8)) + '<br>' + e(t.kuvaus) +
+          (t.tuttu ? '<br>tuttu tili' : '') + '</td>' +
+          '<td><input type="text" class="nimi" data-i="' + i + '" value="' + e(t.ehdotus) + '"></td></tr>';
+      }).join('') + '</tbody></table>' +
+      '<div class="rivi"><button class="toiminto paa" data-t="tallenna">Tallenna tilit</button>' +
+      '<button class="toiminto" data-t="peru_pankki">Peru</button></div>';
+  }
+  return h;
+}
+
+/* ---------------- vaihe 3: valmis ---------------- */
+function paneeliValmis(){
+  var h = '<h2>Valmis</h2>' + ilmoitukset();
+  if(!T.yhdistetyt.length){
+    return h + '<p>Yhtään pankkia ei ole vielä yhdistetty.</p>' +
+      '<div class="rivi"><button class="toiminto paa" data-t="vaihe" data-vaihe="pankit">' +
+      'Yhdistä pankki</button></div>';
+  }
+  h += '<p>Pankkiyhteys on kytketty. Raportissa <strong>Hae pankkitapahtumat</strong> ' +
+       'noutaa tapahtumat ja lukee ne kirjanpitoon.</p>' +
+       '<table><tbody>' + T.yhdistetyt.map(function(p){
+         return '<tr><td>' + e(p.pankki) + '</td><td class="pikku">' +
+                e(p.tilit.join(', ')) + '</td></tr>'; }).join('') + '</tbody></table>' +
+       '<div class="rivi"><a class="paalinkki" href="raportti.html">Takaisin raporttiin</a></div>';
+  return h;
+}
+
+function piirra(){
+  if(!T){ el('paneeli').innerHTML = '<p>Ladataan…</p>'; return; }
+  piirraRail();
+  var p = T.vaihe === 'pankit' ? paneeliPankit()
+        : T.vaihe === 'valmis' ? paneeliValmis() : paneeliSovellus();
+  el('paneeli').innerHTML = p;
+  if(kesken){
+    Array.prototype.forEach.call(document.querySelectorAll('button.toiminto'),
+      function(b){ b.disabled = true; b.textContent = b.textContent; });
+  }
+  var lomake = el('alilomake');
+  if(lomake && lomake.dataset.avattu){
+    lomake.innerHTML = lomake.dataset.avattu === 'uusi' ? alilomakeUusi() : alilomakeAvain();
+  }
+  sido();
+}
+
+function sido(){
+  Array.prototype.forEach.call(document.querySelectorAll('[data-avaa]'), function(k){
+    k.onclick = function(){
+      var l = el('alilomake');
+      l.dataset.avattu = k.dataset.avaa;
+      l.innerHTML = k.dataset.avaa === 'uusi' ? alilomakeUusi() : alilomakeAvain();
+      Array.prototype.forEach.call(document.querySelectorAll('[data-avaa]'), function(m){
+        m.setAttribute('aria-pressed', m === k ? 'true' : 'false'); });
+      sido();
+    };
+    k.onkeydown = function(ev){ if(ev.key === 'Enter' || ev.key === ' '){ ev.preventDefault(); k.onclick(); } };
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-t]'), function(b){
+    b.onclick = function(){
+      var t = b.dataset.t, d = {};
+      if(t === 'vaihe'){ d.vaihe = b.dataset.vaihe; }
+      else if(t === 'valitse'){ d.pankki = b.dataset.pankki; }
+      else if(t === 'valitse-haku'){
+        // Uusi valtuutus: haetaan lista ja valitaan sama pankki
+        toiminto('pankit', {haku: b.dataset.pankki, maa: T.maa}).then(function(){
+          toiminto('valitse', {pankki: b.dataset.pankki});
+        });
+        return;
+      }
+      else if(t === 'kayta_avainta'){
+        d.polku = b.dataset.polku || (el('polku') ? el('polku').value : '');
+      }
+      else if(t === 'luo_sovellus'){
+        d.curl = el('curl') ? el('curl').value : '';
+        d.sposti = el('sposti') ? el('sposti').value : '';
+      }
+      else if(t === 'pankit'){ d.haku = el('haku') ? el('haku').value : ''; d.maa = T.maa; }
+      else if(t === 'aloita'){ d.psu = el('psu') ? el('psu').value : ''; }
+      else if(t === 'viimeistele'){ d.koodi = el('koodi') ? el('koodi').value : ''; }
+      else if(t === 'tallenna'){
+        d.valinnat = T.tilit.map(function(x, i){
+          var n = document.querySelector('.nimi[data-i="' + i + '"]');
+          var m = document.querySelector('.mukaan[data-i="' + i + '"]');
+          return {uid: x.uid, tunniste: x.tunniste,
+                  tili: n ? n.value : x.ehdotus, mukaan: m ? m.checked : true};
+        });
+      }
+      toiminto(t, d);
+    };
+  });
+}
+
+fetch('api/velho', {method:'POST', headers:{'Content-Type':'application/json'},
+  body: JSON.stringify({toiminto:'kirjastot'})})
+  .then(function(r){ return r.json(); })
+  .then(function(v){
+    T = v;
+    var p = new URLSearchParams(location.search).get('pankki');
+    if(p){ T.vaihe = 'pankit';
+      toiminto('pankit', {haku:p, maa:T.maa}).then(function(){ toiminto('valitse', {pankki:p}); });
+    } else { piirra(); }
+  });
+</script></body></html>
 """
+
+
+# ============ selainvelho: tila jota voi muuttaa, ei kysymysjono ==========
+# Terminaalivelho kysyy kysymykset jonossa, ja jonossa mennyttä kysymystä ei
+# ole enää olemassa: tehtyä valintaa ei voi vaihtaa katsomatta sitä uudelleen.
+# Selaimessa se on väärä malli. Täällä on tila, johon jokainen vaihe kirjoittaa
+# ja josta jokainen vaihe voi lukea — mihin tahansa vaiheeseen voi palata, ja
+# valinnan muuttaminen mitätöi vain ne vaiheet, jotka siitä oikeasti riippuvat.
+
+def _velho_alkutila():
+    return {"vaihe": "sovellus",
+            "kirjastot": None,
+            "sovellus": {"app_id": "", "avain": "", "varmistettu": False,
+                         "nimi": "", "reitti": ""},
+            "avainehdokkaat": [],
+            "maa": "FI", "haku": "", "pankit": [],
+            "pankkivaihe": "valinta", "valinta": None,
+            "auth": {"url": "", "redirect": ""},
+            "istunto": None, "tilit": [],
+            "viesti": "", "virhe": "", "tekeilla": ""}
+
+
+VELHO = _velho_alkutila()
+VELHO_LUKKO = threading.Lock()
+
+
+def _kirjastot_ok():
+    try:
+        import jwt  # noqa: F401
+        import cryptography  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _asenna_kirjastot():
+    """pip samalla tulkilla jolla ohjelma pyörii, jottei paketti eksy toiseen
+    Python-asennukseen. Palauttaa virheen kuvauksen tai tyhjän."""
+    import subprocess
+    viimeisin = ""
+    for lisa in ([], ["--user"], ["--user", "--break-system-packages"]):
+        try:
+            tulos = subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
+                                    *lisa, "pyjwt", "cryptography"],
+                                   capture_output=True, text=True, timeout=300)
+        except (OSError, subprocess.SubprocessError) as e:
+            return f"asennus ei käynnistynyt: {e}"
+        if tulos.returncode == 0 and _kirjastot_ok():
+            return ""
+        viimeisin = siisti(tulos.stderr or tulos.stdout)[:200]
+    return viimeisin or "asennus ei onnistunut"
+
+
+def _velho_yhdistetyt(cfg):
+    """Jo yhdistetyt pankit tiliriveineen — se, mitä käyttäjä on jo tehnyt."""
+    tila = lue_pankkitila()
+    pankit = {}
+    for t in ((cfg.get("pankkihaku") or {}).get("tilit") or []):
+        aid = str(t.get("account_id", ""))
+        if _on_paikanpitaja(aid):
+            continue
+        tt = tila.get(aid, {})
+        nimi = siisti(str(tt.get("pankki", "") or t.get("pankki", ""))) or "?"
+        p = pankit.setdefault(nimi, {"pankki": nimi, "tilit": [], "asti": "", "paivia": None})
+        p["tilit"].append(t.get("tili", ""))
+        asti = tt.get("valtuutus_asti")
+        if asti and (not p["asti"] or asti < p["asti"]):
+            p["asti"] = asti
+            p["paivia"] = _paivia_jaljella(asti)
+    return sorted(pankit.values(), key=lambda x: x["pankki"].lower())
+
+
+def velho_julkinen():
+    """Tila selaimelle. Salaisuuksia ei lähetetä: avaimesta vain polku."""
+    cfg = lue_config() or {}
+    v = VELHO
+    return {"ok": True, "vaihe": v["vaihe"], "kirjastot": v["kirjastot"],
+            "sovellus": v["sovellus"], "avainehdokkaat": v["avainehdokkaat"],
+            "maa": v["maa"], "haku": v["haku"],
+            "pankit": [{"name": a.get("name", ""), "country": a.get("country", ""),
+                        "psu": _psu_tyypit(a)} for a in v["pankit"]],
+            "pankkivaihe": v["pankkivaihe"], "valinta": v["valinta"],
+            "auth": v["auth"], "tilit": v["tilit"],
+            "yhdistetyt": _velho_yhdistetyt(cfg),
+            "viesti": v["viesti"], "virhe": v["virhe"]}
+
+
+def _velho_nollaa_pankki():
+    VELHO.update(pankkivaihe="valinta", valinta=None,
+                 auth={"url": "", "redirect": ""}, istunto=None, tilit=[])
+
+
+def velho_toiminto(nimi, p):
+    """Yksi toiminto, uusi tila. Jokainen palaa samaan muotoon, joten sivu ei
+    tarvitse tietoa siitä mikä onnistui — se piirtää tilan uudelleen."""
+    v = VELHO
+    v["viesti"] = v["virhe"] = ""
+
+    if nimi == "vaihe":
+        v["vaihe"] = siisti(str(p.get("vaihe", ""))) or v["vaihe"]
+
+    elif nimi == "kirjastot":
+        v["kirjastot"] = _kirjastot_ok()
+
+    elif nimi == "asenna":
+        virhe = _asenna_kirjastot()
+        v["kirjastot"] = _kirjastot_ok()
+        v["virhe"] = virhe
+        v["viesti"] = "" if virhe else "Kirjastot asennettu."
+
+    elif nimi == "avaimet":
+        v["avainehdokkaat"] = [{"polku": str(polku), "lyhyt": _lyhenna_polku(polku),
+                                "oma": bool(oma)} for polku, oma in _etsi_avaimet()]
+        if not v["avainehdokkaat"]:
+            v["viesti"] = "Avaintiedostoa ei löytynyt tavallisista kansioista."
+
+    elif nimi == "kayta_avainta":
+        polku = Path(_siisti_polku(str(p.get("polku", "")))).expanduser()
+        if not polku.is_file():
+            v["virhe"] = f"Tiedostoa ei löydy: {polku}"
+        elif not UUID_KUVIO.match(polku.stem):
+            v["virhe"] = ("Avaimen nimen pitäisi olla sovelluksen tunnus "
+                          "(esim. 590999ea-….pem). Tämä on: " + polku.name)
+        else:
+            kohde = _talleta_avain(polku)
+            _kirjoita_env({"EB_APP_ID": polku.stem,
+                           "EB_KEY_PATH": _lyhenna_polku(kohde)})
+            v["sovellus"].update(app_id=polku.stem, avain=_lyhenna_polku(kohde),
+                                 reitti="avain", varmistettu=False, nimi="")
+            v["viesti"] = "Avain otettu käyttöön."
+
+    elif nimi == "luo_sovellus":
+        token = _poimi_token(str(p.get("curl", "")))
+        if not token:
+            v["virhe"] = ("Komennosta ei löytynyt tunnusta. Kopioi koko komento "
+                          "portaalista — se alkaa sanalla curl ja sisältää sanan Bearer.")
+        else:
+            try:
+                pem_teksti, varmenne = _luo_avainpari()
+                vastaus = _rekisteroi_sovellus(token, varmenne,
+                                               gdpr_email=siisti(str(p.get("sposti", ""))))
+                app_id = _sovellus_id(vastaus)
+                if not app_id:
+                    v["virhe"] = "Sovellus luotiin, mutta tunnusta ei löytynyt vastauksesta."
+                else:
+                    polku = _talleta_uusi_avain(pem_teksti, app_id)
+                    _kirjoita_env({"EB_APP_ID": app_id,
+                                   "EB_KEY_PATH": _lyhenna_polku(polku),
+                                   "EB_SOVELLUS_OK": app_id})
+                    v["sovellus"].update(app_id=app_id, avain=_lyhenna_polku(polku),
+                                         reitti="uusi", varmistettu=False, nimi="")
+                    v["viesti"] = "Sovellus luotu ja avain tallennettu tälle koneelle."
+            except EBVirhe as e:
+                v["virhe"] = ("Tunnus ei kelvannut (se vanhenee tunnissa). Lataa "
+                              "portaalin sivu uudelleen ja kopioi komento uudestaan."
+                              if e.koodi in (401, 403) else
+                              f"Sovelluksen luonti epäonnistui ({e.koodi}): {e.runko}")
+            except (OSError, ValueError) as e:
+                v["virhe"] = f"Sovelluksen luonti epäonnistui: {e}"
+
+    elif nimi == "varmista":
+        try:
+            app = eb_sovellus()
+            v["sovellus"]["varmistettu"] = True
+            v["sovellus"]["nimi"] = siisti(str((app or {}).get("name", "")))
+            v["viesti"] = "Yhteys toimii."
+        except EBVirhe as e:
+            v["virhe"] = ("Avain ja sovelluksen tunnus eivät ole samasta "
+                          "sovelluksesta. Valitse oikea avain uudelleen."
+                          if e.koodi in (401, 403) else
+                          f"Enable Banking vastasi {e.koodi}: {e.runko}")
+        except Exception as e:
+            v["virhe"] = f"Avainta ei voitu käyttää: {e}"
+
+    elif nimi == "pankit":
+        v["maa"] = (siisti(str(p.get("maa", ""))) or v["maa"]).upper()[:2]
+        v["haku"] = siisti(str(p.get("haku", "")))
+        try:
+            v["pankit"] = eb_pankkilista(v["maa"])
+        except (EBVirhe, OSError, ValueError) as e:
+            v["virhe"] = f"Pankkilistaa ei saatu: {e}"
+
+    elif nimi == "valitse":
+        haettu = siisti(str(p.get("pankki", "")))
+        osuma = next((a for a in v["pankit"] if a.get("name") == haettu), None)
+        if osuma is None:
+            v["virhe"] = "Pankkia ei löytynyt listalta."
+        else:
+            v["valinta"] = {"name": osuma.get("name", ""),
+                            "country": osuma.get("country", v["maa"]),
+                            "psu": _psu_tyypit(osuma), "raaka": osuma}
+            v["pankkivaihe"] = "tunnistaudu"
+            v["auth"] = {"url": "", "redirect": ""}
+
+    elif nimi == "aloita":
+        if not v["valinta"]:
+            v["virhe"] = "Valitse ensin pankki."
+        else:
+            psu = siisti(str(p.get("psu", ""))) or (v["valinta"]["psu"] or ["personal"])[0]
+            try:
+                cfg = lue_config()
+                url, redirect = eb_aloita_valtuutus(cfg, v["valinta"]["raaka"], psu)
+                turvakirjoita_json(CONFIG, cfg)
+                v["auth"] = {"url": url, "redirect": redirect}
+            except EBVirhe as e:
+                v["virhe"] = (f"Enable Banking ei hyväksynyt valintaa ({e.koodi}). "
+                              "Yleisin syy on väärä tilityyppi — kokeile toista."
+                              if e.koodi == 422 else
+                              f"Valtuutus ei käynnistynyt ({e.koodi}): {e.runko}")
+            except (OSError, ValueError) as e:
+                v["virhe"] = f"Valtuutus ei käynnistynyt: {e}"
+
+    elif nimi == "viimeistele":
+        koodi = _siivoa_koodi(str(p.get("koodi", "")))
+        if not koodi:
+            v["virhe"] = ("Liitä koko osoiterivi pankista palanneelta sivulta — "
+                          "siinä on kohta code=…")
+        else:
+            try:
+                istunto, tilit = eb_viimeistele_valtuutus(koodi)
+                if not tilit:
+                    v["virhe"] = ("Istunto syntyi, mutta siinä ei ollut yhtään tiliä. "
+                                  "Käy liittämässä tili portaalissa (Link accounts).")
+                else:
+                    v["istunto"] = istunto
+                    v["tilit"] = tilien_ehdotukset(lue_config(),
+                                                   v["valinta"]["name"], tilit)
+                    v["pankkivaihe"] = "nimet"
+            except (EBVirhe, OSError, ValueError) as e:
+                v["virhe"] = f"Valtuutus ei valmistunut: {e}"
+
+    elif nimi == "tallenna":
+        valinnat = p.get("valinnat") or []
+        if not any(x.get("mukaan", True) and siisti(str(x.get("tili", "")))
+                   for x in valinnat):
+            v["virhe"] = "Anna vähintään yhdelle tilille nimi."
+        else:
+            cfg = lue_config()
+            tulos = tallenna_tilit_nimilla(cfg, v["valinta"]["name"], valinnat, v["istunto"])
+            v["viesti"] = (f"{v['valinta']['name']}: {tulos['yhteensa']} tiliä tallennettu"
+                           + (f", {tulos['uusia']} uutta." if tulos["uusia"] else "."))
+            _velho_nollaa_pankki()
+
+    elif nimi == "peru_pankki":
+        _velho_nollaa_pankki()
+
+    elif nimi == "alusta":
+        VELHO.update(_velho_alkutila())
+
+    else:
+        v["virhe"] = f"tuntematon toiminto {nimi}"
+    return velho_julkinen()
 
 
 # Selaimesta käynnistetty komento ajetaan tässä prosessissa, ei uutena
@@ -7591,17 +7951,6 @@ def cmd_selaa(args):
                 self.end_headers()
                 self.wfile.write(sivu)
                 return
-            if self.path.startswith("/api/velho"):
-                ui = VELHO_AJO["ui"]
-                if ui is None:
-                    return self._json({"ok": True, "rivit": [], "seuraava": 0,
-                                       "kysymys": None, "linkit": [],
-                                       "kaynnissa": False, "virhe": ""})
-                alkaen = _kysely_luku(self.path, "alkaen")
-                return self._json({"ok": True, "rivit": ui.loki[alkaen:],
-                                   "seuraava": len(ui.loki),
-                                   "kysymys": ui.kysymys, "linkit": ui.linkit,
-                                   "kaynnissa": ui.kaynnissa, "virhe": ui.virhe})
             if self.path.startswith("/api/loki"):
                 alkaen = _kysely_luku(self.path, "alkaen")
                 rivit = SELAIN_AJO["loki"]
@@ -7884,22 +8233,10 @@ def cmd_selaa(args):
                                                "virhe": f"saldoa ei saatu: {virhe}"})
                         return self._json(tasmayta(lue_ledger(), cfg, aid))
                     return self._json(ankkuroi(lue_ledger(), cfg, aid))
-                if self.path == "/api/velho/aloita":
+                if self.path == "/api/velho":
                     with VELHO_LUKKO:
-                        vanha_ui = VELHO_AJO["ui"]
-                        if vanha_ui is not None and vanha_ui.kaynnissa:
-                            return self._json({"ok": False,
-                                               "virhe": "käyttöönotto on jo käynnissä"})
-                        VELHO_AJO["ui"] = SelainVelho()
-                    threading.Thread(target=_aja_velho, daemon=True,
-                                     args=(siisti(pyynto.get("pankki", "")),)).start()
-                    return self._json({"ok": True})
-                if self.path == "/api/velho/vastaus":
-                    ui = VELHO_AJO["ui"]
-                    if ui is None:
-                        return self._json({"ok": False, "virhe": "velho ei ole käynnissä"})
-                    ui.vastaa(pyynto.get("id"), pyynto.get("arvo", ""))
-                    return self._json({"ok": True})
+                        return self._json(velho_toiminto(
+                            siisti(str(pyynto.get("toiminto", ""))), pyynto))
                 if self.path == "/api/komento":
                     komento = siisti(pyynto.get("komento", ""))
                     if komento not in ("hae", "aja"):
