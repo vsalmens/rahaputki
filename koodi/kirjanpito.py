@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.27"
+VERSIO = "v0.28"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -4534,7 +4534,11 @@ def kausi_alku_nayton(raja):
     Sisäisesti kauden alku on rajapyykki: mukaan tulevat sitä *seuraavat*
     päivät, jotta edellisen laskun viimeinen päivä ei tule kahteen kertaan.
     Käyttäjälle näytetään ja käyttäjältä kysytään ensimmäinen kauteen kuuluva
-    päivä — lasku päättyi 20.7., joten seuraava kausi alkaa 21.7."""
+    päivä — lasku päättyi 20.7., joten seuraava kausi alkaa 21.7.
+
+    Rajapyykki on tarkoituksella se päivä, jona edellinen kausi tasattiin:
+    juuri sinä päivänä kirjautuvat jäsenten maksut kuuluvat edelliselle
+    laskulle, eivät alkavalle kaudelle."""
     try:
         return (date.fromisoformat(str(raja)) + timedelta(days=1)).isoformat()
     except (ValueError, TypeError):
@@ -4547,6 +4551,24 @@ def kausi_alku_rajaksi(nayton):
         return (date.fromisoformat(str(nayton)) - timedelta(days=1)).isoformat()
     except (ValueError, TypeError):
         return str(nayton)
+
+
+def kausivali(alku_txt, loppu_txt):
+    """Kauden päivät luettavana välinä. Juuri suljetun kauden jälkeen uusi
+    kausi alkaa huomenna, jolloin väli olisi takaperin — silloin kerrotaan
+    vain alkupäivä."""
+    if str(alku_txt) > str(loppu_txt):
+        return f"alkaa {alku_txt}"
+    return f"{alku_txt} → {loppu_txt}"
+
+
+def kauden_alkupaiva(kausi):
+    """Kauteen merkitty alkupäivä — se, joka lukee lähetetyssä laskussa.
+
+    Ennen alkupäivän tallentamista suljetut kaudet laskutettiin rajapyykki
+    alkupäivänä näkyvissä, joten niillä näytetään edelleen se: jo lähetetyn
+    laskun otsikkoa ei kirjoiteta jälkikäteen uusiksi."""
+    return str(kausi.get("alkupaiva") or kausi.get("alku") or "")
 
 
 def _oly_kaudet(oly):
@@ -4600,7 +4622,9 @@ def olympos_laskelma(ledger, oly, tanaan=None, alku_yli=None):
                 saat[str(nm)] = float(v or 0)
             except (TypeError, ValueError):
                 continue
-        kausi_tila.append({"alku": str(k["alku"]), "loppu": str(k["loppu"]),
+        kausi_tila.append({"alku": str(k["alku"]),
+                           "alkupaiva": kauden_alkupaiva(k),
+                           "loppu": str(k["loppu"]),
                            "suljettu": str(k.get("suljettu", "")),
                            "yhteenveto": k.get("yhteenveto") or {},
                            "saatavat": saat,
@@ -4830,7 +4854,8 @@ def oly_sulje_kausi(ledger, oly, loppu, alku=None, laskuta=True):
     loppu_d = date.fromisoformat(str(loppu))
     alku_s = siisti(str(alku or "")) or oly_avoin_alku(oly)
     L = olympos_laskelma(ledger, oly, tanaan=loppu_d, alku_yli=(alku_s or None))
-    kausi = {"alku": L["alku"], "loppu": loppu_d.isoformat(),
+    kausi = {"alku": L["alku"], "alkupaiva": kausi_alku_nayton(L["alku"]),
+             "loppu": loppu_d.isoformat(),
              "suljettu": date.today().isoformat(),
              "saatavat": ({nm: round(v, 2) for nm, v in L["velka"].items() if v > 0.005}
                           if laskuta else {}),
@@ -4864,18 +4889,21 @@ def oly_avaa_kausi(oly):
     return viim
 
 
-def olympos_erittely_html(ledger, alku=None, loppu=None):
+def olympos_erittely_html(ledger, alku=None, loppu=None, alkupaiva=None):
     """Itsenäinen, tulostusystävällinen erittely (selaimesta: tulosta → PDF).
 
     Ilman rajausta erittely näyttää avoimen kauden. Suljetulle kaudelle
     annetaan sen omat päivät, jolloin syntyy juuri se lasku joka lähetettiin
-    — kausi lasketaan silloin uudelleen sellaisenaan."""
+    — kausi lasketaan silloin uudelleen sellaisenaan. alkupaiva on kauteen
+    merkitty alkupäivä; se annetaan erikseen, jotta jo lähetetyn laskun
+    otsikko pysyy sellaisena kuin se lähti."""
     oly = lue_olympos()
     try:
         loppu_d = date.fromisoformat(str(loppu)) if loppu else None
     except ValueError:
         loppu_d = None
     L = olympos_laskelma(ledger, oly, tanaan=loppu_d, alku_yli=(alku or None))
+    alkuteksti = str(alkupaiva or kausi_alku_nayton(L["alku"]))
     e = html.escape
 
     def eur2(v):
@@ -4903,13 +4931,12 @@ def olympos_erittely_html(ledger, alku=None, loppu=None):
         banneri = (f'<div class="banneri" style="background-image:url(\'{e(tausta)}\')">'
                    f'<div class="bannerivarjo"><h1>{e(otsikko)}</h1>'
                    f'<p class="bannerimeta">jaettujen kulujen erittely · '
-                   f'{e(kausi_alku_nayton(L["alku"]))} → {e(L["loppu"])}</p>'
+                   f'{e(kausivali(alkuteksti, L["loppu"]))}</p>'
                    f'</div></div>')
     else:
         banneri = (f'<h1>{e(otsikko)} — jaettujen kulujen erittely</h1>')
     o = ['<!DOCTYPE html><html lang="fi"><head><meta charset="utf-8">',
-         f'<title>{e(otsikko)}-erittely {e(kausi_alku_nayton(L["alku"]))} – '
-         f'{e(L["loppu"])}</title>',
+         f'<title>{e(otsikko)}-erittely {e(alkuteksti)} – {e(L["loppu"])}</title>',
          '<style>body{font:13px/1.45 Georgia,serif;color:#26241f;max-width:52rem;'
          'margin:2rem auto;padding:0 1rem}h1{font-size:1.4rem}h2{font-size:1.05rem;'
          'margin:1.6rem 0 .4rem;border-bottom:1px solid #c9c3b8}table{border-collapse:'
@@ -4925,7 +4952,7 @@ def olympos_erittely_html(ledger, alku=None, loppu=None):
          '.banneri{-webkit-print-color-adjust:exact;print-color-adjust:exact}}'
          '</style></head><body>',
          banneri,
-         f'<p class="pieni">Kausi {e(kausi_alku_nayton(L["alku"]))} → {e(L["loppu"])} · jäsenet: '
+         f'<p class="pieni">Kausi {e(kausivali(alkuteksti, L["loppu"]))} · jäsenet: '
          f'{e(", ".join(L["nimet"]))} · pankkiiri: {e(L["pankkiiri"])} · '
          f'tulostettu {date.today().isoformat()}</p>']
     o.append('<h2>Saldot</h2><table><tr><th>jäsen</th><th class="num">osuus</th>'
@@ -5234,8 +5261,9 @@ def olympos_osio(ledger, cfg=None):
             f'rel="noopener" style="font-size:1.05em">🖨 Avaa tulostettava erittely uuteen '
             f'välilehteen</a> — selaimen tulostuksesta (⌘P) saat PDF:n. '
             f'Taustakuva: pudota kuva tiedostoksi raportit/tausta.jpg</p>'
-            f'<p class="pikkuteksti">Kausi {e(kausi_alku_nayton(L["alku"]))} → '
-            f'{e(L["loppu"])} · boksi {eur2(L["boksi_yht"])} € '
+            f'<p class="pikkuteksti">Kausi '
+            f'{e(kausivali(kausi_alku_nayton(L["alku"]), L["loppu"]))} '
+            f'· boksi {eur2(L["boksi_yht"])} € '
             f'· tasan jaetut: {jaot} · palautukset {eur2(L["palautus_yht"])} €</p>'
             f'<p class="pikkuteksti">Näytettävä nimi: '
             f'<input id="ol-otsikko" size="16" value="{e(otsikko)}" '
@@ -5310,7 +5338,7 @@ def _oly_kaudet_html(L, eur2):
             '<th class="num">laskutettu €</th><th class="num">maksettu €</th>'
             '<th class="num">avoinna €</th><th>maksut</th><th></th></tr>']
     for kt in reversed(L["kaudet"]):
-        vali = f'{kausi_alku_nayton(kt["alku"])} → {kt["loppu"]}'
+        vali = f'{kt["alkupaiva"]} → {kt["loppu"]}'
         linkki = (f'<br><a href="yhteistalous_lasku_{e(kt["loppu"])}.html" '
                   f'target="_blank" rel="noopener" class="pikkuteksti">🖨 avaa lasku</a>')
         if not kt["saatavat"]:
@@ -5838,7 +5866,8 @@ def tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit, ledg
         if not (_k.get("alku") and _k.get("loppu")):
             continue
         turvakirjoita(RAPORTIT / f"yhteistalous_lasku_{_k['loppu']}.html",
-                      olympos_erittely_html(ledger, _k["alku"], _k["loppu"]))
+                      olympos_erittely_html(ledger, _k["alku"], _k["loppu"],
+                                            kauden_alkupaiva(_k)))
     with open(RAPORTIT / "yhteistalous_erittely.html", "w", encoding="utf-8") as f_oe:
         f_oe.write(olympos_erittely_html(ledger))
     # Säännön tiedot kerran rivillä, ei jokaisessa linkissä: seitsemän linkkiä
@@ -9296,6 +9325,9 @@ def cmd_selaa(args):
                         sk = pyynto["sulje_kausi"]
                         try:
                             s_a = siisti(str(sk.get("alku", "")))
+                            if s_a and s_a > siisti(str(sk.get("loppu", ""))):
+                                return self._json({"ok": False, "virhe":
+                                    "kauden alku on loppua myöhemmin"})
                             kausi = oly_sulje_kausi(
                                 lue_ledger(), oly, siisti(str(sk.get("loppu", ""))),
                                 kausi_alku_rajaksi(s_a) if s_a else "",
