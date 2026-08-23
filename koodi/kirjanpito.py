@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.26"
+VERSIO = "v0.27"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -5383,7 +5383,9 @@ def budjetti_osio(taulu, raamit, tyypit):
     if ilman:
         lisa = ('<p class="pikkuteksti bud-ilman">Ilman raamia tässä kuussa: '
                 + ", ".join(
-                    f'<span class="bud-vailla">{e(k)} {fmt_eur(v)} €'
+                    f'<span class="bud-vailla">'
+                    f'<span class="klik" data-kat="{e(k)}">{e(k)}</span> '
+                    f'{fmt_eur(v)} €'
                     f'<button type="button" class="bud-lisaa" data-bkat="{e(k)}" hidden '
                     f'title="anna kategorialle raami">+</button></span>'
                     for k, v in sorted(ilman, key=lambda x: -x[1])[:6])
@@ -7656,8 +7658,7 @@ td.num.klik {{ text-decoration:none }}
   cursor:pointer }}
 .bud-muokkaa:hover, .bud-lisaa:hover {{ border-color:#d5cdbc; background:#fff; color:var(--muste) }}
 .bud-vailla {{ white-space:nowrap }}
-.bud-nimi.klik {{ cursor:pointer }}
-.bud-nimi.klik:hover {{ text-decoration:underline }}
+.bud-nimi.klik {{ width:fit-content; max-width:100% }}
 .bud-editori {{ display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;
   margin:.1rem 0 .5rem; padding:.55rem .7rem; border-radius:10px;
   background:#fffdf8; border:1px solid #e2dbcb; font-size:.85rem }}

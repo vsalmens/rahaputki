@@ -578,6 +578,8 @@ päivään painettu sulkeminen perutaan napista *avaa viimeisin kausi*.
   ottaa kategorian pois raameista kokonaan; kertyvän erän tiedot samalla
   rivillä säilyvät. Ilman raamia jääneet kategoriat, joissa on tämän kuun
   menoja, listataan osion alle — ja niille voi antaa raamin +-napista.
+  Kategorian nimeä klikkaamalla pääsee sen riveihin, budjettirivistä ja
+  listasta yhtä lailla.
 - **Kertyvät erät**: kaikkea ei voi budjetoida kuukausittain. Vuosivakuutus,
   kesäloma tai renkaiden vaihto on kertasumma, joka romahduttaa yhden
   kuukauden ja jättää yksitoista muuta näyttämään paremmalta kuin ne ovat.
