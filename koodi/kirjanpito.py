@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.18"
+VERSIO = "v0.19"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -7480,10 +7480,10 @@ function vaiheenTila(v){
   }
   if(v === 'pankit'){
     var n = T.yhdistetyt.length;
-    if(!n) return ['', 'ei pankkeja'];
-    var huono = T.yhdistetyt.filter(function(p){ return p.paivia !== null && p.paivia <= 14; });
+    if(!n) return ['', 'ei tilejä'];
+    var huono = T.yhdistetyt.filter(function(r){ return r.paivia !== null && r.paivia <= 14; });
     return huono.length ? ['kesken', huono.length + ' kaipaa uusintaa']
-                        : ['valmis', n + (n===1?' pankki':' pankkia')];
+                        : ['valmis', n + (n===1?' tili':' tiliä')];
   }
   return T.yhdistetyt.length ? ['valmis', 'voit hakea'] : ['', 'odottaa pankkeja'];
 }
@@ -7725,17 +7725,26 @@ function paneeliPankit(){
          'Tee vaihe 1</button></div>';
   }
   if(T.yhdistetyt.length){
-    h += '<h3>Yhdistetyt</h3><table><thead><tr><th>Pankki</th><th>Tilit</th>' +
+    h += '<h3>Yhdistetyt tilit</h3><table><thead><tr><th>Tili</th><th>Pankki</th>' +
          '<th>Valtuutus</th><th></th></tr></thead><tbody>' +
-      T.yhdistetyt.map(function(p){
-        var tila = p.paivia === null ? 'ei tiedossa'
-                 : (p.paivia < 0 ? 'vanhentui ' + p.asti : p.paivia + ' pv jäljellä');
-        return '<tr><td>' + e(p.pankki) + '</td><td class="pikku">' + e(p.tilit.join(', ')) +
-          '</td><td' + (p.paivia !== null && p.paivia <= 14 ? ' style="color:var(--huono)"' : '') +
-          '>' + e(tila) + '</td><td style="text-align:right">' +
-          '<button class="toiminto" data-t="valitse-haku" data-pankki="' + e(p.pankki) +
-          '">Uusi valtuutus</button></td></tr>';
-      }).join('') + '</tbody></table>';
+      T.yhdistetyt.map(function(r){
+        var tila = r.paivia === null ? 'ei tiedossa'
+                 : (r.paivia < 0 ? 'vanhentui ' + r.asti : r.paivia + ' pv jäljellä');
+        // Uusiminen koskee koko pankkia. Jos pankkia ei tiedetä (rivi on
+        // valtuutettu ennen kuin nimi alettiin tallentaa), vie pankkilistaan
+        // sen sijaan että arvattaisiin väärä pankki.
+        var nappi = r.pankki
+          ? '<button class="toiminto" data-t="valitse-haku" data-pankki="' + e(r.pankki) +
+            '">Uusi valtuutus</button>'
+          : '<button class="toiminto" data-t="peru_pankki">Valitse pankki</button>';
+        return '<tr><td>' + e(r.tili) + '</td><td class="pikku">' +
+          (r.pankki ? e(r.pankki) : 'ei tiedossa') + '</td><td' +
+          (r.paivia !== null && r.paivia <= 14 ? ' style="color:var(--huono)"' : '') +
+          '>' + e(tila) + '</td><td style="text-align:right">' + nappi + '</td></tr>';
+      }).join('') + '</tbody></table>' +
+      '<p class="pikku">Valtuutus uusitaan pankeittain: saman pankin kaikki tilit ' +
+      'uusiutuvat kerralla. Pankki tiedetään niistä riveistä, jotka on valtuutettu ' +
+      'tällä ohjelmalla — vanhemmilta riveiltä se puuttuu, eikä sitä arvata.</p>';
   }
 
   if(T.pankkivaihe === 'valinta' && T.sovellus.app_id){
@@ -7816,9 +7825,9 @@ function paneeliValmis(){
   }
   h += '<p>Pankkiyhteys on kytketty. Raportissa <strong>Hae pankkitapahtumat</strong> ' +
        'noutaa tapahtumat ja lukee ne kirjanpitoon.</p>' +
-       '<table><tbody>' + T.yhdistetyt.map(function(p){
-         return '<tr><td>' + e(p.pankki) + '</td><td class="pikku">' +
-                e(p.tilit.join(', ')) + '</td></tr>'; }).join('') + '</tbody></table>' +
+       '<table><tbody>' + T.yhdistetyt.map(function(r){
+         return '<tr><td>' + e(r.tili) + '</td><td class="pikku">' +
+                (r.pankki ? e(r.pankki) : '') + '</td></tr>'; }).join('') + '</tbody></table>' +
        '<div class="rivi"><a class="paalinkki" href="raportti.html">Takaisin raporttiin</a></div>';
   return h;
 }
@@ -7946,26 +7955,52 @@ def _asenna_kirjastot():
 
 
 def _velho_yhdistetyt(cfg):
-    """Jo yhdistetyt pankit tiliriveineen — se, mitä käyttäjä on jo tehnyt."""
+    """Yhdistetyt tilit valtuutuksineen.
+
+    Rivi on tili, ei pankki. Pankki tiedetään vain niistä tileistä, jotka on
+    valtuutettu sen jälkeen kun pankin nimi alettiin tallentaa; vanhemmilla
+    riveillä sitä ei ole. Aiemmin ne niputettiin nimen puuttuessa yhteen
+    ryhmään, jolloin viisi tiliä näytti yhdeltä pankilta — luku, joka ei ollut
+    väärässä muodossa vaan yksinkertaisesti väärin."""
     tila = lue_pankkitila()
-    pankit = {}
+    ulos = []
     for t in ((cfg.get("pankkihaku") or {}).get("tilit") or []):
         aid = str(t.get("account_id", ""))
         if _on_paikanpitaja(aid):
             continue
         tt = tila.get(aid, {})
-        nimi = siisti(str(tt.get("pankki", "") or t.get("pankki", ""))) or "?"
-        p = pankit.setdefault(nimi, {"pankki": nimi, "tilit": [], "asti": "", "paivia": None})
-        p["tilit"].append(t.get("tili", ""))
-        asti = tt.get("valtuutus_asti")
-        if asti and (not p["asti"] or asti < p["asti"]):
-            p["asti"] = asti
-            p["paivia"] = _paivia_jaljella(asti)
-    return sorted(pankit.values(), key=lambda x: x["pankki"].lower())
+        pankki = siisti(str(tt.get("pankki") or t.get("pankki") or ""))
+        asti = tt.get("valtuutus_asti") or ""
+        ulos.append({"tili": t.get("tili", "") or tt.get("tili", ""),
+                     "pankki": pankki, "asti": asti,
+                     "paivia": _paivia_jaljella(asti) if asti else None})
+    return sorted(ulos, key=lambda x: (x["pankki"].lower(), x["tili"].lower()))
+
+
+def _velho_tunnukset_tilaan():
+    """Täytä sovellustila tallennetuista tunnuksista, jos se on tyhjä.
+
+    Ilman tätä velho aloitti aina tyhjältä pöydältä: se ei lukenut
+    pankkihaku.env-tiedostoa lainkaan, joten palaava käyttäjä näki "ei vielä
+    tehty" vaikka sovellus oli rekisteröity kuukausia sitten. Varmistettu jää
+    epätodeksi — tallennettu tunnus kertoo että rekisteröinti on tehty, ei
+    sitä että haku toimii."""
+    if VELHO["sovellus"].get("app_id"):
+        return
+    try:
+        a = _eb_asetukset()
+    except (OSError, ValueError):
+        return
+    if not a.get("EB_APP_ID"):
+        return
+    VELHO["sovellus"].update(app_id=a["EB_APP_ID"],
+                             avain=siisti(str(a.get("EB_KEY_PATH", ""))),
+                             reitti="tallennettu")
 
 
 def velho_julkinen():
     """Tila selaimelle. Salaisuuksia ei lähetetä: avaimesta vain polku."""
+    _velho_tunnukset_tilaan()
     cfg = lue_config() or {}
     v = VELHO
     return {"ok": True, "vaihe": v["vaihe"], "kirjastot": v["kirjastot"],
