@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.21"
+VERSIO = "v0.22"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -4974,6 +4974,97 @@ def olympos_osio(ledger, cfg=None):
             f"</div></details>")
 
 
+def budjetti_osio(taulu, raamit, tyypit, kaikki_kk):
+    """Kuluvan kuukauden budjettitilanne, sivun tärkeimmällä paikalla.
+
+    Kuluva kuukausi eikä viimeisin täysi: budjetti on päätös siitä, mitä
+    tässä kuussa vielä voi tehdä. Valmis kuukausi on historiaa, ja historian
+    lukemiseen sivulla on jo omat taulukkonsa.
+
+    Osittainen kuukausi tarvitsee mittatikun, joten palkissa on ohut merkki
+    siinä kohtaa, mihin kulutus olisi ehtinyt tasaisella tahdilla. Ilman sitä
+    "60 % käytetty" ei kerro mitään: kuun kolmantena se on hälytys ja
+    kahdentenakymmenentenäkahdeksantena hyvä uutinen."""
+    kuu = date.today().isoformat()[:7]
+    e = html.escape
+    if not raamit:
+        return ('<section id="budjetti" class="budjetti tyhja">'
+                '<h2>Kuukausibudjetti</h2>'
+                '<p>Budjettia ei ole vielä asetettu. Rahaputki voi ehdottaa raamit '
+                'viimeisten täysien kuukausien mediaanista — mediaani siksi, ettei '
+                'yksi vuosilasku tai muutto nosta raamia pysyvästi.</p>'
+                '<div class="rivi"><button type="button" id="nappi-budjetti" hidden>'
+                'Alusta budjetti</button>'
+                '<span class="pikkuteksti">Raamit tallentuvat tiedostoon '
+                'asetukset/budjetti.csv, ja voit muokata niitä siellä vapaasti. '
+                'Nappi näkyy selaa-tilassa (Aloita-kuvake).</span></div></section>')
+
+    paiva = date.today().day
+    _, paivia_kk = calendar.monthrange(date.today().year, date.today().month)
+    tahti = paiva / paivia_kk
+
+    rivit, yht_tot, yht_raami = [], 0.0, 0.0
+    kohteet = [(k, taulu.get(k, {}).get(kuu, 0.0), raamit[k]) for k in raamit
+               if tyypit.get(k, "meno") == "meno"]
+    for k, tot, raami in sorted(kohteet, key=lambda x: -x[2]):
+        yht_tot += tot
+        yht_raami += raami
+        rivit.append(_budjettirivi(k, tot, raami, tahti))
+    ilman = [(k, taulu.get(k, {}).get(kuu, 0.0)) for k in taulu
+             if k not in raamit and tyypit.get(k, "meno") == "meno"
+             and taulu.get(k, {}).get(kuu, 0.0) > 0]
+    lisa = ""
+    if ilman:
+        lisa = ('<p class="pikkuteksti">Ilman raamia tässä kuussa: '
+                + ", ".join(f"{e(k)} {fmt_eur(v)} €" for k, v in
+                            sorted(ilman, key=lambda x: -x[1])[:6])
+                + (" …" if len(ilman) > 6 else "") + "</p>")
+    return (f'<section id="budjetti" class="budjetti">'
+            f'<h2>Kuukausibudjetti · {_kuunimi(kuu)}</h2>'
+            f'<p class="budjetti-tahti">Kuukaudesta kulunut {paiva}/{paivia_kk} päivää '
+            f'({tahti * 100:.0f} %). Ohut viiva palkissa on tasainen tahti.</p>'
+            + "".join(rivit)
+            + _budjettirivi("Kaikki yhteensä", yht_tot, yht_raami, tahti, yhteensa=True)
+            + lisa + '</section>')
+
+
+def _budjettirivi(nimi, tot, raami, tahti, yhteensa=False):
+    """Yksi palkki lukuineen. Sentit pyöristetään pois: budjettia luetaan
+    silmäyksellä, eikä 611,37 kerro enempää kuin 611."""
+    e = html.escape
+    osuus = (tot / raami) if raami else 0.0
+    leveys = max(min(osuus, 1.0), 0.0) * 100
+    yli = max(osuus - 1.0, 0.0)
+    luokka = "yli" if osuus > 1.0 else ("lahella" if osuus > tahti + 0.15 else "hyva")
+    jaljella = raami - tot
+    lopu = (f'<span class="miinus">yli {_e0(-jaljella)} €</span>' if jaljella < 0
+            else f'<span class="plus">{_e0(jaljella)} € jäljellä</span>')
+    return (f'<div class="bud-rivi{" yhteensa" if yhteensa else ""}">'
+            f'<div class="bud-nimi">{e(nimi)}</div>'
+            f'<div class="bud-palkki"><span class="bud-tayte {luokka}" '
+            f'style="width:{leveys:.1f}%"></span>'
+            + (f'<span class="bud-yli" style="width:{min(yli, 1.0) * 100:.1f}%"></span>'
+               if yli else "")
+            + f'<i style="left:{tahti * 100:.1f}%"></i></div>'
+            f'<div class="bud-luvut"><b class="{luokka}">{osuus * 100:.0f} %</b>'
+            f'<span>{_e0(tot)} / {_e0(raami)} € · {lopu}</span></div></div>')
+
+
+def _e0(v):
+    """Euroa ilman sentteja, tuhaterottimena ohut väli."""
+    return f"{round(v):,}".replace(",", "\u2009")
+
+
+def _kuunimi(kuu):
+    nimet = ["tammikuu", "helmikuu", "maaliskuu", "huhtikuu", "toukokuu", "kesäkuu",
+             "heinäkuu", "elokuu", "syyskuu", "lokakuu", "marraskuu", "joulukuu"]
+    try:
+        v, k = kuu.split("-")
+        return f"{nimet[int(k) - 1]} {v}"
+    except (ValueError, IndexError):
+        return kuu
+
+
 def pankkiyhteydet_html(cfg):
     """Taulukko pankkiyhteyksien tilasta ja varoitusrivi, jos jokin kaipaa
     huomiota.
@@ -5273,6 +5364,8 @@ def tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit, ledg
                 pros = '<td class="num">–</td>'
             rivit_html.append(f'<tr><td{kat_attr(k, kohde)}>{e(k)}</td><td class="num">{fmt_eur(tot)}</td>{raami_s}{erotus}'
                               f'{pros}<td>{palkki}</td></tr>')
+
+    budjetti_html = budjetti_osio(taulu, raamit, tyypit, kaikki_kk)
 
     # --- kertyvät erät: vuosilaskut ja muut kertasummat, joita säästetään kokoon ---
     kertyva_rivit = []
@@ -6936,6 +7029,20 @@ window.addEventListener('DOMContentLoaded',function(){
     const tr=n.closest('tr[data-tili-idx]');
     tasmayta(tr,parseInt(tr.getAttribute('data-tili-idx'),10));
   });
+  const budNappi=document.getElementById('nappi-budjetti');
+  if(budNappi)budNappi.addEventListener('click',function(){
+    budNappi.disabled=true;budNappi.textContent='Lasketaan\u2026';
+    fetch('api/budjetti',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({})}).then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){budNappi.disabled=false;budNappi.textContent='Alusta budjetti';
+          const s=document.createElement('span');s.className='pikkuteksti';
+          s.textContent=' '+(v.virhe||'ei onnistunut');
+          budNappi.parentNode.appendChild(s);return;}
+        budNappi.textContent='Valmis \u2014 p\u00e4ivitet\u00e4\u00e4n\u2026';
+        location.reload();
+      }).catch(function(e){budNappi.disabled=false;
+        budNappi.textContent='Alusta budjetti ('+e+')';});
+  });
   document.getElementById('nappi-hae').addEventListener('click',function(){kaynnista('hae');});
   document.getElementById('nappi-aja').addEventListener('click',function(){kaynnista('aja');});
   document.getElementById('ajoloki-nappi').addEventListener('click',function(){location.reload();});
@@ -6945,6 +7052,7 @@ window.addEventListener('DOMContentLoaded',function(){
     if(v.ok){SERVER=true;document.getElementById('tila').textContent=
       'selaa-tila \u2713 muutokset tallentuvat heti';
       document.getElementById('ajonapit').hidden=false;
+      if(budNappi)budNappi.hidden=false;
       document.querySelectorAll('.tasmnappi').forEach(function(b){b.hidden=false;});
       valvoPalvelinta();}
   }).catch(function(){
@@ -7030,6 +7138,46 @@ td.num.klik {{ text-decoration:none }}
 .palkki .taytto.yli {{ background:var(--meno) }}
 .palkki i {{ position:absolute; top:-2px; width:2px; height:14px; background:var(--muste) }}
 .palkki.tyhja {{ opacity:.35 }}
+.budjetti {{ margin:1.4rem 0 1.8rem; padding:1rem 1.1rem 1.2rem; border-radius:14px;
+  background:linear-gradient(180deg,#fffdf8,#f6f2e9); border:1px solid #e2dbcb;
+  box-shadow:0 1px 2px rgba(38,36,31,.06) }}
+.budjetti h2 {{ margin:0 0 .15rem }}
+.budjetti-tahti {{ margin:0 0 .9rem; font-size:.82rem; color:#6b6558 }}
+.bud-rivi {{ display:grid; grid-template-columns:minmax(9rem,14rem) 1fr minmax(15rem,17rem);
+  gap:.7rem; align-items:center; padding:.28rem 0 }}
+.bud-nimi {{ font-size:.92rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }}
+.bud-palkki {{ position:relative; height:20px; border-radius:10px; overflow:hidden;
+  background:linear-gradient(180deg,#e4ded1,#f1ece1);
+  box-shadow:inset 0 1px 3px rgba(38,36,31,.22), inset 0 -1px 0 rgba(255,255,255,.7) }}
+.bud-tayte, .bud-yli {{ position:absolute; top:0; bottom:0; border-radius:10px;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.55), inset 0 -3px 6px rgba(0,0,0,.18);
+  transition:width .6s cubic-bezier(.2,.8,.3,1) }}
+.bud-tayte {{ left:0 }}
+.bud-tayte.hyva {{ background:linear-gradient(180deg,#6ec69f 0%,#2e7d5b 60%,#25654a 100%) }}
+.bud-tayte.lahella {{ background:linear-gradient(180deg,#f0c268 0%,#c08a1e 60%,#a2731a 100%) }}
+.bud-tayte.yli {{ background:linear-gradient(180deg,#e08a63 0%,#b3502d 60%,#96411f 100%) }}
+.bud-yli {{ right:0; background:repeating-linear-gradient(135deg,#96411f 0 6px,#7d3517 6px 12px);
+  opacity:.85; border-radius:0 10px 10px 0 }}
+.bud-palkki i {{ position:absolute; top:0; bottom:0; width:2px; margin-left:-1px;
+  background:rgba(38,36,31,.42); z-index:2 }}
+.bud-luvut {{ display:flex; gap:.55rem; align-items:baseline; justify-content:flex-end;
+  font-size:.8rem; color:#6b6558; white-space:nowrap }}
+.bud-luvut b {{ font-size:1rem; min-width:3.4rem; text-align:right }}
+.bud-luvut b.hyva {{ color:var(--tulo) }}
+.bud-luvut b.lahella {{ color:#a2731a }}
+.bud-luvut b.yli {{ color:var(--meno) }}
+.bud-rivi.yhteensa {{ border-top:1px solid #ddd5c4; margin-top:.5rem; padding-top:.6rem }}
+.bud-rivi.yhteensa .bud-nimi {{ font-weight:600 }}
+.budjetti.tyhja p {{ max-width:44rem }}
+.budjetti .rivi {{ display:flex; gap:.7rem; align-items:center; flex-wrap:wrap }}
+.budjetti button {{ font:inherit; font-size:.9rem; padding:.45rem 1rem; border-radius:8px;
+  border:1px solid var(--muste); background:var(--muste); color:var(--paperi); cursor:pointer }}
+.budjetti button:hover:enabled {{ background:#3d3a33 }}
+.budjetti button:disabled {{ opacity:.5; cursor:not-allowed }}
+@media (max-width:700px) {{
+  .bud-rivi {{ grid-template-columns:1fr; gap:.15rem; padding:.45rem 0 }}
+  .bud-luvut {{ justify-content:flex-start }}
+}}
 .huomio {{ background:#f3e3c8; padding:.6rem .9rem; border-radius:6px }}
 .huono {{ color:#b3502d; font-weight:bold }}
 /* Sääntötaulu: toimintosarake yhdelle riville, pitkä regex katkeaa —
@@ -7093,6 +7241,7 @@ kategorian nimeä, matriisin solua tai kaavion palkkia klikkaamalla pääset kat
 <div class="tyokalut"><input id="haku" type="search" placeholder="hae tapahtumia… (Esc tyhjentää)" size="26"><span id="tila" class="pikkuteksti"></span><span id="ajonapit" hidden> <button type="button" id="nappi-hae"{hae_pois}>Hae pankkitapahtumat</button> <button type="button" id="nappi-aja">Lue tiliotteet</button> <a href="velho" id="nappi-velho">Yhdistä pankkeihin</a></span></div>
 <div id="ajoloki" hidden><div id="ajoloki-otsikko" class="pikkuteksti"></div><pre id="ajoloki-teksti"></pre><button type="button" id="ajoloki-nappi" hidden>Päivitä raportti</button> <button type="button" id="ajoloki-piilota">Piilota</button></div>
 <div id="paneeli"></div>
+{budjetti_html}
 <h2>Tulot ja menot kuukausittain <span class="pikkuteksti">(vihreä = tulot, ruskea = menot, tumma viiva = menojen 3 kk liukuva keskiarvo, % = säästöaste)</span></h2>
 {kaavio}
 <details id="tutki-details"><summary><h2 style="display:inline">Tutki kategorioita</h2> <span class="pikkuteksti">— valitse puusta kategorioita ja tarkenteita, piirtyvät kuukausien yli omilla väreillään</span></summary>
@@ -7118,12 +7267,12 @@ ei mukana); Yhteensä-sarake sisältää kaiken. Kehitys-käyrän tumma viiva = 
 Mediaani = tyypillinen kuukausi — jos keskiarvo on selvästi mediaania suurempi, kategoria elää
 piikeistä (vakuutukset, matkat) ja sitä kannattaa arvioida vuositasolla. Trendi = viimeisen 3 kk
 keskiarvo miinus edeltävän 3 kk keskiarvo. {saasto_rivi}Sama taulukko: raportit/yhteenveto_koko.csv.</p>
-<h2>{'Kuukausi ' + kohde[5:] + '/' + kohde[:4] + ' · toteuma vs. raami' if kohde else ''}</h2>
+<details><summary><h2 style="display:inline">{'Edellinen täysi kuukausi ' + kohde[5:] + '/' + kohde[:4] if kohde else 'Edellinen täysi kuukausi'}</h2> <span class="pikkuteksti">— sama vertailu valmiilta kuukaudelta</span></summary>
 <div style="overflow-x:auto"><table><tr><th>Kategoria</th><th>Toteuma €</th><th>Raami €</th>
 <th>Jäljellä €</th><th>%</th><th></th></tr>
 {''.join(rivit_html)}</table></div>
-<p class="pikkuteksti">Pystyviiva palkissa = raami. Raamit asetetaan tiedostossa budjetti.csv
-(ehdotus toteumasta: <code>python3 kirjanpito.py budjetti-ehdotus</code>).</p>
+<p class="pikkuteksti">Pystyviiva palkissa = raami. Raamit asetetaan tiedostossa
+asetukset/budjetti.csv.</p></details>
 {kertyvat_html}
 {saldot_html}
 <h2>Kategoriat × kuukaudet</h2>
@@ -7164,6 +7313,67 @@ def cmd_raportti(args):
     print(f"Raportti: {(RAPORTIT / 'raportti.html')}")
 
 
+RAAMIN_ALARAJA = 20  # alle tämän jäävä mediaani ei ansaitse omaa budjettiriviä
+
+
+def budjettiehdotus(taulu, kuukaudet, tyypit, kuukausia=12):
+    """Raamiehdotus täysien kuukausien mediaanista.
+
+    Mediaani eikä keskiarvo: yksi vuosilasku tai muutto ei saa nostaa raamia
+    pysyvästi. Pyöristys kymmeneen euroon, koska raami on päätös eikä mittaus —
+    ja 247 euron raami teeskentelee tarkkuutta jota siinä ei ole."""
+    tanaan = date.today().isoformat()[:7]
+    taydet = [m for m in kuukaudet if m < tanaan][-kuukausia:]
+    if len(taydet) < 2:
+        return [], taydet
+    rivit = []
+    for k in sorted((k for k in taulu if tyypit.get(k, "meno") == "meno"),
+                    key=lambda k: -statistics.median([taulu[k][m] for m in taydet])):
+        med = statistics.median([taulu[k][m] for m in taydet])
+        if med < RAAMIN_ALARAJA:
+            continue
+        rivit.append((k, round(med / 10) * 10))
+    return rivit, taydet
+
+
+def kirjoita_budjetti(rivit, polku=None):
+    """Raamit tiedostoon niin, että tiedoston muu sisältö säilyy.
+
+    budjetti.csv:ssä on raamien lisäksi kertyvät erät (tavoite, eräpäivä,
+    kertynyt) ja mahdollisesti käyttäjän omia sarakkeita. Ehdotus koskee vain
+    kk_raami-saraketta, joten kaikki muu luetaan ja kirjoitetaan takaisin
+    sellaisenaan — muuten yksi napinpainallus pyyhkisi vuosilaskujen
+    korvamerkinnät."""
+    polku = polku or BUDJETTI
+    kentat, vanhat = ["kategoria", "kk_raami"], []
+    if polku.exists():
+        teksti, _ = lue_teksti(polku)
+        lukija = csv.DictReader(teksti.splitlines(), delimiter=";")
+        vanhat = list(lukija)
+        for k in (lukija.fieldnames or []):
+            if k and k not in kentat:
+                kentat.append(k)
+    jaljella = {nimi: arvo for nimi, arvo in rivit}
+    ulos = []
+    for r in vanhat:
+        rivi = {k: (r.get(k) or "") for k in kentat}
+        nimi = siisti(str(r.get("kategoria", "") or ""))
+        if nimi in jaljella:
+            rivi["kk_raami"] = jaljella.pop(nimi)
+        ulos.append(rivi)
+    for nimi, arvo in rivit:
+        if nimi in jaljella:
+            del jaljella[nimi]
+            ulos.append(dict({k: "" for k in kentat},
+                             kategoria=nimi, kk_raami=arvo))
+    puskuri = io.StringIO()
+    w = csv.DictWriter(puskuri, fieldnames=kentat, delimiter=";",
+                       extrasaction="ignore", lineterminator="\r\n")
+    w.writeheader()
+    w.writerows(ulos)
+    turvakirjoita(polku, puskuri.getvalue())
+
+
 def cmd_budjetti(args):
     cfg = lue_config()
     ledger = lue_ledger()
@@ -7173,23 +7383,12 @@ def cmd_budjetti(args):
     if len(taydet) < 2:
         print("Tarvitaan vähintään kaksi täyttä kuukautta dataa ennen raamiehdotusta.")
         return
-    tyypit = cfg["kategoriat"]
+    rivit, taydet = budjettiehdotus(taulu, kuukaudet, cfg["kategoriat"])
     print(f"Ehdotus {len(taydet)} täyden kuukauden mediaanista ({taydet[0]}…{taydet[-1]}):\n")
-    rivit = []
-    for k in sorted((k for k in taulu if tyypit.get(k, "meno") == "meno"),
-                    key=lambda k: -statistics.median([taulu[k][m] for m in taydet])):
-        med = statistics.median([taulu[k][m] for m in taydet])
-        if med <= 0:
-            continue
-        ehdotus = round(med / 10) * 10 or 10
-        rivit.append((k, ehdotus))
-        print(f"  {k:<24} {fmt_eur(ehdotus):>10} €/kk   (mediaani {fmt_eur(med)})")
+    for k, ehdotus in rivit:
+        print(f"  {k:<24} {fmt_eur(ehdotus):>10} €/kk")
     polku = ASETUKSET / "budjetti_ehdotus.csv"
-    puskuri = io.StringIO()
-    w = csv.writer(puskuri, delimiter=";")
-    w.writerow(["kategoria", "kk_raami"])
-    w.writerows(rivit)
-    turvakirjoita(polku, puskuri.getvalue())
+    kirjoita_budjetti(rivit, polku)
     print(f"\nTallennettu: asetukset/{polku.name} — kopioi haluamasi rivit "
           "tiedostoon asetukset/budjetti.csv (ja muokkaa vapaasti).")
 
@@ -8673,6 +8872,19 @@ def cmd_selaa(args):
                                             daemon=True)
                     saie.start()
                     return self._json({"ok": True, "komento": komento})
+                if self.path == "/api/budjetti":
+                    cfg = lue_config()
+                    ledger = lue_ledger()
+                    kuukaudet, taulu, _t, _m = koosta(ledger, cfg)
+                    rivit, taydet = budjettiehdotus(taulu, kuukaudet, cfg["kategoriat"])
+                    if not rivit:
+                        return self._json({"ok": False, "virhe":
+                            "Tarvitaan vähintään kaksi täyttä kuukautta ennen "
+                            "raamiehdotusta."})
+                    kirjoita_budjetti(rivit)
+                    _raportti_vanheni()
+                    return self._json({"ok": True, "n": len(rivit),
+                                       "kuukausia": len(taydet)})
                 return self._json({"ok": False, "virhe": "tuntematon polku"}, 404)
             except Exception as e:
                 return self._json({"ok": False, "virhe": str(e)}, 500)

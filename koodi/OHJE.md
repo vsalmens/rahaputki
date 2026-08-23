@@ -84,9 +84,12 @@ niin ikään `README.md`; tämä tiedosto on koko kartta.
 
 4. Aja: `python3 koodi/kirjanpito.py opi` — ja avaa `raportit/raportti.html`.
 
-5. Kun täysiä kuukausia on kertynyt: `python3 koodi/kirjanpito.py budjetti-ehdotus`
-   ehdottaa raamit toteuman mediaanista. Kopioi/muokkaa haluamasi rivit
-   tiedostoon `asetukset/budjetti.csv`, niin raportti alkaa näyttää toteuma vs. raami.
+5. Kun täysiä kuukausia on kertynyt, paina raportin **Alusta budjetti**
+   -nappia. Rahaputki ehdottaa raamit viimeisten täysien kuukausien
+   mediaanista ja kirjoittaa ne tiedostoon `asetukset/budjetti.csv`; sen
+   jälkeen sivun yläreuna näyttää kuluvan kuukauden tilanteen palkkeina.
+   Raameja voi muokata suoraan tiedostossa. (Komentoriviltä sama ehdotus
+   erilliseen tiedostoon: `python3 koodi/kirjanpito.py budjetti-ehdotus`.)
 
 ## Rituaali jatkossa (~15–30 min, milloin huvittaa)
 
