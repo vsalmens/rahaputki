@@ -6293,9 +6293,10 @@ td.num.klik {{ text-decoration:none }}
 tr.varausrivi td {{ background:#f7fafc }}
 .pikkuteksti {{ color:#6b665c; font-size:.85rem }}
 .tyokalut {{ display:flex; gap:.8rem; align-items:baseline; flex-wrap:wrap; margin:.6rem 0 }}
-#ajonapit button, #ajoloki button {{ font:inherit; font-size:.85em; padding:.2rem .7rem;
-       border:1px solid #c9c3b8; border-radius:5px; background:#fff; cursor:pointer }}
-#ajonapit button:hover:enabled, #ajoloki button:hover {{ background:var(--vaalea) }}
+#ajonapit button, #ajonapit a, #ajoloki button {{ font:inherit; font-size:.85em;
+       padding:.2rem .7rem; border:1px solid #c9c3b8; border-radius:5px; background:#fff;
+       cursor:pointer; text-decoration:none; color:inherit; display:inline-block }}
+#ajonapit button:hover:enabled, #ajonapit a:hover, #ajoloki button:hover {{ background:var(--vaalea) }}
 #ajonapit button:disabled {{ opacity:.5; cursor:default }}
 #ajoloki {{ border:1px solid #c9c3b8; border-radius:8px; background:#fff;
        padding:.7rem .9rem; margin:.6rem 0 }}
