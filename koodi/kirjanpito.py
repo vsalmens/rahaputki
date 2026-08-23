@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.31"
+VERSIO = "v0.32"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila", "muistiinpano"]
@@ -5157,12 +5157,19 @@ def olympos_osio(ledger, cfg=None):
                   f'kaudelle, joten rivi siirtyy tälle laskulle">↩ myöhässä kaudelta '
                   f'{e(str(x["jalki"]))}</span>' if x.get("jalki") else "")
         note = siisti(str(x.get("note", "") or ""))
-        note_html = (f'<span class="olnote">{e(note)}</span>' if note else
-                     '<span class="olnote tyhja">lisää kuvaus</span>')
-        rt.append(f'<tr><td>{e(str(x["pvm"]))}{merkki}</td>'
-                  f'<td>{e(str(x["kuvaus"]))}<br>'
-                  f'<a href="#" class="olnotemuokkaa" data-rid="{e(str(x["rid"]))}" '
-                  f'data-note="{e(note)}" title="oma kuvaus tälle riville">{note_html}</a></td>'
+        # Kuvausta tarjotaan vain nimettömille riveille: ruokaboksi, sähkö ja
+        # netti kertovat jo nimessään mitä ovat, eikä joka riville tarvita
+        # tyhjää kehotusta. Jo kirjoitettu kuvaus näkyy silti aina.
+        if note or str(x["tyyppi"]) == "(muu)":
+            note_html = (f'<span class="olnote">{e(note)}</span>' if note else
+                         '<span class="olnote tyhja">lisää kuvaus</span>')
+            kuvaus_solu = (f'<td>{e(str(x["kuvaus"]))}<br>'
+                           f'<a href="#" class="olnotemuokkaa" data-rid="{e(str(x["rid"]))}" '
+                           f'data-note="{e(note)}" title="oma kuvaus tälle riville">'
+                           f'{note_html}</a></td>')
+        else:
+            kuvaus_solu = f'<td>{e(str(x["kuvaus"]))}</td>'
+        rt.append(f'<tr><td>{e(str(x["pvm"]))}{merkki}</td>{kuvaus_solu}'
                   f'<td>{e(str(x["tyyppi"]))}</td><td class="num">{eur2(abs(x["summa"]))}</td>'
                   f'<td><a href="#" class="olpoissulje" data-rid="{e(str(x["rid"]))}">sulje pois</a></td></tr>')
     for x in L.get("poissuljetut_rivit", []):

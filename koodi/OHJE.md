@@ -487,10 +487,13 @@ klikattavan läsnäoloruudukon mukaan toimitusviikoille, palautus-tarkenteet
 ovat jäsenten maksuja pankkiirille, ja kaikki muut tarkenteet (netti,
 sähkö, …) jaetaan tasan. Kuukausittaiset vakiohyvitykset (esim. auton
 lataussähkö) ja kertaluontoiset käsikirjaukset osallistujavalintoineen
-lisätään lomakkeilla. Poimittuun riviin voi kirjoittaa oman kuvauksen
-(*lisää kuvaus* rivin nimen alla) — se tallentuu pääkirjaan ja näkyy myös
-tulostettavassa erittelyssä, jotta "K-rauta Lanterna 184,75" ei ole puolen
-vuoden päästä arvoitus kenellekään. Saldot summautuvat aina nollaan, ja 🖨-linkki avaa
+lisätään lomakkeilla. Tyypittömään poimittuun riviin — sellaiseen, jonka
+tyyppi on `(muu)` — voi kirjoittaa oman kuvauksen (*lisää kuvaus* rivin nimen
+alla). Se tallentuu pääkirjaan ja näkyy myös tulostettavassa erittelyssä,
+jotta "K-rauta Lanterna 184,75" ei ole puolen vuoden päästä arvoitus
+kenellekään. Ruokaboksi, sähkö ja muut nimetyt tyypit kertovat jo itsestään
+mitä ovat, joten niille kehotusta ei näytetä; jo kirjoitettu kuvaus näkyy
+silti aina. Saldot summautuvat aina nollaan, ja 🖨-linkki avaa
 tulostettavan erittelyn (selaimen tulostuksesta PDF). Asetukset ja
 läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 
