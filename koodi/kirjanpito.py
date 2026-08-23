@@ -241,7 +241,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.5"
+VERSIO = "v0.6"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -7221,6 +7221,7 @@ h1 { font-size:1.45rem; margin:0 0 .2rem; grid-column:1/-1 }
 nav ol { list-style:none; margin:0; padding:0 }
 nav li { margin:0 0 .2rem }
 nav button { width:100%; text-align:left; font:inherit; background:none; cursor:pointer;
+             line-height:1.3;
              border:1px solid transparent; border-radius:8px; padding:.55rem .7rem;
              display:flex; gap:.6rem; align-items:baseline }
 nav button:hover { background:var(--vaalea) }
@@ -7231,7 +7232,8 @@ nav .valmis .tila { color:var(--hyva) }
 nav .kesken .tila { color:var(--huono) }
 section.paneeli { background:#fff; border:1px solid var(--raja); border-radius:10px;
                   padding:1.4rem 1.6rem }
-h2 { font-size:1.05rem; margin:0 0 .6rem }
+h2 { font-size:1.05rem; margin:0 0 .25rem }
+.selite { color:#6b665c; font-size:.92em; margin:0 0 1.1rem; max-width:60ch }
 h3 { font-size:.95rem; margin:1.4rem 0 .4rem }
 p { max-width:62ch }
 button.toiminto { font:inherit; padding:.4rem .9rem; border:1px solid var(--raja);
@@ -7300,11 +7302,24 @@ function toiminto(nimi, data){
       if(T) T.virhe = 'Yhteys palvelimeen katkesi: ' + err; piirra(); });
 }
 
+/* Vaiheen nimi kertoo mitä käyttäjä tekee, ei mitä ohjelma tallentaa.
+   "Sovellus" oli toteutuksen sana: se on Enable Bankingin käsite, ei sen
+   ihmisen, joka haluaa tilitapahtumansa näkyviin. Selite kertoo saman
+   pidemmin, ja se näkyy paneelin otsikon alla — samasta listasta, jottei
+   kahta kuvausta samasta vaiheesta pääse ajautumaan eri linjoille. */
 var VAIHEET = [
-  {avain:'sovellus', nimi:'Sovellus', selite:'Enable Banking -tunnus ja avain'},
-  {avain:'pankit',   nimi:'Pankit',   selite:'Yhdistä ja uusi valtuutuksia'},
-  {avain:'valmis',   nimi:'Valmis',   selite:'Hae tapahtumat'}
+  {avain:'sovellus', nimi:'Yhdistä Enable Banking',
+   selite:'Rekisteröi Rahaputki-sovellus Enable Bankingin rajapintaan. Tehdään kerran.'},
+  {avain:'pankit', nimi:'Yhdistä pankit',
+   selite:'Valtuuta tapahtumien haku pankeistasi. Valtuutus uusitaan 90–180 päivän välein.'},
+  {avain:'valmis', nimi:'Valmis',
+   selite:'Pankkiyhteys on kytketty ja tapahtumat voi hakea.'}
 ];
+
+function vaiheOtsikko(avain){
+  var v = VAIHEET.filter(function(x){ return x.avain === avain; })[0];
+  return '<h2>' + e(v.nimi) + '</h2><p class="selite">' + e(v.selite) + '</p>';
+}
 
 function vaiheenTila(v){
   if(v === 'sovellus'){
@@ -7344,9 +7359,10 @@ function ilmoitukset(){
 
 /* ---------------- vaihe 1: sovellus ---------------- */
 function paneeliSovellus(){
-  var s = T.sovellus, h = '<h2>Sovellus ja avain</h2>';
-  h += '<p>Rahaputki hakee tapahtumat <em>sinun omalla</em> Enable Banking ' +
-       '-sovelluksellasi. Se luodaan kerran, ja sen avain jää tälle koneelle.</p>';
+  var s = T.sovellus, h = vaiheOtsikko('sovellus');
+  h += '<p>Tapahtumat haetaan <em>sinun omalla</em> sovelluksellasi: tilitietosi ' +
+       'kulkevat siis suoraan koneellesi eikä välissä ole muita palveluita. ' +
+       'Sovelluksen avain jää tälle koneelle.</p>';
   h += ilmoitukset();
 
   h += '<h3>Kirjastot</h3>';
@@ -7428,7 +7444,7 @@ function alilomakeAvain(){
 
 /* ---------------- vaihe 2: pankit ---------------- */
 function paneeliPankit(){
-  var h = '<h2>Pankit</h2>' + ilmoitukset();
+  var h = vaiheOtsikko('pankit') + ilmoitukset();
   if(!T.sovellus.app_id){
     // Ei piiloteta sitä mitä käyttäjällä jo on: yhdistetyt pankit ovat
     // tosiasia configissa, vaikka tämän koneen tunnukset puuttuisivat.
@@ -7518,7 +7534,7 @@ function paneeliPankit(){
 
 /* ---------------- vaihe 3: valmis ---------------- */
 function paneeliValmis(){
-  var h = '<h2>Valmis</h2>' + ilmoitukset();
+  var h = vaiheOtsikko('valmis') + ilmoitukset();
   if(!T.yhdistetyt.length){
     return h + '<p>Yhtään pankkia ei ole vielä yhdistetty.</p>' +
       '<div class="rivi"><button class="toiminto paa" data-t="vaihe" data-vaihe="pankit">' +

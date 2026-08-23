@@ -431,7 +431,8 @@ Kaksi tapaa, sama näkymä:
 
    **Yhdistä pankkeihin** avaa pankkiyhteyssivun (`/velho`). Se ei ole
    kysymysjono vaan **tila, jota voi muuttaa**: vasemmalla on kolme vaihetta
-   (Sovellus, Pankit, Valmis), joista jokaiseen voi palata milloin tahansa, ja
+   (Yhdistä Enable Banking, Yhdistä pankit, Valmis), joista jokaiseen voi
+   palata milloin tahansa, ja
    tehdyn valinnan voi vaihtaa. Vaiheen tila näkyy rivin alla ("yhteys
    toimii", "2 kaipaa uusintaa"). Vaihe 2 näyttää aina jo yhdistetyt pankit ja
    kunkin valtuutuksen voimassaolon, ja rivin *Uusi valtuutus* vie suoraan sen
