@@ -241,7 +241,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.4"
+VERSIO = "v0.5"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -2359,10 +2359,12 @@ Portaalissa on valmis komento, jonka avulla Rahaputki voi luoda sovelluksen
 puolestasi. Se on nopein tapa, ja samalla turvallisin: yksityisavain syntyy
 tällä koneella eikä käy selaimen tai Lataukset-kansion kautta.
 
-  1. Selain avautuu sivulle {EB_PORTAALI} (kirjaudu jos kysytään).
-  2. Vieritä alas kohtaan, jossa lukee "You can register your applications
-     via an API or using command line interface".
-  3. Sen alla on laatikko, jonka sisältö alkaa sanalla  curl
+  1. Selain avautuu sivulle {EB_PORTAALI}. Kirjaudu sähköpostiosoitteellasi —
+     salasanaa ei ole, vaan saat sähköpostiisi linkin.
+  2. Vieritä sivun alaosaan. Siellä lukee, että sovelluksen voi rekisteröidä
+     rajapinnan kautta tai "command line interface" -tavalla. Klikkaa tuota
+     korostettua tekstiä.
+  3. Esiin tulee laatikko, jonka sisältö alkaa sanalla  curl
      Klikkaa laatikkoa, valitse kaikki (Cmd-A / Ctrl-A) ja kopioi (Cmd-C / Ctrl-C).
 
 Komento sisältää kertakäyttöisen, tunnin voimassa olevan tunnuksen. Käsittele
@@ -7256,6 +7258,8 @@ label { display:block; margin:.8rem 0 .3rem; font-size:.9em; color:#6b665c }
 table { width:100%; border-collapse:collapse; margin:.6rem 0 }
 th, td { text-align:left; padding:.35rem .5rem .35rem 0; border-bottom:1px solid var(--vaalea) }
 .pikku { font-size:.85em; color:#6b665c }
+.ohjeet { margin:.4rem 0 .8rem; padding-left:1.3rem }
+.ohjeet li { margin:0 0 .45rem; max-width:60ch }
 .pankkilista { max-height:19rem; overflow:auto; border:1px solid var(--raja);
                border-radius:8px; margin:.6rem 0 }
 .pankkilista button { display:block; width:100%; text-align:left; font:inherit;
@@ -7273,6 +7277,13 @@ mihin tahansa vaiheeseen ja muuttaa valintaa — mikään ei lukitu.</p>
 </main>
 <script>
 var T = null, kesken = false;
+/* Avattu alilomake ja kenttien sisällöt pidetään muuttujissa, ei DOMissa:
+   jokainen toiminto piirtää paneelin uusiksi, ja DOMiin jätetty tila katoaisi
+   sen mukana. Juuri niin kävi: "Etsi koneelta" sulki lomakkeen ennen kuin
+   löytynyttä avainta ehti valita. Kenttien arvot säilyvät samasta syystä —
+   pitkää liitettyä komentoa ei saa joutua liittämään uudelleen virheen takia. */
+var AVATTU = '';
+var SYOTE = {curl:'', sposti:'', polku:'', haku:'', koodi:'', psu:''};
 
 function e(s){ var d=document.createElement('div'); d.textContent=s==null?'':String(s);
                return d.innerHTML; }
@@ -7361,27 +7372,38 @@ function paneeliSovellus(){
   }
 
   h += '<h3>' + (s.app_id ? 'Vaihda toiseen sovellukseen' : 'Aloita') + '</h3>';
-  h += '<div class="kortti valinta" role="button" tabindex="0" data-avaa="uusi">' +
-       '<h4>Luo minulle uusi sovellus</h4><p>Nopein tapa. Avain syntyy tällä koneella ' +
+  h += '<div class="kortti valinta" role="button" tabindex="0" data-avaa="uusi"' +
+       (AVATTU === 'uusi' ? ' aria-pressed="true"' : '') +
+       '><h4>Luo minulle uusi sovellus</h4><p>Nopein tapa. Avain syntyy tällä koneella ' +
        'eikä käy selaimen kautta.</p></div>' +
-       '<div class="kortti valinta" role="button" tabindex="0" data-avaa="avain">' +
-       '<h4>Minulla on jo sovellus</h4><p>Otetaan käyttöön sen .pem-avaintiedosto.</p></div>';
+       '<div class="kortti valinta" role="button" tabindex="0" data-avaa="avain"' +
+       (AVATTU === 'avain' ? ' aria-pressed="true"' : '') +
+       '><h4>Minulla on jo sovellus</h4><p>Otetaan käyttöön sen .pem-avaintiedosto.</p></div>';
 
-  h += '<div id="alilomake"></div>';
+  if(AVATTU === 'uusi'){ h += alilomakeUusi(); }
+  else if(AVATTU === 'avain'){ h += alilomakeAvain(); }
   return h;
 }
 
 function alilomakeUusi(){
   return '<h3>Uusi sovellus</h3>' +
-    '<p>Avaa Enable Bankingin portaali ja kirjaudu. Sivulla on valmis komento, joka ' +
-    'alkaa sanalla <code>curl</code> — kopioi se kokonaan ja liitä tähän. Komento ' +
-    'sisältää tunnin voimassa olevan tunnuksen; käsittele sitä kuin salasanaa.</p>' +
+    '<ol class="ohjeet">' +
+    '<li>Avaa portaali alta ja <strong>kirjaudu sähköpostiosoitteellasi</strong>. ' +
+      'Salasanaa ei ole — saat sähköpostiisi linkin, jota klikkaamalla pääset sisään.</li>' +
+    '<li>Vieritä sivun alaosaan. Siellä lukee, että sovelluksen voi rekisteröidä ' +
+      'rajapinnan kautta tai <strong>command line interface</strong> -tavalla. ' +
+      'Klikkaa tuota korostettua tekstiä.</li>' +
+    '<li>Esiin tulee laatikko, jonka sisältö alkaa sanalla <code>curl</code>. ' +
+      'Klikkaa laatikkoa, valitse kaikki (Cmd-A / Ctrl-A) ja kopioi (Cmd-C / Ctrl-C).</li>' +
+    '<li>Liitä komento alla olevaan kenttään.</li></ol>' +
+    '<p class="pikku">Komento sisältää tunnin voimassa olevan tunnuksen. Käsittele ' +
+    'sitä kuin salasanaa: se ei mene minnekään muualle kuin tälle koneelle.</p>' +
     '<div class="rivi"><a class="paalinkki" target="_blank" rel="noopener" ' +
     'href="https://enablebanking.com/cp/applications">Avaa portaali</a></div>' +
     '<label for="curl">Portaalista kopioitu komento</label>' +
-    '<textarea id="curl" placeholder="curl -X POST https://enablebanking.com/api/applications ..."></textarea>' +
+    '<textarea id="curl" data-syote="curl" placeholder="curl -X POST https://enablebanking.com/api/applications ...">' + e(SYOTE.curl) + '</textarea>' +
     '<label for="sposti">Sähköpostiosoitteesi tietosuoja-asioita varten (vapaaehtoinen)</label>' +
-    '<input type="text" id="sposti" placeholder="oma@osoite.fi">' +
+    '<input type="text" id="sposti" data-syote="sposti" value="' + e(SYOTE.sposti) + '" placeholder="oma@osoite.fi">' +
     '<div class="rivi"><button class="toiminto paa" data-t="luo_sovellus">Luo sovellus</button></div>';
 }
 
@@ -7399,7 +7421,7 @@ function alilomakeAvain(){
     }).join('') + '</tbody></table>';
   }
   h += '<label for="polku">tai kirjoita polku</label>' +
-       '<input type="text" id="polku" placeholder="~/Lataukset/590999ea-….pem">' +
+       '<input type="text" id="polku" data-syote="polku" value="' + e(SYOTE.polku) + '" placeholder="~/Lataukset/590999ea-….pem">' +
        '<div class="rivi"><button class="toiminto" data-t="kayta_avainta">Käytä</button></div>';
   return h;
 }
@@ -7432,7 +7454,7 @@ function paneeliPankit(){
   if(T.pankkivaihe === 'valinta' && T.sovellus.app_id){
     h += '<h3>' + (T.yhdistetyt.length ? 'Lisää pankki' : 'Yhdistä ensimmäinen pankki') + '</h3>';
     h += '<label for="haku">Hae pankkia</label>' +
-         '<input type="text" id="haku" value="' + e(T.haku) + '" placeholder="esim. OP">' +
+         '<input type="text" id="haku" data-syote="haku" value="' + e(SYOTE.haku || T.haku) + '" placeholder="esim. OP">' +
          '<div class="rivi"><button class="toiminto" data-t="pankit">Hae lista</button>' +
          '<span class="pikku">maa: ' + e(T.maa) + '</span></div>';
     var lista = T.pankit;
@@ -7472,7 +7494,7 @@ function paneeliPankit(){
            '<div class="rivi"><a class="paalinkki" target="_blank" rel="noopener" href="' +
            e(T.auth.url) + '">Avaa pankin tunnistautuminen</a></div>' +
            '<label for="koodi">Osoiterivi pankista palanneelta sivulta</label>' +
-           '<input type="text" id="koodi" placeholder="https://…?code=…">' +
+           '<input type="text" id="koodi" data-syote="koodi" value="' + e(SYOTE.koodi) + '" placeholder="https://…?code=…">' +
            '<div class="rivi"><button class="toiminto paa" data-t="viimeistele">Jatka</button>' +
            '<button class="toiminto" data-t="peru_pankki">Peru</button></div>';
     }
@@ -7521,23 +7543,15 @@ function piirra(){
     Array.prototype.forEach.call(document.querySelectorAll('button.toiminto'),
       function(b){ b.disabled = true; b.textContent = b.textContent; });
   }
-  var lomake = el('alilomake');
-  if(lomake && lomake.dataset.avattu){
-    lomake.innerHTML = lomake.dataset.avattu === 'uusi' ? alilomakeUusi() : alilomakeAvain();
-  }
   sido();
 }
 
 function sido(){
+  Array.prototype.forEach.call(document.querySelectorAll('[data-syote]'), function(kentta){
+    kentta.oninput = function(){ SYOTE[kentta.dataset.syote] = kentta.value; };
+  });
   Array.prototype.forEach.call(document.querySelectorAll('[data-avaa]'), function(k){
-    k.onclick = function(){
-      var l = el('alilomake');
-      l.dataset.avattu = k.dataset.avaa;
-      l.innerHTML = k.dataset.avaa === 'uusi' ? alilomakeUusi() : alilomakeAvain();
-      Array.prototype.forEach.call(document.querySelectorAll('[data-avaa]'), function(m){
-        m.setAttribute('aria-pressed', m === k ? 'true' : 'false'); });
-      sido();
-    };
+    k.onclick = function(){ AVATTU = k.dataset.avaa; piirra(); };
     k.onkeydown = function(ev){ if(ev.key === 'Enter' || ev.key === ' '){ ev.preventDefault(); k.onclick(); } };
   });
   Array.prototype.forEach.call(document.querySelectorAll('[data-t]'), function(b){
@@ -7553,15 +7567,14 @@ function sido(){
         return;
       }
       else if(t === 'kayta_avainta'){
-        d.polku = b.dataset.polku || (el('polku') ? el('polku').value : '');
+        d.polku = b.dataset.polku || SYOTE.polku;
       }
       else if(t === 'luo_sovellus'){
-        d.curl = el('curl') ? el('curl').value : '';
-        d.sposti = el('sposti') ? el('sposti').value : '';
+        d.curl = SYOTE.curl; d.sposti = SYOTE.sposti;
       }
-      else if(t === 'pankit'){ d.haku = el('haku') ? el('haku').value : ''; d.maa = T.maa; }
+      else if(t === 'pankit'){ d.haku = SYOTE.haku; d.maa = T.maa; }
       else if(t === 'aloita'){ d.psu = el('psu') ? el('psu').value : ''; }
-      else if(t === 'viimeistele'){ d.koodi = el('koodi') ? el('koodi').value : ''; }
+      else if(t === 'viimeistele'){ d.koodi = SYOTE.koodi; }
       else if(t === 'tallenna'){
         d.valinnat = T.tilit.map(function(x, i){
           var n = document.querySelector('.nimi[data-i="' + i + '"]');
