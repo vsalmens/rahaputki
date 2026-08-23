@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.34"
+VERSIO = "v0.35"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila", "muistiinpano"]
@@ -4860,8 +4860,9 @@ def olympos_laskelma(ledger, oly, tanaan=None, alku_yli=None):
         if mk in maksettu:
             maksettu[mk] += s
     velka = {nm: osuus[nm] - maksettu[nm] for nm in nimet}
-    # Kk-vakioiden kuukausimäärä: kuukauden numeron vaihtuminen, ei alkupäivän
-    # vuosipäivä. Tämä on tietoinen valinta eikä laskuvirhe — kaudet ovat
+    # Kk-vakioiden kuukausimäärä: laskuri karttuu kuun vaihtuessa, ei siitä
+    # kun kauden alusta on kulunut kuukausi (21.7. alkaneella kaudella se ei
+    # siis naksahda 21.8. vaan 1.8.). Tietoinen valinta eikä laskuvirhe — kaudet ovat
     # suunnilleen kuukauden mittaisia, ja kuun vaihtuminen on sääntö jonka
     # kaikki osapuolet ymmärtävät ilman selitystä. Sivuvaikutus: kuun 1. päivänä
     # suljettu lyhyt kausi veloittaa täyden kuukauden ja kuun viimeisenä
@@ -5400,8 +5401,8 @@ def olympos_osio(ledger, cfg=None):
             f'<h3>Vakiot (kk-hyvitykset)</h3>'
             f'<p class="pikkuteksti">Jäsenen saldoa veloitetaan summa joka kuukausi ja muille '
             f'hyvitetään tasan — esim. autolataus: Ville korvaa yhteisölle sähköstä. '
-            f'Kaudella {L["kk"]} kk — kuukausi vaihtuu kuun vaihtuessa, ei kauden '
-            f'alkupäivän vuosipäivänä.</p>{"".join(vt)}'
+            f'Kaudella {L["kk"]} kk — kuukausi karttuu kuun vaihtuessa, ei siitä kun '
+            f'kauden alusta on kulunut kuukausi.</p>{"".join(vt)}'
             f'<p>uusi vakio: <input id="ol-vk-kuvaus" placeholder="kuvaus" size="14"> '
             f'<select id="ol-vk-jasen">{maksaja_optiot}</select> '
             f'<input id="ol-vk-summa" placeholder="€/kk" size="6"> '
