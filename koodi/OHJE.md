@@ -652,7 +652,9 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   ikäistä lukkoa ei ohiteta puolestasi: ohjelma kertoo kenen lukko on ja kysyy
   luvan, oletuksena ei. Luvan saatuaan se poistaa roikkumaan jääneen
   lukkotiedoston, joten kysymys ei toistu joka ajolla. Kysymyksen ohi pääsee
-  suoraan lipulla: `python3 koodi/kirjanpito.py --pakota aja`.
+  suoraan lipulla: `python3 koodi/kirjanpito.py --pakota aja`. Lukko vapautuu myös
+  silloin kun ohjelma lopetetaan signaalilla (SIGTERM, SIGHUP) — esimerkiksi
+  koneen sammutus tai `kill` — ei vain Ctrl-C:llä.
 
   Ohitus näkyy myös toiseen suuntaan: jos oma lukko katoaa kesken ajon (toinen
   kone otti sen, tai synkka vei tiedoston alta), kirjoitus pysähtyy ennen kuin
