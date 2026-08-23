@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.25"
+VERSIO = "v0.26"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -4528,6 +4528,27 @@ def _kirjaus_id(k):
         f"{k.get('maksaja', '')}".encode("utf-8")).hexdigest()[:12]
 
 
+def kausi_alku_nayton(raja):
+    """Näytettävä alkupäivä rajapyykistä.
+
+    Sisäisesti kauden alku on rajapyykki: mukaan tulevat sitä *seuraavat*
+    päivät, jotta edellisen laskun viimeinen päivä ei tule kahteen kertaan.
+    Käyttäjälle näytetään ja käyttäjältä kysytään ensimmäinen kauteen kuuluva
+    päivä — lasku päättyi 20.7., joten seuraava kausi alkaa 21.7."""
+    try:
+        return (date.fromisoformat(str(raja)) + timedelta(days=1)).isoformat()
+    except (ValueError, TypeError):
+        return str(raja)
+
+
+def kausi_alku_rajaksi(nayton):
+    """Käänteinen: käyttäjän antama ensimmäinen päivä → rajapyykki."""
+    try:
+        return (date.fromisoformat(str(nayton)) - timedelta(days=1)).isoformat()
+    except (ValueError, TypeError):
+        return str(nayton)
+
+
 def _oly_kaudet(oly):
     """Suljetut kaudet aikajärjestyksessä. Kausi on suljettu silloin kun lasku
     on lähetetty: sen summat eivät enää muutu, ja tulevat maksut täsmäytetään
@@ -4881,12 +4902,14 @@ def olympos_erittely_html(ledger, alku=None, loppu=None):
     if tausta:
         banneri = (f'<div class="banneri" style="background-image:url(\'{e(tausta)}\')">'
                    f'<div class="bannerivarjo"><h1>{e(otsikko)}</h1>'
-                   f'<p class="bannerimeta">jaettujen kulujen erittely · {e(L["alku"])} → {e(L["loppu"])}</p>'
+                   f'<p class="bannerimeta">jaettujen kulujen erittely · '
+                   f'{e(kausi_alku_nayton(L["alku"]))} → {e(L["loppu"])}</p>'
                    f'</div></div>')
     else:
         banneri = (f'<h1>{e(otsikko)} — jaettujen kulujen erittely</h1>')
     o = ['<!DOCTYPE html><html lang="fi"><head><meta charset="utf-8">',
-         f'<title>{e(otsikko)}-erittely {e(L["alku"])} – {e(L["loppu"])}</title>',
+         f'<title>{e(otsikko)}-erittely {e(kausi_alku_nayton(L["alku"]))} – '
+         f'{e(L["loppu"])}</title>',
          '<style>body{font:13px/1.45 Georgia,serif;color:#26241f;max-width:52rem;'
          'margin:2rem auto;padding:0 1rem}h1{font-size:1.4rem}h2{font-size:1.05rem;'
          'margin:1.6rem 0 .4rem;border-bottom:1px solid #c9c3b8}table{border-collapse:'
@@ -4902,7 +4925,7 @@ def olympos_erittely_html(ledger, alku=None, loppu=None):
          '.banneri{-webkit-print-color-adjust:exact;print-color-adjust:exact}}'
          '</style></head><body>',
          banneri,
-         f'<p class="pieni">Kausi {e(L["alku"])} → {e(L["loppu"])} · jäsenet: '
+         f'<p class="pieni">Kausi {e(kausi_alku_nayton(L["alku"]))} → {e(L["loppu"])} · jäsenet: '
          f'{e(", ".join(L["nimet"]))} · pankkiiri: {e(L["pankkiiri"])} · '
          f'tulostettu {date.today().isoformat()}</p>']
     o.append('<h2>Saldot</h2><table><tr><th>jäsen</th><th class="num">osuus</th>'
@@ -5198,7 +5221,7 @@ def olympos_osio(ledger, cfg=None):
         katvalinta = f'"{e(nykyinen)}"'
         puuttuu = ""
     vihje = "" if L["boksi_yht"] else ('<p class="pikkuteksti">⚠ Kaudelta ei löytynyt Ruokaboksi-rivejä '
-                                      "pääkirjasta — tarkista kauden alkupäivä.</p>")
+                                      "pääkirjasta — tarkista tarkastelujakson päivät.</p>")
     otsikko = (siisti(str(oly.get("otsikko", "")))
                or siisti(str(oly.get("kategoria", ""))) or "Yhteistalous")
     kaudet_html = _oly_kaudet_html(L, eur2)
@@ -5206,12 +5229,13 @@ def olympos_osio(ledger, cfg=None):
                   ' <button id="ol-avaa" class="kevyt" title="peruu viimeisimmän '
                   'sulkemisen ja palauttaa kauden avoimeksi">avaa viimeisin kausi</button>')
     return (f'<details id="yhteistalous"><summary><h2 style="display:inline">{e(otsikko)} \u2014 jaettujen kulujen reskontra '
-            f'({e(L["alku"])} →)</h2></summary><div class="pkortti">'
+            f'({e(kausi_alku_nayton(L["alku"]))} →)</h2></summary><div class="pkortti">'
             f'<p class="pikkuteksti"><a href="yhteistalous_erittely.html" target="_blank" '
             f'rel="noopener" style="font-size:1.05em">🖨 Avaa tulostettava erittely uuteen '
             f'välilehteen</a> — selaimen tulostuksesta (⌘P) saat PDF:n. '
             f'Taustakuva: pudota kuva tiedostoksi raportit/tausta.jpg</p>'
-            f'<p class="pikkuteksti">Kausi {e(L["alku"])} → {e(L["loppu"])} · boksi {eur2(L["boksi_yht"])} € '
+            f'<p class="pikkuteksti">Kausi {e(kausi_alku_nayton(L["alku"]))} → '
+            f'{e(L["loppu"])} · boksi {eur2(L["boksi_yht"])} € '
             f'· tasan jaetut: {jaot} · palautukset {eur2(L["palautus_yht"])} €</p>'
             f'<p class="pikkuteksti">Näytettävä nimi: '
             f'<input id="ol-otsikko" size="16" value="{e(otsikko)}" '
@@ -5247,19 +5271,25 @@ def olympos_osio(ledger, cfg=None):
             f'<input id="ol-summa" placeholder="summa" size="7"> '
             f'jaetaan: {osallistujaruudut} '
             f'<button id="ol-lisaa">lisää kirjaus</button></p>'
-            f'<p>Tarkastelujakso: <input type="date" id="ol-nayta-alku" value="{e(L["alku"])}"> – '
+            f'<p>Tarkastelujakso: <input type="date" id="ol-nayta-alku" '
+            f'value="{e(kausi_alku_nayton(L["alku"]))}"> – '
             f'<input type="date" id="ol-nayta-loppu" value="{e(L["loppu"])}"> '
             f'<button id="ol-nayta">näytä jakso</button> '
-            f'<span class="pikkuteksti">— rajaa laskennan valituille päiville (ei muuta tasausta). '
-            f'Tyhjä alku = viimeisin tasaus, tyhjä loppu = tänään.</span></p>'
+            f'<span class="pikkuteksti">— rajaa laskennan valituille päiville, molemmat '
+            f'mukaan lukien (ei sulje kautta). Tyhjä alku = edellisen laskun jälkeinen '
+            f'päivä, tyhjä loppu = tänään.</span></p>'
             f'{kaudet_html}'
             f'<h3>Kauden sulkeminen</h3>'
-            f'<p class="pikkuteksti">Kun lasku on lähetetty, sulje kausi. Summat '
-            f'jäädytetään saataviksi, ja jäsenten myöhemmin maksamat suoritukset '
-            f'kuitataan niitä vastaan vanhimmasta laskusta alkaen — ne eivät enää '
-            f'sekoitu uuteen kauteen. Jos samalle kaudelle ilmestyy myöhemmin '
-            f'veloitus, se siirtyy seuraavalle laskulle merkittynä.</p>'
-            f'<p>Kausi <input type="date" id="ol-kausi-alku" value="{e(L["alku"])}"> – '
+            f'<p class="pikkuteksti">Kun lasku on lähetetty, sulje kausi. Päivät ovat '
+            f'mukaan lukevia: kausi kattaa alkupäivän ja loppupäivän, ja seuraava '
+            f'kausi alkaa loppupäivää seuraavasta päivästä. Summat jäädytetään '
+            f'saataviksi, ja jäsenten myöhemmin maksamat suoritukset kuitataan niitä '
+            f'vastaan vanhimmasta laskusta alkaen — ne eivät enää sekoitu uuteen '
+            f'kauteen. Jos samalle kaudelle ilmestyy myöhemmin veloitus, se siirtyy '
+            f'seuraavalle laskulle merkittynä.</p>'
+            f'<p>Kausi <input type="date" id="ol-kausi-alku" '
+            f'value="{e(kausi_alku_nayton(L["alku"]))}" '
+            f'title="ensimmäinen kauteen kuuluva päivä"> – '
             f'<input type="date" id="ol-kausi-loppu" value="{e(L["loppu"])}"> '
             f'<button id="ol-sulje">sulje kausi ja laskuta</button> '
             f'<button id="ol-tasaa" class="kevyt">sulje ilman saatavia</button>'
@@ -5280,7 +5310,7 @@ def _oly_kaudet_html(L, eur2):
             '<th class="num">laskutettu €</th><th class="num">maksettu €</th>'
             '<th class="num">avoinna €</th><th>maksut</th><th></th></tr>']
     for kt in reversed(L["kaudet"]):
-        vali = f'{kt["alku"]} → {kt["loppu"]}'
+        vali = f'{kausi_alku_nayton(kt["alku"])} → {kt["loppu"]}'
         linkki = (f'<br><a href="yhteistalous_lasku_{e(kt["loppu"])}.html" '
                   f'target="_blank" rel="noopener" class="pikkuteksti">🖨 avaa lasku</a>')
         if not kt["saatavat"]:
@@ -9254,7 +9284,8 @@ def cmd_selaa(args):
                     if "kategoria" in pyynto and pyynto.get("kategoria") != "__uusi__":
                         oly["kategoria"] = siisti(str(pyynto.get("kategoria", "")))
                     if "nayta_alku" in pyynto or "nayta_loppu" in pyynto:
-                        oly["nayta_alku"] = siisti(str(pyynto.get("nayta_alku", "")))
+                        n_a = siisti(str(pyynto.get("nayta_alku", "")))
+                        oly["nayta_alku"] = kausi_alku_rajaksi(n_a) if n_a else ""
                         oly["nayta_loppu"] = siisti(str(pyynto.get("nayta_loppu", "")))
                     if pyynto.get("tasattu"):
                         oly["tasattu"] = siisti(str(pyynto["tasattu"]))
@@ -9263,15 +9294,17 @@ def cmd_selaa(args):
                     if pyynto.get("sulje_kausi"):
                         sk = pyynto["sulje_kausi"]
                         try:
+                            s_a = siisti(str(sk.get("alku", "")))
                             kausi = oly_sulje_kausi(
                                 lue_ledger(), oly, siisti(str(sk.get("loppu", ""))),
-                                siisti(str(sk.get("alku", ""))),
+                                kausi_alku_rajaksi(s_a) if s_a else "",
                                 laskuta=bool(sk.get("laskuta", True)))
                         except ValueError:
                             return self._json({"ok": False,
                                                "virhe": "kauden päivämäärä ei kelpaa"})
                         n = len(kausi["saatavat"])
-                        viesti = (f"kausi {kausi['alku']} → {kausi['loppu']} suljettu"
+                        viesti = (f"kausi {kausi_alku_nayton(kausi['alku'])} → "
+                                  f"{kausi['loppu']} suljettu"
                                   + (f", saatavia {n} jäsenellä ✓" if n
                                      else " ilman saatavia ✓"))
                     if pyynto.get("avaa_kausi"):

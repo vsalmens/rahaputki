@@ -492,7 +492,8 @@ tulostettavan erittelyn (selaimen tulostuksesta PDF). Asetukset ja
 läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 
 **Kaudet ja laskut.** Kun lasku on lähetetty, sulje kausi: anna sen alku- ja
-loppupäivä ja paina *sulje kausi ja laskuta*. Kauden summat jäädytetään
+loppupäivä ja paina *sulje kausi ja laskuta*. Päivät ovat mukaan lukevia —
+kausi 21.4.–20.7. kattaa molemmat päivät, ja seuraava kausi alkaa 21.7. Kauden summat jäädytetään
 saataviksi, ja jäsenten myöhemmin maksamat suoritukset kuitataan niitä
 vastaan vanhimmasta laskusta alkaen — vasta yli menevä osa vaikuttaa uuteen
 kauteen. Ilman sulkemista lähetetyn laskun maksu näyttäisi ennakkomaksulta
