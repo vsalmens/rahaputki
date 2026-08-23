@@ -490,6 +490,21 @@ lisätään lomakkeilla. Saldot summautuvat aina nollaan, ja 🖨-linkki avaa
 tulostettavan erittelyn (selaimen tulostuksesta PDF). Asetukset ja
 läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 
+**Kaudet ja laskut.** Kun lasku on lähetetty, sulje kausi: anna sen alku- ja
+loppupäivä ja paina *sulje kausi ja laskuta*. Kauden summat jäädytetään
+saataviksi, ja jäsenten myöhemmin maksamat suoritukset kuitataan niitä
+vastaan vanhimmasta laskusta alkaen — vasta yli menevä osa vaikuttaa uuteen
+kauteen. Ilman sulkemista lähetetyn laskun maksu näyttäisi ennakkomaksulta
+kaudella, jolla maksajalle ei ole vielä ehtinyt kertyä kuluja.
+
+Jos samalle kaudelle ilmestyy pääkirjaan veloitus vasta laskun lähdettyä,
+se siirtyy seuraavalle laskulle merkinnällä *↩ myöhässä kaudelta* — takautuvasti
+ei enää laskuteta, mutta kulu ei myöskään katoa. Jokaisesta suljetusta
+kaudesta syntyy oma tulostettava lasku (`raportit/yhteistalous_lasku_*.html`),
+ja avoimet saatavat kulkevat mukana seuraavan laskun toimenpiteissä.
+*Sulje ilman saatavia* on sitä varten, että rahat on jo siirretty. Väärään
+päivään painettu sulkeminen perutaan napista *avaa viimeisin kausi*.
+
 ## Tiedostot
 
 | Tiedosto | Mikä |
@@ -508,14 +523,15 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 | `asetukset/budjetti.csv` | kk-raamit ja kertyvät erät (täytetään vasta kun toteumaa on) |
 | `raportit/raportti.html` | kuukausigraafi + budjettivertailu + matriisi |
 | `raportit/yhteenveto_kk.csv` | sama matriisi Sheets-liitosta varten |
-| `raportit/yhteistalous_erittely.html` | tulostettava kotitalouserittely (selaimesta PDF) |
+| `raportit/yhteistalous_erittely.html` | tulostettava kotitalouserittely avoimelta kaudelta (selaimesta PDF) |
+| `raportit/yhteistalous_lasku_<pvm>.html` | suljetun kauden lasku sellaisena kuin se lähetettiin |
 | `koneen-asetukset.txt` | koneen omat asetukset (mm. `tietokansio`), koodin juuressa; syntyy vain jos jotain on asetettavaa (ks. Kustomointi) |
 | `data/.lukko.<kone>.json` | ajonaikainen lukko, vain jaetussa tilassa (`"lukitus": "jaettu"`); katoaa itsestään |
 | `data/pankkitila.json` | pankkiyhteyksien tila: saldo, milloin tililtä viimeksi saatiin tapahtumia ja mihin asti valtuutus on voimassa |
 | `~/.rahaputki/tietokansio-<tiiviste>.txt` | asennuskohtainen muisti viimeksi toimineesta tietokansiosta; palauttaa osoittimen, jos koko kansio korvataan päivityksessä |
 | `data/pankkiloki.csv` | rajapintakutsujen loki: aika, kohde, tulos, kesto. Ei tunnuksia eikä tilinumeroita; tilin tunnus on tiivisteenä |
 | `data/varaukset.json` | odottavat korttivaraukset — `hae` kirjoittaa, `aja` täsmäyttää; poistettavissa milloin vain |
-| `data/yhteistalous.json` | yhteistalouden tila: tasauspäivä (mihin asti yhteiskulut on huomioitu), kk-vakiot, läsnäolot, kirjaukset — raportin osio ylläpitää tätä puolestasi |
+| `data/yhteistalous.json` | yhteistalouden tila: suljetut kaudet saatavineen, kk-vakiot, läsnäolot, kirjaukset — raportin osio ylläpitää tätä puolestasi |
 | `asetukset/pankkihaku.env` | pankkihaun tunnukset — **ei jaeta, ei versioida** |
 | `asetukset/*.pem` | pankkihaun yksityisavain (pilvisynkatussa kansiossa sen sijaan `~/.rahaputki/`) — **ei jaeta, ei versioida** |
 
