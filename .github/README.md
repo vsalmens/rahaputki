@@ -29,15 +29,14 @@ jäit. Mikään ei mene rikki tauosta.
    Kansion voi siirtää tai nimetä uudelleen myöhemminkin, milloin tahansa:
    siirrä vain koko kansio kerralla, niin kaikki pysyy tallessa. Mitään
    polkuja ei ole tallennettu minnekään.
-3. **Kaksoisklikkaa `Pankkihaku`-käynnistintä** (`Pankkihaku.command`
-   macOS:llä, `Pankkihaku.bat` Windowsissa). Se avaa ohjatun käyttöönoton:
-   noin 15 minuutissa tapahtumat alkavat tulla suoraan pankeistasi, eikä
+3. **Kaksoisklikkaa `Aloita`-käynnistintä** (`Aloita.command` macOS:llä,
+   `Aloita.bat` Windowsissa). Rahaputki avautuu selaimeen, ja kaikki tapahtuu
+   siellä.
+4. **Paina sivulta `Yhdistä pankkeihin`.** Ohjattu käyttöönotto vie noin 15
+   minuuttia, ja sen jälkeen tapahtumat tulevat suoraan pankeistasi — eikä
    tiliotteita tarvitse viedä käsin koskaan. Velho hoitaa kaiken teknisen ja
-   kertoo joka vaiheessa mitä tehdä — sinä vain kirjaudut pankkiisi.
-4. **Jatkossa kaksoisklikkaa `Aloita`-käynnistintä.** Se avaa Rahaputken
-   selaimeen, ja kaikki tapahtuu siellä: napista haet tuoreet tapahtumat
-   pankista, luokittelet rivit ja teet sääntöjä. `Pankkihaku`-käynnistin avaa
-   saman ohjelman suoraan pankkiyhteyssivulle.
+   kertoo joka vaiheessa mitä tehdä; sinä vain kirjaudut pankkiisi. Jatkossa
+   sivun `Hae pankkitapahtumat` -nappi noutaa tuoreet rivit.
 
 Ensimmäinen käynnistys luo kansiot ja mallitiedostot puolestasi. Raportti
 aukeaa selaimeen, ja voit luokitella tapahtumat suoraan siinä.
@@ -59,8 +58,8 @@ estävät oletuksena kaikki internetistä ladatut ohjelmat, joita ei ole
 allekirjoitettu maksullisella kehittäjätunnuksella. Sallit sen kerran, ja
 jatkossa käynnistin toimii kaksoisklikkauksella.
 
-**macOS** näyttää ilmoituksen *"Apple could not verify 'Pankkihaku.command'
-is free of malware…"* (sama koskee `Aloita.command`:ia). Vanha kikka (oikea
+**macOS** näyttää ilmoituksen *"Apple could not verify 'Aloita.command'
+is free of malware…"*. Vanha kikka (oikea
 klikkaus → Avaa) **ei enää toimi** macOS Sequoiassa (15) ja sitä uudemmissa.
 Tee näin:
 
@@ -105,8 +104,7 @@ Tämä on suositeltu tapa: tapahtumat noudetaan suoraan pankeistasi
 PSD2-rajapinnan kautta — myös luottokorteilta, joiden tapahtumia ei saa
 CSV:nä lainkaan. Käyttöönotto on ohjattu ja vie noin 15 minuuttia:
 
-- macOS: kaksoisklikkaa `Pankkihaku.command`
-- Windows: kaksoisklikkaa `Pankkihaku.bat`
+- kaksoisklikkaa `Aloita`-käynnistintä ja paina sivulta `Yhdistä pankkeihin`
 - tai komentoriviltä: `python3 koodi/kirjanpito.py pankkihaku`
 
 Velho hoitaa kaiken teknisen puolestasi: asentaa puuttuvat kirjastot, etsii
@@ -122,8 +120,8 @@ koneellesi — ei kuukausimaksua eikä välikäsiä. Maksullisetkin vaihtoehdot
 Banking -tunnuksen ja sovelluksen luomisen; niissä maksat ohjelmasta, et
 siitä että välttyisit rekisteröinniltä.
 
-Jatkossa sama `Pankkihaku`-käynnistin noutaa tuoreet tapahtumat, luokittelee
-ne ja avaa raportin yhdellä kaksoisklikkauksella. Rautalankaohje kaikista
+Jatkossa sivun `Hae pankkitapahtumat` -nappi noutaa tuoreet tapahtumat,
+luokittelee ne ja päivittää raportin. Rautalankaohje kaikista
 vaiheista on [koodi/OHJE.md](https://github.com/vsalmens/rahaputki/blob/main/koodi/OHJE.md).
 
 ## Korttilaskut PDF:stä
@@ -166,8 +164,7 @@ Juuressa on vain käynnistimet ja neljä kansiota. Jokaisella on yksi tehtävä:
 
 ```
 Rahaputki/
-  Aloita.command  Aloita.bat        avaa Rahaputki selaimeen  (tavallisin)
-  Pankkihaku.command  .bat          avaa suoraan pankkiyhteyssivulle
+  Aloita.command  Aloita.bat        avaa Rahaputki selaimeen
   inbox/          tanne CSV-tiedostot, jos et kayta automaattihakua
   koodi/          ohjelma — päivitys korvaa vain tämän
   asetukset/      config.json, saannot.csv, budjetti.csv, pankkihaku.env
@@ -208,17 +205,14 @@ korvaaminen kokonaan on turvallista — se on itse asiassa toivottavaa, koska
 näin vanhat tiedostot eivät jää roikkumaan. Kaikki omasi on kansioissa
 `asetukset/`, `data/` ja `inbox/`, eikä päivitys kosketa niitä.
 
-Päivityksen jälkeen jatkat kuten ennenkin: kaksoisklikkaa `Pankkihaku`
-(hakee tapahtumat pankista ja avaa raportin) tai `Aloita` (lukee `inbox/`).
+Päivityksen jälkeen jatkat kuten ennenkin: kaksoisklikkaa `Aloita`.
 Pankkitunnuksia, sääntöjä tai kirjanpitoa ei tarvitse tehdä uudelleen —
 ne asuvat kansioissa `asetukset/` ja `data/`.
 
-Juuren käynnistimiä (`Aloita…`, `Pankkihaku…`) ei tarvitse päivittää: ne ovat
-muutaman rivin tynkiä, jotka vain käynnistävät `koodi/`-kansion sisällön.
-**Poikkeus:** jos päivität niin vanhasta versiosta, ettei kansiossasi ole
-vielä `Pankkihaku.command` / `Pankkihaku.bat` -tiedostoja, kopioi ne
-paketista juureen kerran — sen jälkeen automaattinen pankkihaku on
-kaksoisklikkauksen päässä.
+Juuren käynnistintä (`Aloita…`) ei tarvitse päivittää: se on muutaman rivin
+tynkä, joka vain käynnistää `koodi/`-kansion sisällön. Vanhemmista versioista
+jääneet `Pankkihaku.command` / `Pankkihaku.bat` voi poistaa — kaikki toiminnot
+löytyvät nyt selaimesta.
 
 ## Lisenssi ja ehdot
 

@@ -31,8 +31,9 @@ Ohjelma on käytännössä yksi tiedosto, `koodi/kirjanpito.py`.
 - **Idempotenssi.** Saman tapahtuman voi tuoda montaa kertaa: päällekkäiset
   rivit ohitetaan. Tämä on koko työkalun lupaus käyttäjälle — jos muutat
   tuontia tai rivin tunnistetta (`avain`, `tee_id`), varmista se erikseen.
-- **Ei komentoriviä käyttäjälle.** Kaikki toimii kaksoisklikkauksella
-  (`Aloita`, `Pankkihaku`). Uusi toiminto ei saa olla vain komentorivillä
+- **Ei komentoriviä käyttäjälle.** Juuressa on yksi käynnistin (`Aloita`),
+  joka ajaa `kirjanpito.py selaa`; kaikki muu tehdään selaimen napeista —
+  myös pankkihaku ja pankkiyhteydet. Uusi toiminto ei saa olla vain komentorivillä
   saavutettavissa, ellei se ole nimenomaan tehty niitä varten, jotka
   komentoriviä haluavat käyttää.
 

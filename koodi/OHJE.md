@@ -31,9 +31,9 @@ sillä ei voi vahingossa hävittää mitään omaasi. Komennot ajetaan juuresta
 muodossa `python3 koodi/kirjanpito.py …`.
 
 **Et tarvitse komentoriviä lainkaan**, jos et halua: kaksoisklikkaa
-`Aloita.command` (macOS) tai `Aloita.bat` (Windows) — se lukee inboxin ja avaa
-raportin selaimeen. `Pankkihaku.command` / `Pankkihaku.bat` tekee saman, mutta
-noutaa tapahtumat ensin suoraan pankeista (ks. oma lukunsa). Ensimmäinen
+`Aloita.command` (macOS) tai `Aloita.bat` (Windows) — se avaa Rahaputken
+selaimeen, ja loput tehdään sivun napeista: tiliotteiden luku, pankkihaku ja
+pankkiyhteyksien kytkeminen (ks. oma lukunsa). Ensimmäinen
 käynnistys luo kansiot ja mallitiedostot puolestasi. Jos latasit työkalun
 ZIP-pakettina, käyttöjärjestelmä estää käynnistimen ensimmäisellä kerralla;
 `README.md` kertoo miten se sallitaan kerralla kuntoon. Lyhyt aloitusopas on
@@ -94,9 +94,9 @@ niin ikään `README.md`; tämä tiedosto on koko kartta.
 ## Rituaali jatkossa (~15–30 min, milloin huvittaa)
 
 1. Vie tuoreet otteet `inbox/`-kansioon — tai jos automaattinen pankkihaku on
-   käytössä, pelkkä `python3 koodi/kirjanpito.py hae` (tai kaksoisklikkaus
-   `Pankkihaku`-käynnistimestä, joka tekee kohdat 1–2 kerralla). Päällekkäisyys
-   ei haittaa — hae mieluummin liikaa kuin liian vähän.
+   käytössä, pelkkä `python3 koodi/kirjanpito.py hae` (selaimessa
+   `Hae pankkitapahtumat` -nappi, joka tekee kohdat 1–2 kerralla).
+   Päällekkäisyys ei haittaa — hae mieluummin liikaa kuin liian vähän.
 2. `python3 koodi/kirjanpito.py aja`
 3. Täytä tarkistettavat → `python3 koodi/kirjanpito.py opi`
 4. Katso `raportti.html`. Halutessasi liitä `raportit/yhteenveto_kk.csv`
@@ -132,9 +132,9 @@ pankkiisi.
 python3 koodi/kirjanpito.py pankkihaku
 ```
 
-Tai ilman komentoriviä: kaksoisklikkaa **`Pankkihaku.command`** (macOS) tai
-**`Pankkihaku.bat`** (Windows). Sama käynnistin hoitaa jatkossa koko
-rituaalin: nouto → luokittelu → raportti auki.
+Tai ilman komentoriviä: kaksoisklikkaa **`Aloita`**-käynnistintä ja paina
+sivulta **Yhdistä pankkeihin**. Jatkossa saman sivun **Hae pankkitapahtumat**
+-nappi hoitaa koko rituaalin: nouto → luokittelu → raportti auki.
 
 ### Rautalankaversio: mitä ruudulla tapahtuu ja mitä sinä teet
 
@@ -338,8 +338,8 @@ python3 koodi/kirjanpito.py hae     # tuoreet tapahtumat inboxiin
 python3 koodi/kirjanpito.py aja     # luokittelu ja raportti
 ```
 
-tai kaksoisklikkaa `Pankkihaku`-käynnistintä, joka tekee molemmat ja avaa
-raportin. Nouto on idempotentti: tuplahaku ei koskaan tuota tuplarivejä,
+tai paina raportin **Hae pankkitapahtumat** -nappia, joka tekee molemmat ja
+päivittää raportin. Nouto on idempotentti: tuplahaku ei koskaan tuota tuplarivejä,
 joten hae mieluummin liikaa kuin liian vähän.
 
 ### Odottavat veloitukset (varaukset)
@@ -516,8 +516,7 @@ päivään painettu sulkeminen perutaan napista *avaa viimeisin kausi*.
 | `koodi/` | **ohjelma** — päivitys korvaa tämän kansion kokonaan, muu jää koskematta |
 | `koodi/laskusta_csv.py` | korttilaskujen PDF → CSV -muunnin (`--nayta` näyttää rivien tulkinnan) |
 | `koodi/ehdot/` | tietosuojaseloste ja käyttöehdot — näihin osoitetaan Enable Bankingin lomakkeen URL-kentät |
-| `Aloita.command` / `Aloita.bat` | kaksoisklikattava käynnistin (macOS / Windows) — tynkä, joka käynnistää `koodi/`-kansion logiikan |
-| `Pankkihaku.command` / `Pankkihaku.bat` | sama, mutta noutaa tapahtumat ensin pankeista; ensimmäisellä kerralla ohjattu käyttöönotto |
+| `Aloita.command` / `Aloita.bat` | kaksoisklikattava käynnistin (macOS / Windows) — tynkä, joka avaa Rahaputken selaimeen; kaikki toiminnot löytyvät sivulta |
 | `asetukset/config.json` | lähteiden sarakekartat, kategoriat, omat IBANit |
 | `koodi/config.esimerkki.json`, `koodi/saannot.esimerkki.csv` | riisutut aloituspohjat, joista ensikäynnistys tekee omasi juureen |
 | `asetukset/budjetti.csv` | kk-raamit ja kertyvät erät (täytetään vasta kun toteumaa on) |
