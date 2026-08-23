@@ -243,6 +243,10 @@ LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
 # tila: tyhjä = pankin kirjaama, "varaus" = vasta varattu (ei vielä kirjattu)
 VARAUS = "varaus"
 VARAUKSET = DATA / "varaukset.json"
+# Pankkiyhteyden tila on ohjelman havaintoa, ei käyttäjän asetus: milloin
+# tililtä viimeksi saatiin tapahtumia ja mihin asti pankin antama valtuutus on
+# voimassa. Siksi data/-kansiossa eikä config.jsonissa, jota käyttäjä muokkaa.
+PANKKITILA = DATA / "pankkitila.json"
 # Varaukset vanhenevat: jos hae ei ole käynyt hetkeen, niitä ei pidetä yllä.
 VARAUS_VANHENEE_PV = 3
 PVM_MUODOT = ["%d.%m.%Y", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y", "%d.%m.%y"]
@@ -572,6 +576,39 @@ def turvakirjoita(polku, teksti):
         f"  Kansio: {polku.parent}\n"
         "  Pilvisynkka voi viedä juuri luodun tiedoston hetkeksi alta. Vanha\n"
         "  versio on tallessa eikä mitään rikkoutunut — kokeile uudelleen.")
+
+
+def lue_pankkitila():
+    try:
+        with open(PANKKITILA, encoding="utf-8") as f:
+            tila = json.load(f)
+        return tila if isinstance(tila, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def paivita_pankkitila(account_id, **kentat):
+    """Merkitse tilin pankkiyhteydestä tiedetty. Epäonnistuminen ei kaada
+    hakua: tämä on tietoa käyttäjälle, ei kirjanpidon totuutta."""
+    if not account_id:
+        return
+    tila = lue_pankkitila()
+    tila.setdefault(str(account_id), {}).update(
+        {k: v for k, v in kentat.items() if v is not None})
+    try:
+        turvakirjoita_json(PANKKITILA, tila)
+    except (OSError, RuntimeError):
+        pass
+
+
+def _paivia_jaljella(pvm):
+    """Päiviä annettuun päivämäärään; None jos päivämäärää ei ole tai se ei jäsenny."""
+    if not pvm:
+        return None
+    try:
+        return (date.fromisoformat(str(pvm)[:10]) - date.today()).days
+    except ValueError:
+        return None
 
 
 def turvakirjoita_kopio(lahde, kohde):
@@ -2777,7 +2814,7 @@ def _tunniste(acc):
     return siisti(aid.get("iban") or (aid.get("other") or {}).get("identification") or "")
 
 
-def _tallenna_tilit(cfg, pankki, tilit):
+def _tallenna_tilit(cfg, pankki, tilit, istunto=None):
     """Nimeä noudetut tilit ja kirjoita ne config.jsoniin.
 
     Suostumus uusitaan pankeittain 90–180 päivän välein, ja tilin uid voi
@@ -2810,6 +2847,13 @@ def _tallenna_tilit(cfg, pankki, tilit):
         nimi = _kysy(f"  Nimi raportissa [{ehdotus}]: ", ehdotus)
         rivi = {"tili": nimi, "account_id": uid, "tunniste": tunniste,
                 "pankki": siisti(pankki)}
+        # Voimassaolo on pankin antama, ei meidän pyyntömme: tallennetaan se
+        # mitä vastauksessa lukee. Pankki voi myöntää pyydettyä lyhyemmän.
+        paasy = ((istunto or {}).get("access") or {})
+        paivita_pankkitila(uid, pankki=siisti(pankki), tili=nimi,
+                           session_id=str((istunto or {}).get("session_id") or "") or None,
+                           valtuutus_asti=str(paasy.get("valid_until") or "")[:10] or None,
+                           valtuutettu=date.today().isoformat(), virhe="")
         if vanha is None:
             rivi["alkaen"] = _viimeinen_pvm(nimi) or vanhat_alkaen.get(nimi, "")
             if rivi["alkaen"]:
@@ -2926,7 +2970,7 @@ def eb_valtuuta(cfg, hakusana="", app=None):
         print("  ole liitetty sovellukseen. Käy portaalissa klikkaamassa")
         print(f"  'Link accounts' ja liitä kyseinen tili: {EB_PORTAALI}")
         return False
-    _tallenna_tilit(cfg, a.get("name", ""), tilit)
+    _tallenna_tilit(cfg, a.get("name", ""), tilit, istunto)
     return True
 
 
@@ -3132,7 +3176,13 @@ def cmd_hae(args):
             print(f"⚠ {tili}: {e}")
             continue
         except (OSError, ValueError) as e:
+            koodi = getattr(e, "koodi", 0)
+            paivita_pankkitila(aid, virhe=str(e)[:200], virhekoodi=koodi,
+                               virhe_pvm=date.today().isoformat())
             print(f"⚠ {tili}: nouto epäonnistui — {e}")
+            if koodi in (401, 403):
+                print("  Valtuutus on todennäköisesti vanhentunut. Uusi se: "
+                      f"{_komentorivi()} pankkihaku (tai raportin Pankkiyhteys-nappi).")
             continue
         if getattr(args, "raaka", False):
             raakakansio = DATA / "raaka"
@@ -3149,6 +3199,8 @@ def cmd_hae(args):
                 json.dump(data, rf, ensure_ascii=False, indent=2)
             n = len((data or {}).get("transactions", []) or [])
             print(f"  \u2699 {tili}: raaka \u2192 data/raaka/{rpolku.name} ({n} objektia)")
+        paivita_pankkitila(aid, haettu=date.today().isoformat(), virhe="",
+                           virhekoodi=0, tili=tili)
         ohitetut = Counter()
         tilin_varaukset = []
         rivit = (eb_riveiksi(data, ohitetut, tilin_varaukset)
@@ -4367,6 +4419,54 @@ def olympos_osio(ledger, cfg=None):
             f"</div></details>")
 
 
+def pankkiyhteydet_html(cfg):
+    """Taulukko pankkiyhteyksien tilasta ja varoitusrivi, jos jokin kaipaa
+    huomiota.
+
+    Ilman tätä "ei tapahtumia" ja "yhteys katkennut" näyttävät samalta:
+    molemmissa raportti vain lakkaa täyttymästä. Valtuutus vanhenee pankista
+    riippuen 90–180 päivän välein, eikä siitä varoita kukaan."""
+    tilit = ((cfg.get("pankkihaku") or {}).get("tilit") or [])
+    tila = lue_pankkitila()
+    if not tilit or not tila:
+        return "", ""
+    rivit, varoitukset = [], []
+    for t in tilit:
+        aid = str(t.get("account_id", ""))
+        if _on_paikanpitaja(aid):
+            continue
+        tt = tila.get(aid, {})
+        nimi = t.get("tili", "") or tt.get("tili", "")
+        paivia = _paivia_jaljella(tt.get("valtuutus_asti"))
+        if tt.get("virhekoodi") in (401, 403):
+            tilateksti, luokka = "valtuutus ei kelpaa — uusi se", "huono"
+        elif paivia is None:
+            tilateksti, luokka = "voimassaoloa ei tiedetä", ""
+        elif paivia < 0:
+            tilateksti, luokka = f"vanhentui {tt['valtuutus_asti']}", "huono"
+        elif paivia <= 14:
+            tilateksti, luokka = f"vanhenee {paivia} pv ({tt['valtuutus_asti']})", "huono"
+        else:
+            tilateksti, luokka = f"{paivia} pv ({tt['valtuutus_asti']})", ""
+        if luokka:
+            varoitukset.append(f"{nimi}: {tilateksti}")
+        rivit.append(
+            f'<tr><td>{html.escape(str(nimi))}</td><td>{html.escape(str(tt.get("pankki", "")))}</td>'
+            f'<td>{html.escape(str(tt.get("haettu", "—")))}</td>'
+            f'<td class="{luokka}">{html.escape(tilateksti)}</td></tr>')
+    if not rivit:
+        return "", ""
+    taulu = ('<h2>Pankkiyhteydet</h2>\n<div style="overflow-x:auto"><table>'
+             '<tr><th>Tili</th><th>Pankki</th><th>Haettu viimeksi</th>'
+             '<th>Valtuutus voimassa</th></tr>' + "".join(rivit) + '</table></div>\n'
+             '<p class="pikkuteksti">Valtuutus uusitaan Pankkiyhteys-napista tai '
+             'komennolla <code>pankkihaku</code>. Uusiminen ei koske tilien '
+             'liittämistä portaalissa — se on tehty kerran.</p>')
+    varoitus = (f'<p class="huomio">⚠ Pankkiyhteys kaipaa huomiota — '
+                f'{html.escape("; ".join(varoitukset))}.</p>') if varoitukset else ""
+    return taulu, varoitus
+
+
 def rakenna_raportit(ledger, cfg, kk=13, kirjoita_sivu=True):
     """Rakentaa raportit ja palauttaa raporttisivun HTML:n.
 
@@ -4789,6 +4889,8 @@ def tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit, ledg
 
     huomio = (f'<p class="huomio">⚠ {avoimia} tapahtumaa luokittelematta (kategoria TARKISTA) — '
               f'luvut tarkentuvat kun täytät tarkistettavat.csv ja ajat <code>opi</code>.</p>') if avoimia else ""
+    yhteydet_html, yhteysvaroitus = pankkiyhteydet_html(cfg)
+    huomio = yhteysvaroitus + huomio
     varausrivit = [r for r in ledger if r.get("tila") == VARAUS]
     if varausrivit:
         v_summa = sum(-float(r["summa"]) for r in varausrivit)
@@ -6276,6 +6378,7 @@ td.num.klik {{ text-decoration:none }}
 .palkki i {{ position:absolute; top:-2px; width:2px; height:14px; background:var(--muste) }}
 .palkki.tyhja {{ opacity:.35 }}
 .huomio {{ background:#f3e3c8; padding:.6rem .9rem; border-radius:6px }}
+.huono {{ color:#b3502d; font-weight:bold }}
 /* Sääntötaulu: toimintosarake yhdelle riville, pitkä regex katkeaa —
    muuten rivi venyy kolmen tekstirivin korkuiseksi ja taulu vaakavieritykseen. */
 #saantotaulu td:nth-child(2) {{ word-break:break-word; max-width:24rem }}
@@ -6369,6 +6472,7 @@ keskiarvo miinus edeltävän 3 kk keskiarvo. {saasto_rivi}Sama taulukko: raporti
 <h2>Kategoriat × kuukaudet</h2>
 <div style="overflow-x:auto"><table>{''.join(matriisi)}</table></div>
 {olympos_html}
+{yhteydet_html}
 <details id="saannot"><summary><h2 style="display:inline">Säännöt ({saanto_n} kpl)</h2></summary>
 <p class="pikkuteksti">Poisto arvioi säännön luokittelemat rivit uudelleen (voivat palata avoimiksi tai siirtyä toiselle säännölle); käsin luokiteltuja ei kosketa.
 Uudet säännöt tehdään porautumisnäkymän lomakkeella.</p>

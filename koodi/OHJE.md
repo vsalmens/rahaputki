@@ -492,6 +492,7 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 | `raportit/yhteistalous_erittely.html` | tulostettava kotitalouserittely (selaimesta PDF) |
 | `koneen-asetukset.txt` | koneen omat asetukset (mm. `tietokansio`), koodin juuressa; syntyy vain jos jotain on asetettavaa (ks. Kustomointi) |
 | `data/.lukko.<kone>.json` | ajonaikainen lukko, vain jaetussa tilassa (`"lukitus": "jaettu"`); katoaa itsestään |
+| `data/pankkitila.json` | pankkiyhteyksien tila: milloin tililtä viimeksi saatiin tapahtumia ja mihin asti valtuutus on voimassa |
 | `data/varaukset.json` | odottavat korttivaraukset — `hae` kirjoittaa, `aja` täsmäyttää; poistettavissa milloin vain |
 | `data/yhteistalous.json` | yhteistalouden tila: tasauspäivä (mihin asti yhteiskulut on huomioitu), kk-vakiot, läsnäolot, kirjaukset — raportin osio ylläpitää tätä puolestasi |
 | `asetukset/pankkihaku.env` | pankkihaun tunnukset — **ei jaeta, ei versioida** |
