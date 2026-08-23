@@ -241,7 +241,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.2"
+VERSIO = "v0.3"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -3181,6 +3181,119 @@ def _tallenna_tilit(cfg, pankki, tilit, istunto=None):
     turvakirjoita_json(CONFIG, cfg)
     print(f"\n✓ tilit tallennettu asetukset/config.json:iin "
           f"({uusia} uutta, {len(nahdyt) - uusia} päivitettyä)")
+
+
+# --- valtuutuksen osat ilman dialogia -----------------------------------
+# Terminaali kysyy kysymykset jonossa, selain pitää tilaa jota voi muokata.
+# Kumpikin tarvitsee saman tekemisen, joten tekeminen on täällä ja kysyminen
+# kutsujassa. Ilman tätä jakoa selainvelho perisi terminaalin lineaarisuuden:
+# kysymys, johon on jo vastattu, ei ole enää olemassa eikä sitä voi vaihtaa.
+
+def eb_pankkilista(maa="FI"):
+    """Maan pankit valintaa varten."""
+    return _eb_pankit(eb_token(), maa)
+
+
+def eb_aloita_valtuutus(cfg, aspsp, psu_tyyppi, app=None):
+    """Käynnistä pankin tunnistautuminen. Palauttaa (url, redirect).
+
+    Paluuosoite valitaan samalla logiikalla kuin ennen: paikallinen ensin, ja
+    jos rajapinta ei sitä hyväksy, pudotaan sovelluksen https-osoitteeseen —
+    hylkäys tulee vastaan kerran eikä joka kerta."""
+    import uuid
+    tok = eb_token()
+    maa = aspsp.get("country") or (cfg.get("pankkihaku") or {}).get("maa") or "FI"
+    redirect = _valitse_paluuosoite(app, cfg)
+    vaihtoehdot = [redirect]
+    if _on_paikallinen(redirect):
+        vaihtoehdot += [u for u in _paluuosoitteet(app)
+                        if not _on_paikallinen(u)] or [EB_TESTIPALUU]
+    viimeisin = None
+    for i, osoite in enumerate(vaihtoehdot):
+        try:
+            vastaus = _eb_kutsu("/auth", tok, {
+                "access": {"valid_until": (datetime.now().astimezone()
+                                           + timedelta(days=90)).isoformat()},
+                "aspsp": {"name": aspsp["name"], "country": maa},
+                "psu_type": psu_tyyppi,
+                "state": str(uuid.uuid4()),
+                "redirect_url": osoite})
+            ph = cfg.setdefault("pankkihaku", {})
+            if ph.get("redirect_url") != osoite:
+                ph["redirect_url"] = osoite
+            return str(vastaus.get("url", "")), osoite
+        except EBVirhe as e:
+            viimeisin = e
+            if e.koodi == 400 and i + 1 < len(vaihtoehdot):
+                continue
+            raise
+    raise viimeisin
+
+
+def eb_viimeistele_valtuutus(koodi):
+    """Vaihda pankista palannut koodi istunnoksi. Palauttaa (istunto, tilit)."""
+    istunto = _eb_kutsu("/sessions", eb_token(), {"code": _siivoa_koodi(koodi)})
+    return istunto, (istunto.get("accounts") or [])
+
+
+def tilien_ehdotukset(cfg, pankki, tilit):
+    """Ehdotettu nimi ja tunniste jokaiselle tilille — se, mitä käyttäjältä
+    kysytään. Vanha nimi voittaa ehdotuksen, jottei uusinta nimeä tilejä
+    uudelleen käyttäjän selän takana."""
+    lista = ((cfg.get("pankkihaku") or {}).get("tilit") or [])
+    ulos = []
+    for acc in tilit:
+        uid = str(acc.get("uid", ""))
+        if not uid:
+            continue
+        tunniste = _tunniste(acc)
+        vanha = (next((t for t in lista if tunniste
+                       and siisti(str(t.get("tunniste", ""))) == tunniste), None)
+                 or next((t for t in lista if t.get("account_id") == uid), None))
+        ulos.append({
+            "uid": uid, "tunniste": tunniste,
+            "kuvaus": siisti(" ".join(str(x) for x in [acc.get("name"), acc.get("product"),
+                                                       acc.get("usage")] if x)),
+            "ehdotus": (vanha or {}).get("tili") or _ehdota_tilinimi(pankki, acc),
+            "tuttu": vanha is not None})
+    return ulos
+
+
+def tallenna_tilit_nimilla(cfg, pankki, valinnat, istunto=None):
+    """Kirjoita valitut tilit config.jsoniin annetuilla nimillä.
+
+    valinnat: [{"uid", "tili", "tunniste", "mukaan"}]. Ei kysy mitään — nimet
+    on jo päätetty, ja päättäminen kuuluu käyttöliittymälle."""
+    ph = cfg.setdefault("pankkihaku", {})
+    ph["palvelu"] = "enablebanking"
+    lista = ph.setdefault("tilit", [])
+    lista[:] = [t for t in lista if not _on_paikanpitaja(t.get("account_id"))]
+    vanhat_alkaen = {t.get("tili"): t.get("alkaen") for t in lista if t.get("alkaen")}
+    paasy = ((istunto or {}).get("access") or {})
+    uusia, nahdyt = 0, []
+    for v in valinnat:
+        uid, nimi = str(v.get("uid", "")), siisti(str(v.get("tili", "")))
+        if not uid or not nimi or not v.get("mukaan", True):
+            continue
+        tunniste = siisti(str(v.get("tunniste", "")))
+        vanha = (next((t for t in lista if tunniste
+                       and siisti(str(t.get("tunniste", ""))) == tunniste), None)
+                 or next((t for t in lista if t.get("account_id") == uid), None))
+        rivi = {"tili": nimi, "account_id": uid, "tunniste": tunniste,
+                "pankki": siisti(pankki)}
+        if vanha is None:
+            rivi["alkaen"] = _viimeinen_pvm(nimi) or vanhat_alkaen.get(nimi, "")
+            lista.append(rivi)
+            uusia += 1
+        else:
+            vanha.update(rivi)
+        nahdyt.append(uid)
+        paivita_pankkitila(uid, pankki=siisti(pankki), tili=nimi,
+                           session_id=str((istunto or {}).get("session_id") or "") or None,
+                           valtuutus_asti=str(paasy.get("valid_until") or "")[:10] or None,
+                           valtuutettu=date.today().isoformat(), virhe="", virhekoodi=0)
+    turvakirjoita_json(CONFIG, cfg)
+    return {"uusia": uusia, "yhteensa": len(nahdyt)}
 
 
 def eb_valtuuta(cfg, hakusana="", app=None):
