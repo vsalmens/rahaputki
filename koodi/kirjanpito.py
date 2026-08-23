@@ -281,7 +281,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.15"
+VERSIO = "v0.16"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -7345,6 +7345,8 @@ label { display:block; margin:.8rem 0 .3rem; font-size:.9em; color:#6b665c }
 .rivi { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; margin:.8rem 0 0 }
 .viesti, .virhe { padding:.6rem .8rem; border-radius:6px; margin:0 0 1rem }
 .viesti { background:#e6f0e9; border:1px solid #b7d4c3 }
+.varo { background:#f3e3c8; border:1px solid #ddc79a; padding:.6rem .8rem;
+        border-radius:6px; margin:0 0 1rem }
 .virhe { background:#f6e3dc; border:1px solid #dcae98 }
 .kortti { border:1px solid var(--raja); border-radius:8px; padding:.8rem 1rem; margin:0 0 .6rem }
 .kortti h4 { margin:0 0 .2rem; font-size:.95rem }
@@ -7556,9 +7558,13 @@ function avattuLomake(){
 }
 
 function alilomakeUusi(){
+  // Rekisteröinnin jälkeen varoitus korvaamisesta on väärässä ajassa: korvaus
+  // on jo tapahtunut, ja punainen laatikko "uusi rekisteröinti korvaa vanhan"
+  // onnistumisen yläpuolella lukee kuin virhe. Tulos syrjäyttää varoituksen.
+  var tulos = rekisterointiTulos();
   return '<h3>Rekisteröi Rahaputki</h3>' +
-    (T.sovellus.app_id ?
-      '<p class="virhe">Sinulla on jo rekisteröity sovellus (' + e(T.sovellus.app_id) +
+    (T.sovellus.app_id && !tulos ?
+      '<p class="varo">Sinulla on jo rekisteröity sovellus (' + e(T.sovellus.app_id) +
       '). Uusi rekisteröinti <strong>korvaa sen tunnukset tällä koneella</strong>, ja ' +
       'uusi sovellus pitää aktivoida portaalissa ennen kuin haku toimii. Vanha ' +
       'sovellus jää Enable Bankingiin ennalleen — voit palata siihen valitsemalla ' +
@@ -7581,7 +7587,9 @@ function alilomakeUusi(){
     '<label for="sposti">Sähköpostiosoitteesi tietosuoja-asioita varten (vapaaehtoinen)</label>' +
     '<input type="text" id="sposti" data-syote="sposti" value="' + e(SYOTE.sposti) + '" placeholder="oma@osoite.fi">' +
     '<div class="rivi"><button class="toiminto paa" data-t="luo_sovellus">Rekisteröi</button></div>' +
-    ilmoitukset('uusi') + rekisterointiTulos();
+    // Tulos kertoo saman kuin viesti ja enemmän: kaksi kuittausta samasta
+    // asiasta peräkkäin lukee kuin kaksi eri tapahtumaa.
+    (tulos || ilmoitukset('uusi'));
 }
 
 function rekisterointiTulos(){
