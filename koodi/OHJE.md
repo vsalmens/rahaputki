@@ -88,8 +88,9 @@ niin ikään `README.md`; tämä tiedosto on koko kartta.
    -nappia. Rahaputki ehdottaa raamit viimeisten täysien kuukausien
    mediaanista ja kirjoittaa ne tiedostoon `asetukset/budjetti.csv`; sen
    jälkeen sivun yläreuna näyttää kuluvan kuukauden tilanteen palkkeina.
-   Raameja voi muokata suoraan tiedostossa. (Komentoriviltä sama ehdotus
-   erilliseen tiedostoon: `python3 koodi/kirjanpito.py budjetti-ehdotus`.)
+   Raameja muokataan sivulla rivin ✎-napista tai suoraan tiedostossa.
+   (Komentoriviltä sama ehdotus erilliseen tiedostoon:
+   `python3 koodi/kirjanpito.py budjetti-ehdotus`.)
 
 ## Rituaali jatkossa (~15–30 min, milloin huvittaa)
 
@@ -519,7 +520,7 @@ päivään painettu sulkeminen perutaan napista *avaa viimeisin kausi*.
 | `Aloita.command` / `Aloita.bat` | kaksoisklikattava käynnistin (macOS / Windows) — tynkä, joka avaa Rahaputken selaimeen; kaikki toiminnot löytyvät sivulta |
 | `asetukset/config.json` | lähteiden sarakekartat, kategoriat, omat IBANit |
 | `koodi/config.esimerkki.json`, `koodi/saannot.esimerkki.csv` | riisutut aloituspohjat, joista ensikäynnistys tekee omasi juureen |
-| `asetukset/budjetti.csv` | kk-raamit ja kertyvät erät (täytetään vasta kun toteumaa on) |
+| `asetukset/budjetti.csv` | kk-raamit, kuukausipoikkeukset ja kertyvät erät (täytetään vasta kun toteumaa on) |
 | `raportit/raportti.html` | kuukausigraafi + budjettivertailu + matriisi |
 | `raportit/yhteenveto_kk.csv` | sama matriisi Sheets-liitosta varten |
 | `raportit/yhteistalous_erittely.html` | tulostettava kotitalouserittely avoimelta kaudelta (selaimesta PDF) |
@@ -559,6 +560,23 @@ päivään painettu sulkeminen perutaan napista *avaa viimeisin kausi*.
   vanhemmat rivit tuomatta, vaikka ne olisivat tiedostossa — kätevä, jos et
   halua ottaa mukaan koko historiaa. Tuonti kertoo aina montako riviä rajaus
   pudotti. Tyhjä arvo (oletus) tarkoittaa, ettei mitään rajata pois.
+- **Raamin muuttaminen ja kuukausipoikkeukset**: budjettirivin ✎-napista voi
+  antaa kategorialle uuden raamin joko **pysyväksi** (perusraami muuttuu) tai
+  **vain kuluvalle kuukaudelle** (muutto, remontti, pitkä reissu). Kuukauden
+  oma raami menee tiedostossa omalle rivilleen `kuukausi`-sarakkeen kanssa,
+  eikä perusraami muutu:
+
+  ```
+  kategoria;kk_raami;kuukausi
+  Matkailu;270;
+  Matkailu;1400;2026-08
+  ```
+
+  Poikkeusrivistä tulee raportissa merkintä `·kk` kategorian nimen perään, ja
+  saman napin takaa sen voi palauttaa perusraamiin. **Poista budjetista**
+  ottaa kategorian pois raameista kokonaan; kertyvän erän tiedot samalla
+  rivillä säilyvät. Ilman raamia jääneet kategoriat, joissa on tämän kuun
+  menoja, listataan osion alle — ja niille voi antaa raamin +-napista.
 - **Kertyvät erät**: kaikkea ei voi budjetoida kuukausittain. Vuosivakuutus,
   kesäloma tai renkaiden vaihto on kertasumma, joka romahduttaa yhden
   kuukauden ja jättää yksitoista muuta näyttämään paremmalta kuin ne ovat.

@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.24"
+VERSIO = "v0.25"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -4351,19 +4351,110 @@ def kertyva_laske(k, tanaan=None):
             "erap": erap, "myohassa": kk is not None and kk < 0}
 
 
-def lue_budjetti():
-    raamit = {}
-    if BUDJETTI.exists():
-        teksti, _ = lue_teksti(BUDJETTI)
-        if True:
-            for rivi in csv.DictReader(teksti.splitlines(), delimiter=";"):
-                arvo = siisti(rivi.get("kk_raami", ""))
-                if arvo:
-                    try:
-                        raamit[siisti(rivi["kategoria"])] = parsi_summa(arvo)
-                    except ValueError:
-                        pass
+def lue_budjetti(kuu=None):
+    """Kuukausiraamit budjetti.csv:stä.
+
+    Rivi, jolla on kuukausi-sarake täytettynä, on sen yhden kuukauden oma
+    raami ja voittaa perusraamin. Näin poikkeuskuukausi (muutto, remontti,
+    pitkä reissu) ei jää pysyväksi normaaliksi — perusraami on edelleen
+    tiedostossa siinä missä ennenkin."""
+    raamit, poikkeus = {}, {}
+    for rivi in _budjetti_rivit()[1]:
+        arvo = siisti(str(rivi.get("kk_raami", "") or ""))
+        if not arvo:
+            continue
+        rivin_kuu = siisti(str(rivi.get("kuukausi", "") or ""))
+        if rivin_kuu and rivin_kuu != kuu:
+            continue
+        try:
+            summa = parsi_summa(arvo)
+        except ValueError:
+            continue
+        (poikkeus if rivin_kuu else raamit)[siisti(str(rivi.get("kategoria", "")))] = summa
+    raamit.update(poikkeus)
     return raamit
+
+
+def raamipoikkeukset(kuu):
+    """Kategoriat, joille on annettu juuri tälle kuukaudelle oma raami."""
+    ulos = set()
+    for rivi in _budjetti_rivit()[1]:
+        if (siisti(str(rivi.get("kuukausi", "") or "")) == kuu
+                and siisti(str(rivi.get("kk_raami", "") or ""))):
+            ulos.add(siisti(str(rivi.get("kategoria", ""))))
+    return ulos
+
+
+def _budjetti_rivit(polku=None):
+    """(sarakkeet, rivit) budjetti.csv:stä. Sarakkeet säilytetään sellaisenaan,
+    jotta käsin lisätty sisältö ei katoa kirjoituksessa."""
+    polku = polku or BUDJETTI
+    kentat = ["kategoria", "kk_raami", "kuukausi"]
+    if not polku.exists():
+        return kentat, []
+    teksti, _ = lue_teksti(polku)
+    lukija = csv.DictReader(teksti.splitlines(), delimiter=";")
+    rivit = list(lukija)
+    for k in (lukija.fieldnames or []):
+        if k and k not in kentat:
+            kentat.append(k)
+    return kentat, rivit
+
+
+def _budjetti_talleta(kentat, rivit, polku=None):
+    puskuri = io.StringIO()
+    w = csv.DictWriter(puskuri, fieldnames=kentat, delimiter=";",
+                       extrasaction="ignore", lineterminator="\r\n")
+    w.writeheader()
+    for r in rivit:
+        w.writerow({k: (r.get(k) or "") for k in kentat})
+    turvakirjoita(polku or BUDJETTI, puskuri.getvalue())
+
+
+def aseta_raami(kategoria, summa, kuu=None):
+    """Asettaa kategorian raamin — joko pysyvästi tai yhdelle kuukaudelle.
+
+    Kuukausiraami menee omalle rivilleen kuukausi-sarakkeen kanssa, jotta
+    perusraami säilyy koskemattomana ja poikkeus näkyy tiedostossa sinä mitä
+    se on."""
+    kentat, rivit = _budjetti_rivit()
+    kuu = siisti(str(kuu or ""))
+    # Desimaalipilkku, koska tiedostoa luetaan suomalaisittain: piste
+    # tulkittaisiin tuhaterottimeksi ja 1200.5 muuttuisi 12005:ksi.
+    arvo = "" if summa is None else f"{summa:g}".replace(".", ",")
+    for r in rivit:
+        if (siisti(str(r.get("kategoria", "") or "")) == kategoria
+                and siisti(str(r.get("kuukausi", "") or "")) == kuu):
+            r["kk_raami"] = arvo
+            break
+    else:
+        rivit.append(dict({k: "" for k in kentat}, kategoria=kategoria,
+                          kk_raami=arvo, kuukausi=kuu))
+    _budjetti_talleta(kentat, rivit)
+
+
+def poista_raami(kategoria, kuu=None):
+    """Poistaa raamin. Ilman kuukautta katoaa koko kategoria budjetista
+    (myös kuukausipoikkeukset); kuukauden kanssa vain sen kuun poikkeus.
+
+    Rivi, jolla on kertyvän erän tietoja, jää tiedostoon pelkkä raami
+    tyhjennettynä — muuten vuosilaskun korvamerkintä lähtisi mukana."""
+    kentat, rivit = _budjetti_rivit()
+    kuu = siisti(str(kuu or ""))
+    jaa = []
+    for r in rivit:
+        rivin_kuu = siisti(str(r.get("kuukausi", "") or ""))
+        if siisti(str(r.get("kategoria", "") or "")) != kategoria:
+            jaa.append(r)
+        elif kuu and rivin_kuu != kuu:
+            jaa.append(r)        # eri kuukausi tai perusraami: ei kosketa
+        elif rivin_kuu:
+            pass                 # poikkeusrivi katoaa
+        elif any(siisti(str(r.get(k, "") or ""))
+                 for k in ("tavoite", "erapaiva", "kertynyt")):
+            r["kk_raami"] = ""   # kertyvä erä jää, pelkkä raami lähtee
+            jaa.append(r)
+    _budjetti_talleta(kentat, jaa)
 
 
 def koosta(ledger, cfg):
@@ -5249,18 +5340,23 @@ def budjetti_osio(taulu, raamit, tyypit):
     rivit, yht_tot, yht_raami = [], 0.0, 0.0
     kohteet = [(k, taulu.get(k, {}).get(kuu, 0.0), raamit[k]) for k in raamit
                if tyypit.get(k, "meno") == "meno"]
+    poikkeukset = raamipoikkeukset(kuu)
     for k, tot, raami in sorted(kohteet, key=lambda x: -x[2]):
         yht_tot += tot
         yht_raami += raami
-        rivit.append(_budjettirivi(k, tot, raami, tahti))
+        rivit.append(_budjettirivi(k, tot, raami, tahti,
+                                   poikkeus=(k in poikkeukset)))
     ilman = [(k, taulu.get(k, {}).get(kuu, 0.0)) for k in taulu
              if k not in raamit and tyypit.get(k, "meno") == "meno"
              and taulu.get(k, {}).get(kuu, 0.0) > 0]
     lisa = ""
     if ilman:
-        lisa = ('<p class="pikkuteksti">Ilman raamia tässä kuussa: '
-                + ", ".join(f"{e(k)} {fmt_eur(v)} €" for k, v in
-                            sorted(ilman, key=lambda x: -x[1])[:6])
+        lisa = ('<p class="pikkuteksti bud-ilman">Ilman raamia tässä kuussa: '
+                + ", ".join(
+                    f'<span class="bud-vailla">{e(k)} {fmt_eur(v)} €'
+                    f'<button type="button" class="bud-lisaa" data-bkat="{e(k)}" hidden '
+                    f'title="anna kategorialle raami">+</button></span>'
+                    for k, v in sorted(ilman, key=lambda x: -x[1])[:6])
                 + (" …" if len(ilman) > 6 else "") + "</p>")
     return (f'<section id="budjetti" class="budjetti">'
             f'<h2>Kuukausibudjetti · {_kuunimi(kuu)}</h2>'
@@ -5271,26 +5367,50 @@ def budjetti_osio(taulu, raamit, tyypit):
             + lisa + '</section>')
 
 
-def _budjettirivi(nimi, tot, raami, tahti, yhteensa=False):
+def _budjettirivi(nimi, tot, raami, tahti, yhteensa=False, poikkeus=False):
     """Yksi palkki lukuineen. Sentit pyöristetään pois: budjettia luetaan
-    silmäyksellä, eikä 611,37 kerro enempää kuin 611."""
+    silmäyksellä, eikä 611,37 kerro enempää kuin 611.
+
+    Raamin ylityttyä palkki on kokonaan viivoitettu — raami on käytetty
+    loppuun, eikä osittain täysi palkki kertoisi sitä. Kuinka pahasti yli
+    ollaan, lukee palkin vieressä kertoimena (+49 %, ×2,1): palkin pituudella
+    sitä ei voi näyttää menettämättä rivien vertailtavuutta."""
     e = html.escape
     osuus = (tot / raami) if raami else 0.0
-    leveys = max(min(osuus, 1.0), 0.0) * 100
-    yli = max(osuus - 1.0, 0.0)
-    luokka = "yli" if osuus > 1.0 else ("lahella" if osuus > tahti + 0.15 else "hyva")
+    yli = osuus > 1.0
+    leveys = 100.0 if yli else max(min(osuus, 1.0), 0.0) * 100
+    luokka = "yli" if yli else ("lahella" if osuus > tahti + 0.15 else "hyva")
     jaljella = raami - tot
     lopu = (f'<span class="miinus">yli {_e0(-jaljella)} €</span>' if jaljella < 0
             else f'<span class="plus">{_e0(jaljella)} € jäljellä</span>')
-    return (f'<div class="bud-rivi{" yhteensa" if yhteensa else ""}">'
-            f'<div class="bud-nimi">{e(nimi)}</div>'
-            f'<div class="bud-palkki"><span class="bud-tayte {luokka}" '
-            f'style="width:{leveys:.1f}%"></span>'
-            + (f'<span class="bud-yli" style="width:{min(yli, 1.0) * 100:.1f}%"></span>'
-               if yli else "")
-            + f'<i style="left:{tahti * 100:.1f}%"></i></div>'
+    merkki = (f'<span class="bud-kerroin">{_ylikerroin(osuus)}</span>' if yli else "")
+    tahti_txt = (f'<i style="left:{tahti * 100:.1f}%"></i>' if 0 < tahti < 1 else "")
+    poikkeus_txt = ('<span class="bud-poikkeus" title="tälle kuukaudelle asetettu '
+                    'oma raami">·kk</span>' if poikkeus else "")
+    muokkaa = ("" if yhteensa else
+               f'<button type="button" class="bud-muokkaa" data-bkat="{e(nimi)}" hidden '
+               f'title="muuta raamia tai poista budjetista">✎</button>')
+    nimisolu = (f'<div class="bud-nimi">{e(nimi)}{poikkeus_txt}</div>' if yhteensa else
+                f'<div class="bud-nimi klik" data-kat="{e(nimi)}" title="katso rivit">'
+                f'{e(nimi)}{poikkeus_txt}</div>')
+    return (f'<div class="bud-rivi{" yhteensa" if yhteensa else ""}" '
+            f'data-bkat="{e(nimi)}" data-raami="{raami:g}">'
+            + nimisolu
+            + (f'<div class="bud-palkki"><span class="bud-tayte {luokka}" '
+            f'style="width:{leveys:.1f}%"></span>{tahti_txt}</div>'
+            f'<div class="bud-yli">{merkki}</div>'
             f'<div class="bud-luvut"><b class="{luokka}">{osuus * 100:.0f} %</b>'
-            f'<span>{_e0(tot)} / {_e0(raami)} € · {lopu}</span></div></div>')
+            f'<span>{_e0(tot)} / {_e0(raami)} € · {lopu}</span></div>'
+            f'<div class="bud-tyokalu">{muokkaa}</div></div>'))
+
+
+def _ylikerroin(osuus):
+    """Ylityksen suuruus lukuna: pienet lisäyksinä, isot kertoimina.
+    149 % → +49 %, 205 % → ×2,1. Prosenttiluku yksin ei erota 205:tä 315:stä
+    silmäyksellä, kerroin erottaa."""
+    if osuus < 2.0:
+        return f"+{(osuus - 1) * 100:.0f} %"
+    return ("×" + f"{osuus:.1f}").replace(".", ",")
 
 
 def _e0(v):
@@ -5420,7 +5540,7 @@ def rakenna_raportit(ledger, cfg, kk=13, kirjoita_sivu=True):
     menokat = [k for k in taulu if tyypit.get(k, "meno") == "meno"]
     menokat.sort(key=lambda k: -sum(taulu[k][m] for m in kuukaudet))
     tulokat = [k for k in taulu if tyypit.get(k) == "tulo"]
-    raamit = lue_budjetti()
+    raamit = lue_budjetti(date.today().isoformat()[:7])
 
     # --- koko historian koonti: yhteensä + keskim./kk + keskim./v ---
     tanaan_kk = date.today().isoformat()[:7]
@@ -7291,6 +7411,81 @@ window.addEventListener('DOMContentLoaded',function(){
     const tr=n.closest('tr[data-tili-idx]');
     tasmayta(tr,parseInt(tr.getAttribute('data-tili-idx'),10));
   });
+  const KUUKAUSI=document.body.getAttribute('data-kuukausi')||'';
+  const KUUNIMI=document.body.getAttribute('data-kuunimi')||'t\u00e4lle kuulle';
+  function budPyynto(runko,nappi){
+    if(nappi){nappi.disabled=true;}
+    fetch('api/budjetti',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(runko)}).then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){if(nappi)nappi.disabled=false;alert(v.virhe||'ei onnistunut');return;}
+        location.reload();
+      }).catch(function(e){if(nappi)nappi.disabled=false;alert('ei onnistunut: '+e);});
+  }
+  function budEditori(kat,rivi,nykyinen,onPoikkeus){
+    const vanha=document.querySelector('.bud-editori');
+    if(vanha){const oli=vanha.getAttribute('data-kat');vanha.remove();if(oli===kat)return;}
+    const d=document.createElement('div');
+    d.className='bud-editori';d.setAttribute('data-kat',kat);
+    const otsikko=document.createElement('span');
+    otsikko.innerHTML='<b>'+kat.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</b> raami';
+    const syote=document.createElement('input');
+    syote.type='text';syote.inputMode='decimal';syote.value=nykyinen||'';
+    const eur=document.createElement('span');eur.textContent='\u20ac';
+    function luku(){
+      const n=parseFloat(String(syote.value).replace(',','.').replace(/\\s/g,''));
+      if(!isFinite(n)||n<0){alert('anna raami euroina');return null;}
+      return n;}
+    const kk=document.createElement('button');
+    kk.type='button';kk.className='paa';kk.textContent=KUUNIMI+'lle';
+    kk.title='vain t\u00e4m\u00e4n kuukauden raami; perusraami s\u00e4ilyy';
+    kk.onclick=function(){const n=luku();if(n===null)return;
+      budPyynto({kategoria:kat,raami:n,kuukausi:KUUKAUSI},kk);};
+    const pysyva=document.createElement('button');
+    pysyva.type='button';pysyva.textContent='pysyv\u00e4ksi';
+    pysyva.title='muuttaa perusraamin kaikille kuukausille';
+    pysyva.onclick=function(){const n=luku();if(n===null)return;
+      budPyynto({kategoria:kat,raami:n},pysyva);};
+    d.appendChild(otsikko);d.appendChild(syote);d.appendChild(eur);
+    d.appendChild(kk);d.appendChild(pysyva);
+    if(onPoikkeus){
+      const pal=document.createElement('button');
+      pal.type='button';pal.textContent='palauta perusraami';
+      pal.onclick=function(){budPyynto({kategoria:kat,poista:true,kuukausi:KUUKAUSI},pal);};
+      d.appendChild(pal);
+    }
+    if(rivi){
+      const pois=document.createElement('button');
+      pois.type='button';pois.className='vaara';pois.textContent='poista budjetista';
+      pois.onclick=function(){
+        if(!confirm(kat+': poistetaanko kategoria budjetista? Kertyv\u00e4n er\u00e4n '+
+                    'tiedot s\u00e4ilyv\u00e4t.'))return;
+        budPyynto({kategoria:kat,poista:true},pois);};
+      d.appendChild(pois);
+    }
+    const peru=document.createElement('button');
+    peru.type='button';peru.textContent='peruuta';
+    peru.onclick=function(){d.remove();};
+    d.appendChild(peru);
+    const ohje=document.createElement('span');
+    ohje.className='pikkuteksti';
+    ohje.textContent='Kuukausiraami koskee vain '+KUUNIMI+'ta ja tallentuu omalle '+
+      'rivilleen tiedostoon asetukset/budjetti.csv. Perusraami j\u00e4\u00e4 ennalleen.';
+    d.appendChild(ohje);
+    if(rivi){rivi.parentNode.insertBefore(d,rivi.nextSibling);}
+    else{const s=document.getElementById('budjetti');s.appendChild(d);}
+    syote.focus();syote.select();
+  }
+  document.addEventListener('click',function(ev){
+    const m=ev.target.closest('.bud-muokkaa');
+    if(m){ev.preventDefault();ev.stopPropagation();
+      const rivi=m.closest('.bud-rivi');
+      budEditori(m.getAttribute('data-bkat'),rivi,rivi.getAttribute('data-raami')||'',
+                 !!rivi.querySelector('.bud-poikkeus'));
+      return;}
+    const l=ev.target.closest('.bud-lisaa');
+    if(l){ev.preventDefault();ev.stopPropagation();
+      budEditori(l.getAttribute('data-bkat'),null,'',false);}
+  });
   const budNappi=document.getElementById('nappi-budjetti');
   if(budNappi)budNappi.addEventListener('click',function(){
     budNappi.disabled=true;budNappi.textContent='Lasketaan\u2026';
@@ -7315,6 +7510,8 @@ window.addEventListener('DOMContentLoaded',function(){
       'selaa-tila \u2713 muutokset tallentuvat heti';
       document.getElementById('ajonapit').hidden=false;
       if(budNappi)budNappi.hidden=false;
+      document.querySelectorAll('.bud-muokkaa,.bud-lisaa').forEach(function(b){
+        b.hidden=false;});
       document.querySelectorAll('.tasmnappi').forEach(function(b){b.hidden=false;});
       valvoPalvelinta();}
   }).catch(function(){
@@ -7405,21 +7602,43 @@ td.num.klik {{ text-decoration:none }}
   box-shadow:0 1px 2px rgba(38,36,31,.06) }}
 .budjetti h2 {{ margin:0 0 .15rem }}
 .budjetti-tahti {{ margin:0 0 .9rem; font-size:.82rem; color:#6b6558 }}
-.bud-rivi {{ display:grid; grid-template-columns:minmax(9rem,14rem) 1fr minmax(15rem,17rem);
-  gap:.7rem; align-items:center; padding:.28rem 0 }}
+.bud-rivi {{ display:grid;
+  grid-template-columns:minmax(8rem,13rem) 1fr 3.4rem minmax(14rem,16rem) 1.6rem;
+  gap:.55rem; align-items:center; padding:.28rem 0 }}
 .bud-nimi {{ font-size:.92rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }}
 .bud-palkki {{ position:relative; height:20px; border-radius:10px; overflow:hidden;
   background:linear-gradient(180deg,#e4ded1,#f1ece1);
   box-shadow:inset 0 1px 3px rgba(38,36,31,.22), inset 0 -1px 0 rgba(255,255,255,.7) }}
-.bud-tayte, .bud-yli {{ position:absolute; top:0; bottom:0; border-radius:10px;
+.bud-tayte {{ position:absolute; top:0; bottom:0; left:0; border-radius:10px;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.55), inset 0 -3px 6px rgba(0,0,0,.18);
   transition:width .6s cubic-bezier(.2,.8,.3,1) }}
-.bud-tayte {{ left:0 }}
 .bud-tayte.hyva {{ background:linear-gradient(180deg,#6ec69f 0%,#2e7d5b 60%,#25654a 100%) }}
 .bud-tayte.lahella {{ background:linear-gradient(180deg,#f0c268 0%,#c08a1e 60%,#a2731a 100%) }}
-.bud-tayte.yli {{ background:linear-gradient(180deg,#e08a63 0%,#b3502d 60%,#96411f 100%) }}
-.bud-yli {{ right:0; background:repeating-linear-gradient(135deg,#96411f 0 6px,#7d3517 6px 12px);
-  opacity:.85; border-radius:0 10px 10px 0 }}
+.bud-tayte.yli {{ background:
+  repeating-linear-gradient(135deg,rgba(255,255,255,.16) 0 6px,rgba(0,0,0,.10) 6px 12px),
+  linear-gradient(180deg,#c9673f 0%,#a94a29 60%,#8e3d1c 100%) }}
+.bud-yli {{ font-size:.85rem; font-weight:bold; color:var(--meno); text-align:left;
+  white-space:nowrap }}
+.bud-poikkeus {{ font-size:.7rem; color:#8a8271; margin-left:.35rem; letter-spacing:.03em }}
+.bud-tyokalu {{ text-align:right }}
+.bud-muokkaa, .bud-lisaa {{ font:inherit; font-size:.85rem; line-height:1; padding:.1rem .3rem;
+  border:1px solid transparent; border-radius:5px; background:none; color:#8a8271;
+  cursor:pointer }}
+.bud-muokkaa:hover, .bud-lisaa:hover {{ border-color:#d5cdbc; background:#fff; color:var(--muste) }}
+.bud-vailla {{ white-space:nowrap }}
+.bud-nimi.klik {{ cursor:pointer }}
+.bud-nimi.klik:hover {{ text-decoration:underline }}
+.bud-editori {{ display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;
+  margin:.1rem 0 .5rem; padding:.55rem .7rem; border-radius:10px;
+  background:#fffdf8; border:1px solid #e2dbcb; font-size:.85rem }}
+.bud-editori input {{ font:inherit; width:5.5rem; padding:.2rem .4rem;
+  border:1px solid #cfc7b6; border-radius:5px; text-align:right }}
+.bud-editori button {{ font:inherit; font-size:.85rem; padding:.25rem .6rem;
+  border-radius:6px; border:1px solid var(--muste); background:#fff;
+  color:var(--muste); cursor:pointer }}
+.bud-editori button.paa {{ background:var(--muste); color:var(--paperi) }}
+.bud-editori button.vaara {{ border-color:var(--meno); color:var(--meno) }}
+.bud-editori .pikkuteksti {{ flex-basis:100%; margin:.1rem 0 0 }}
 .bud-palkki i {{ position:absolute; top:0; bottom:0; width:2px; margin-left:-1px;
   background:rgba(38,36,31,.42); z-index:2 }}
 .bud-luvut {{ display:flex; gap:.55rem; align-items:baseline; justify-content:flex-end;
@@ -7432,14 +7651,17 @@ td.num.klik {{ text-decoration:none }}
 .bud-rivi.yhteensa .bud-nimi {{ font-weight:600 }}
 .budjetti.tyhja p {{ max-width:44rem }}
 .budjetti .rivi {{ display:flex; gap:.7rem; align-items:center; flex-wrap:wrap }}
-.budjetti button {{ font:inherit; font-size:.9rem; padding:.45rem 1rem; border-radius:8px;
+#nappi-budjetti {{ font:inherit; font-size:.9rem; padding:.45rem 1rem; border-radius:8px;
   border:1px solid var(--muste); background:var(--muste); color:var(--paperi); cursor:pointer }}
-.budjetti button:hover:enabled {{ background:#3d3a33 }}
-.budjetti button:disabled {{ opacity:.5; cursor:not-allowed }}
+#nappi-budjetti:hover:enabled {{ background:#3d3a33 }}
+#nappi-budjetti:disabled {{ opacity:.5; cursor:not-allowed }}
 button.kevyt {{ font:inherit; font-size:.85em; opacity:.7 }}
 button.kevyt:hover {{ opacity:1 }}
 @media (max-width:700px) {{
-  .bud-rivi {{ grid-template-columns:1fr; gap:.15rem; padding:.45rem 0 }}
+  .bud-rivi {{ grid-template-columns:1fr 3.4rem; gap:.15rem .5rem; padding:.45rem 0 }}
+  .bud-nimi, .bud-palkki, .bud-luvut {{ grid-column:1 }}
+  .bud-yli {{ grid-row:2; grid-column:2; text-align:right }}
+  .bud-tyokalu {{ grid-row:1; grid-column:2 }}
   .bud-luvut {{ justify-content:flex-start }}
 }}
 .huomio {{ background:#f3e3c8; padding:.6rem .9rem; border-radius:6px }}
@@ -7497,7 +7719,7 @@ tr.poistettu td {{ text-decoration:line-through; opacity:.5 }}
   font-size:.85rem }}
 .sform input,.sform select,.sform button {{ font-size:.82rem }}
 code {{ font-family:ui-monospace,Menlo,monospace }}
-</style></head><body><main>
+</style></head><body data-kuukausi="{date.today().isoformat()[:7]}" data-kuunimi="{_kuunimi(date.today().isoformat()[:7]).split()[0]}"><main>
 <h1>Rahaputki</h1>
 <p class="meta">Rahaputki {VERSIO} · päivitetty {date.today().strftime('%d.%m.%Y')} · {len(ledger)} tapahtumaa ·
 kategorian nimeä, matriisin solua tai kaavion palkkia klikkaamalla pääset katsomaan ja muokkaamaan rivejä</p>
@@ -7609,20 +7831,13 @@ def kirjoita_budjetti(rivit, polku=None):
     sellaisenaan — muuten yksi napinpainallus pyyhkisi vuosilaskujen
     korvamerkinnät."""
     polku = polku or BUDJETTI
-    kentat, vanhat = ["kategoria", "kk_raami"], []
-    if polku.exists():
-        teksti, _ = lue_teksti(polku)
-        lukija = csv.DictReader(teksti.splitlines(), delimiter=";")
-        vanhat = list(lukija)
-        for k in (lukija.fieldnames or []):
-            if k and k not in kentat:
-                kentat.append(k)
+    kentat, vanhat = _budjetti_rivit(polku)
     jaljella = {nimi: arvo for nimi, arvo in rivit}
     ulos = []
     for r in vanhat:
         rivi = {k: (r.get(k) or "") for k in kentat}
         nimi = siisti(str(r.get("kategoria", "") or ""))
-        if nimi in jaljella:
+        if nimi in jaljella and not siisti(str(r.get("kuukausi", "") or "")):
             rivi["kk_raami"] = jaljella.pop(nimi)
         ulos.append(rivi)
     for nimi, arvo in rivit:
@@ -7630,12 +7845,7 @@ def kirjoita_budjetti(rivit, polku=None):
             del jaljella[nimi]
             ulos.append(dict({k: "" for k in kentat},
                              kategoria=nimi, kk_raami=arvo))
-    puskuri = io.StringIO()
-    w = csv.DictWriter(puskuri, fieldnames=kentat, delimiter=";",
-                       extrasaction="ignore", lineterminator="\r\n")
-    w.writeheader()
-    w.writerows(ulos)
-    turvakirjoita(polku, puskuri.getvalue())
+    _budjetti_talleta(kentat, ulos, polku)
 
 
 def cmd_budjetti(args):
@@ -9158,6 +9368,29 @@ def cmd_selaa(args):
                     saie.start()
                     return self._json({"ok": True, "komento": komento})
                 if self.path == "/api/budjetti":
+                    kat = siisti(str(pyynto.get("kategoria", "")))
+                    if kat:
+                        kuu = siisti(str(pyynto.get("kuukausi", "")))
+                        if pyynto.get("poista"):
+                            poista_raami(kat, kuu or None)
+                            _raportti_vanheni()
+                            return self._json({"ok": True})
+                        raaka = pyynto.get("raami", "")
+                        try:
+                            # Selain lähettää luvun, käsin kirjoitettu voi olla
+                            # "350" tai "1 200,50" — molemmat kelpaavat.
+                            summa = (round(float(raaka), 2)
+                                     if isinstance(raaka, (int, float))
+                                     else parsi_summa(str(raaka)))
+                        except (ValueError, TypeError):
+                            return self._json({"ok": False,
+                                               "virhe": "raami ei ole luku"})
+                        if summa < 0:
+                            return self._json({"ok": False,
+                                               "virhe": "raami ei voi olla negatiivinen"})
+                        aseta_raami(kat, summa, kuu or None)
+                        _raportti_vanheni()
+                        return self._json({"ok": True})
                     cfg = lue_config()
                     ledger = lue_ledger()
                     kuukaudet, taulu, _t, _m = koosta(ledger, cfg)
