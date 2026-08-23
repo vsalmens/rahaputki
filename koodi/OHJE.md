@@ -659,6 +659,23 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   saldo (ITBD/CLBD); tähdellä merkitty sisältää myös odottavat korttivaraukset,
   joita kirjanpidossa ei vielä ole.
 
+  **Täsmäytys** tehdään raportin Pankkiyhteydet-taulukosta: rivin
+  *Täsmäytä*-nappi hakee **sen yhden tilin** saldon ja vertaa sitä
+  kirjanpitoon. Vertailu ei ole absoluuttinen summa — pääkirja alkaa
+  tilikohtaisesta alkupäivästä eikä tilin avaamisesta — vaan se tehdään
+  *ankkurista*: hyväksytystä saldosta ja sen hetken pääkirjan summasta.
+
+      odotettu = ankkurin saldo + (pääkirjan summa nyt − pääkirjan summa ankkurilla)
+
+  Näin päivärajat eivät haittaa: jälkikäteen ilmestynyt vanhalla
+  kirjauspäivällä varustettu tapahtuma siirtää odotusta oikein, vaikka se
+  putoaisi keskelle historiaa. Ensimmäinen täsmäytys vain asettaa ankkurin.
+  Jos eroa tulee myöhemmin, sen voi joko selvittää (rivi puuttuu, tuli
+  kahdesti, tai putki ohitti sen) tai hyväksyä — hyväksyminen ankkuroi
+  uudelleen ja jättää eron muistiin, jottei tieto selvittämättä jääneestä
+  katoa. Jos saldo on tyyppiä ITAV, myös odottavat varaukset otetaan
+  vertailuun mukaan, koska ne ovat mukana pankinkin luvussa.
+
   Jokainen rajapintakutsu kirjautuu tiedostoon `data/pankkiloki.csv`: aika,
   kohde, tulos, HTTP-koodi, kesto ja vastauksen koko. Rajan ylittyessä mukaan
   tulee pankin `Retry-After`-otsake, jos se on mukana. Näin hakurajan

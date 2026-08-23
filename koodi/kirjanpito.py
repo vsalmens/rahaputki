@@ -588,6 +588,86 @@ def turvakirjoita(polku, teksti):
         "  versio on tallessa eikä mitään rikkoutunut — kokeile uudelleen.")
 
 
+def _tilin_summa(ledger, tili, varaukset_mukaan=False):
+    """Tilin rivien summa pääkirjassa. Varaukset mukaan vain jos vertailukohta
+    (pankin saldo) sisältää nekin."""
+    summa = 0.0
+    for r in ledger:
+        if r.get("tili") != tili:
+            continue
+        if r.get("tila") == VARAUS and not varaukset_mukaan:
+            continue
+        try:
+            summa += float(r.get("summa") or 0)
+        except (TypeError, ValueError):
+            continue
+    return round(summa, 2)
+
+
+def _vertailukelpoinen(tyyppi):
+    """Kirjattu saldo (ITBD/CLBD) vastaa kirjattuja rivejä. ITAV sisältää myös
+    odottavat korttivaraukset — silloin vertailuun otetaan varauksetkin."""
+    return str(tyyppi or "").upper().startswith(("ITBD", "CLBD"))
+
+
+def tasmayta(ledger, cfg, account_id):
+    """Vertaa pankin saldoa kirjanpitoon ankkurin kautta.
+
+    Ankkuri on hyväksytty lähtöpiste: saldo, jonka käyttäjä on todennut
+    oikeaksi, ja pääkirjan summa sillä hetkellä. Vertailu on niiden erotusten
+    vertailu, ei absoluuttinen summa:
+
+        odotettu = ankkurin saldo + (pääkirjan summa nyt − pääkirjan summa ankkurilla)
+
+    Näin päivärajat eivät haittaa: jälkikäteen ilmestynyt vanhalla
+    kirjauspäivällä varustettu tapahtuma siirtää odotettua saldoa oikein,
+    vaikka se ilmestyisi keskelle historiaa. Absoluuttinen vertailu ei olisi
+    mahdollinenkaan, koska pääkirja alkaa tilikohtaisesta alkupäivästä eikä
+    tilin avaamisesta."""
+    tila = lue_pankkitila().get(str(account_id), {})
+    saldo = tila.get("saldo")
+    if not isinstance(saldo, (int, float)):
+        return {"ok": False, "virhe": "tilin saldoa ei ole haettu"}
+    nimi = tila.get("tili") or next(
+        (t.get("tili") for t in ((cfg.get("pankkihaku") or {}).get("tilit") or [])
+         if str(t.get("account_id")) == str(account_id)), "")
+    tyyppi = str(tila.get("saldo_tyyppi", ""))
+    varaukset_mukaan = not _vertailukelpoinen(tyyppi)
+    summa_nyt = _tilin_summa(ledger, nimi, varaukset_mukaan)
+    tulos = {"ok": True, "tili": nimi, "pankissa": round(float(saldo), 2),
+             "saldo_tyyppi": tyyppi, "saldo_haettu": tila.get("saldo_haettu", ""),
+             "varaukset_mukana": varaukset_mukaan,
+             "kirjanpito_summa": summa_nyt}
+    if not isinstance(tila.get("ankkuri_saldo"), (int, float)):
+        tulos.update(ankkuri=None, odotettu=None, ero=None)
+        return tulos
+    odotettu = round(float(tila["ankkuri_saldo"])
+                     + (summa_nyt - float(tila.get("ankkuri_summa") or 0)), 2)
+    tulos.update(ankkuri={"saldo": tila["ankkuri_saldo"], "pvm": tila.get("ankkuri_pvm", ""),
+                          "summa": tila.get("ankkuri_summa"),
+                          "ero": tila.get("ankkuri_ero", 0)},
+                 odotettu=odotettu,
+                 ero=round(tulos["pankissa"] - odotettu, 2))
+    return tulos
+
+
+def ankkuroi(ledger, cfg, account_id):
+    """Hyväksy pankin saldo lähtöpisteeksi. Mahdollinen ero jää muistiin — se
+    on tieto siitä, että jotain jäi selvittämättä, eikä sitä pidä hukata."""
+    tulos = tasmayta(ledger, cfg, account_id)
+    if not tulos.get("ok"):
+        return tulos
+    paivita_pankkitila(account_id,
+                       ankkuri_saldo=tulos["pankissa"],
+                       ankkuri_summa=tulos["kirjanpito_summa"],
+                       ankkuri_tyyppi=tulos["saldo_tyyppi"],
+                       ankkuri_pvm=date.today().isoformat(),
+                       ankkuri_ero=tulos.get("ero") or 0,
+                       tasmaytetty=date.today().isoformat())
+    tulos["ankkuroitu"] = True
+    return tulos
+
+
 def _lokitunnus(teksti):
     """Tilin tunnisteesta lyhyt tiiviste: erottaa tilit toisistaan lokissa,
     mutta ei ole tilin tunnus eikä palaudu siksi."""
@@ -3316,19 +3396,24 @@ def kirjoita_pankkicsv(tili, rivit, polku):
 
 def _hae_saldo(aid, tili, raaka=False):
     """Saldo talteen. Kutsutaan vain kun käyttäjä on pyytänyt täsmäytystä.
-    Epäonnistuminen ei ole vakavaa: tapahtumat on jo haettu."""
+
+    Palauttaa "" onnistuessaan ja virheen kuvauksen muuten. Kutsujan on
+    kerrottava epäonnistuminen eteenpäin: vanha saldo jää tallessa, ja jos sen
+    näyttäisi tuoreena, täsmäytys valehtelisi juuri siinä kohdassa jossa sen
+    pitäisi olla luotettavin."""
     try:
         vastaus = eb_saldot(aid)
     except EBVirhe as e:
         if e.koodi == 429:
-            print(f"  ℹ {tili}: saldoa ei haettu — pankin päivittäinen hakuraja tuli "
-                  "vastaan. Tapahtumat saatiin, saldo yritetään ensi kerralla.")
+            viesti = ("pankin päivittäinen hakuraja tuli vastaan — "
+                      "saldo yritetään myöhemmin uudelleen")
         else:
-            print(f"  ℹ {tili}: saldoa ei saatu ({e.koodi})")
-        return
+            viesti = f"pankki vastasi {e.koodi}"
+        print(f"  ℹ {tili}: saldoa ei saatu — {viesti}")
+        return viesti
     except (OSError, ValueError) as e:
         print(f"  ℹ {tili}: saldoa ei saatu — {e}")
-        return
+        return str(e)
     if raaka:
         try:
             kansio = DATA / "raaka"
@@ -3340,13 +3425,14 @@ def _hae_saldo(aid, tili, raaka=False):
     poimittu = _poimi_saldo(vastaus)
     if not poimittu:
         print(f"  ℹ {tili}: saldovastauksesta ei löytynyt saldoa lainkaan")
-        return
+        return "pankki ei palauttanut saldoa"
     paivita_pankkitila(aid, saldo_haettu=datetime.now().isoformat(timespec="seconds"),
                        **poimittu)
     tyyppi = poimittu["saldo_tyyppi"]
     lisa = "" if tyyppi.startswith(("ITBD", "CLBD")) else "  (sisältää varaukset)"
     print(f"  · {tili}: saldo {fmt_eur(poimittu['saldo'])} "
           f"{poimittu['saldo_valuutta']} ({tyyppi}){lisa}")
+    return ""
 
 
 def cmd_hae(args):
@@ -4661,7 +4747,7 @@ def pankkiyhteydet_html(cfg):
     if not tilit or not tila:
         return "", ""
     rivit, varoitukset = [], []
-    for t in tilit:
+    for indeksi, t in enumerate(tilit):
         aid = str(t.get("account_id", ""))
         if _on_paikanpitaja(aid):
             continue
@@ -4693,17 +4779,34 @@ def pankkiyhteydet_html(cfg):
                            + (f' ({hetki})' if hetki else '')).strip()
         else:
             saldoteksti = "—"
+        ero = tt.get("ankkuri_ero")
+        if not isinstance(tt.get("ankkuri_saldo"), (int, float)):
+            tasm, tasm_luokka = "ei täsmäytetty", ""
+        elif ero:
+            tasm = f'ero {fmt_eur(ero)} € ({tt.get("tasmaytetty", "")})'
+            tasm_luokka = "huono"
+        else:
+            tasm, tasm_luokka = f'✓ {tt.get("tasmaytetty", "")}', ""
         rivit.append(
-            f'<tr><td>{html.escape(str(nimi))}</td><td>{html.escape(str(tt.get("pankki", "")))}</td>'
+            f'<tr data-tili-idx="{indeksi}"><td>{html.escape(str(nimi))}</td>'
+            f'<td>{html.escape(str(tt.get("pankki", "")))}</td>'
             f'<td class="num">{html.escape(saldoteksti)}</td>'
             f'<td>{html.escape(str(tt.get("haettu", "—")))}</td>'
-            f'<td class="{luokka}">{html.escape(tilateksti)}</td></tr>')
+            f'<td class="{luokka}">{html.escape(tilateksti)}</td>'
+            f'<td class="{tasm_luokka}">{html.escape(tasm)}'
+            f'<button type="button" class="tasmnappi" hidden>Täsmäytä</button></td></tr>')
     if not rivit:
         return "", ""
     taulu = ('<h2>Pankkiyhteydet</h2>\n<div style="overflow-x:auto"><table>'
              '<tr><th>Tili</th><th>Pankki</th><th class="num">Saldo pankissa</th>'
-             '<th>Haettu viimeksi</th><th>Valtuutus voimassa</th></tr>' + "".join(rivit) + '</table></div>\n'
-             '<p class="pikkuteksti">Saldo on pankin kirjattu saldo; tähdellä (*) '
+             '<th>Haettu viimeksi</th><th>Valtuutus voimassa</th>'
+             '<th>Täsmäytys</th></tr>' + "".join(rivit) + '</table></div>\n'
+             '<p class="pikkuteksti">Täsmäytys hakee tilin saldon pankista '
+             '(yksi haku pankin neljän vuorokausihaun budjetista) ja vertaa sitä '
+             'kirjanpitoon. Vertailu tehdään ankkurista: hyväksytystä saldosta ja '
+             'sen hetken pääkirjan summasta, jolloin jälkikäteen ilmestyvät '
+             'takautuvat tapahtumat siirtävät odotusta oikein. '
+             'Saldo on pankin kirjattu saldo; tähdellä (*) '
              'merkitty sisältää myös odottavat korttivaraukset, jolloin se ei ole '
              'vertailukelpoinen kirjanpidon kanssa. '
              'Valtuutus uusitaan Pankkiyhteys-napista tai '
@@ -6532,6 +6635,44 @@ window.addEventListener('DOMContentLoaded',function(){
         seuraaAjoa(komento,0);
       }).catch(function(e){naytaLoki('ei onnistunut: '+e);napitKaytossa(true);});
   }
+  function eur(n){return (Math.round(n*100)/100).toFixed(2).replace('.',',');}
+  function tasmaytysteksti(v){
+    if(v.ankkuri===null||v.ankkuri===undefined){
+      return 'Pankissa '+eur(v.pankissa)+' \u20ac. Ensimm\u00e4inen t\u00e4sm\u00e4ytys asettaa '+
+             'ankkurin \u2014 vertailu alkaa siit\u00e4.';}
+    if(v.ero===0){return '\u2713 T\u00e4sm\u00e4\u00e4: pankissa '+eur(v.pankissa)+' \u20ac.';}
+    return 'Pankissa '+eur(v.pankissa)+' \u20ac, odotettu '+eur(v.odotettu)+
+           ' \u20ac \u2014 ero '+eur(v.ero)+' \u20ac.';
+  }
+  function tasmayta(tr,idx){
+    const solu=tr.lastElementChild;
+    solu.textContent='haetaan saldoa\u2026';
+    fetch('api/tasmayta',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({idx:idx})}).then(function(r){return r.json();}).then(function(v){
+        if(!v.ok){solu.textContent=v.virhe||'ei onnistunut';return;}
+        solu.textContent=tasmaytysteksti(v)+(v.varaukset_mukana?
+          ' (saldo sis\u00e4lt\u00e4\u00e4 varaukset, ne ovat mukana my\u00f6s vertailussa)':'');
+        const b=document.createElement('button');
+        b.type='button';b.className='tasmnappi';
+        b.textContent=(v.ero===0||v.ankkuri==null)?'Ankkuroi':'Hyv\u00e4ksy ero ja ankkuroi';
+        b.onclick=function(){
+          solu.textContent='ankkuroidaan\u2026';
+          fetch('api/ankkuroi',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({idx:idx})}).then(function(r){return r.json();}).then(function(w){
+              solu.textContent=w.ok?('ankkuroitu '+eur(w.pankissa)+' \u20ac'):(w.virhe||'virhe');
+            });
+        };
+        solu.appendChild(document.createTextNode(' '));solu.appendChild(b);
+      }).catch(function(e){solu.textContent='ei onnistunut: '+e;});
+  }
+  document.addEventListener('click',function(ev){
+    const n=ev.target.closest('.tasmnappi');
+    if(!n||!n.closest('tr[data-tili-idx]'))return;
+    if(n.onclick)return;
+    ev.preventDefault();
+    const tr=n.closest('tr[data-tili-idx]');
+    tasmayta(tr,parseInt(tr.getAttribute('data-tili-idx'),10));
+  });
   document.getElementById('nappi-hae').addEventListener('click',function(){kaynnista('hae');});
   document.getElementById('nappi-aja').addEventListener('click',function(){kaynnista('aja');});
   document.getElementById('ajoloki-nappi').addEventListener('click',function(){location.reload();});
@@ -6540,7 +6681,9 @@ window.addEventListener('DOMContentLoaded',function(){
   fetch('api/ping').then(function(r){return r.json();}).then(function(v){
     if(v.ok){SERVER=true;document.getElementById('tila').textContent=
       'selaa-tila \u2713 muutokset tallentuvat heti';
-      document.getElementById('ajonapit').hidden=false;valvoPalvelinta();}
+      document.getElementById('ajonapit').hidden=false;
+      document.querySelectorAll('.tasmnappi').forEach(function(b){b.hidden=false;});
+      valvoPalvelinta();}
   }).catch(function(){
     document.getElementById('tila').textContent=
       'tiedostotila: muokkaukset ker\u00e4t\u00e4\u00e4n ja ladataan muutokset.csv:n\u00e4';
@@ -6648,6 +6791,9 @@ tr.varausrivi td {{ background:#f7fafc }}
        cursor:pointer; text-decoration:none; color:inherit; display:inline-block }}
 #ajonapit button:hover:enabled, #ajonapit a:hover, #ajoloki button:hover {{ background:var(--vaalea) }}
 #ajonapit button:disabled {{ opacity:.5; cursor:default }}
+.tasmnappi {{ font:inherit; font-size:.8em; padding:.1rem .5rem; margin-left:.5rem;
+       border:1px solid #c9c3b8; border-radius:5px; background:#fff; cursor:pointer }}
+.tasmnappi:hover {{ background:var(--vaalea) }}
 #ajoloki {{ border:1px solid #c9c3b8; border-radius:8px; background:#fff;
        padding:.7rem .9rem; margin:.6rem 0 }}
 #ajoloki-teksti {{ font:12px/1.5 ui-monospace,Menlo,monospace; white-space:pre-wrap;
@@ -7507,6 +7653,24 @@ def cmd_selaa(args):
                     del cfg["kategoriat"][nimi]
                     turvakirjoita_json(CONFIG, cfg)
                     return self._json({"ok": True, "siirretty": siirretty})
+                if self.path in ("/api/tasmayta", "/api/ankkuroi"):
+                    tilit = ((cfg.get("pankkihaku") or {}).get("tilit") or [])
+                    try:
+                        t = tilit[int(pyynto.get("idx"))]
+                    except (TypeError, ValueError, IndexError):
+                        return self._json({"ok": False, "virhe": "tuntematon tili"})
+                    aid = str(t.get("account_id", ""))
+                    if self.path == "/api/tasmayta":
+                        # Yksi haku, yksi tili, käyttäjän pyynnöstä.
+                        try:
+                            virhe = _hae_saldo(aid, t.get("tili", ""))
+                        except (EBVirhe, OSError, ValueError) as e:
+                            virhe = str(e)
+                        if virhe:
+                            return self._json({"ok": False,
+                                               "virhe": f"saldoa ei saatu: {virhe}"})
+                        return self._json(tasmayta(lue_ledger(), cfg, aid))
+                    return self._json(ankkuroi(lue_ledger(), cfg, aid))
                 if self.path == "/api/velho/aloita":
                     with VELHO_LUKKO:
                         vanha_ui = VELHO_AJO["ui"]
