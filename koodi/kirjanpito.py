@@ -1668,6 +1668,79 @@ def eb_riveiksi(data, kerro=None, varaukset=None):
     return ulos
 
 
+# PSD2:n tekninen sääntö (RTS 36 art.) velvoittaa pankin sallimaan vähintään
+# neljä hakua vuorokaudessa silloin kun käyttäjä ei ole itse paikalla. Saldo on
+# oma pyyntönsä ja kuluttaa siis samaa budjettia kuin tapahtumat: jos sen hakisi
+# joka ajolla, ajokertoja jäisi neljän sijaan kaksi. Saldo haetaan siksi
+# korkeintaan kerran vuorokaudessa tiliä kohden — täsmäytys on tarkistus, ei
+# jokaisen ajon tarve.
+SALDO_VALI_H = 20
+
+
+def eb_saldot(account_uid):
+    """Tilin saldot rajapinnasta. Palauttaa pankin vastauksen sellaisenaan."""
+    return _eb_kutsu(f"/accounts/{account_uid}/balances", eb_token())
+
+
+def _saldo_kaipaa_hakua(tila, pakota=False):
+    """Onko tämän tilin saldo tarpeeksi vanha haettavaksi uudelleen?"""
+    if pakota:
+        return True
+    hetki = str((tila or {}).get("saldo_haettu", ""))
+    if not hetki:
+        return True
+    try:
+        return (datetime.now() - datetime.fromisoformat(hetki)).total_seconds() > SALDO_VALI_H * 3600
+    except ValueError:
+        return True
+
+
+def _poimi_saldo(vastaus):
+    """Täsmäytykseen kelpaava saldo pankin vastauksesta.
+
+    Saldotyyppejä tulee useita, ja vain osa niistä on vertailukelpoinen
+    kirjattujen tapahtumien kanssa:
+
+      ITBD  interim booked   — kirjatut tapahtumat tähän hetkeen. Tämä.
+      CLBD  closing booked   — kirjattu edellisen pankkipäivän lopussa.
+      ITAV  interim available — sisältää korttivaraukset, jotka eivät ole
+                                vielä kirjanpidossa. Ei kelpaa vertailuun.
+
+    OP palauttaa sekä ITAV:n ("Net balance") että ITBD:n ("Gross balance"),
+    S-Pankki vain ITBD:n, ja kortit usein pelkän ITAV:n. Palautetaan paras
+    saatavilla oleva ja kerrotaan kutsujalle kumpi se oli, jotta raportti voi
+    sanoa sen ääneen eikä vertaa omenoita appelsiineihin."""
+    saldot = (vastaus or {}).get("balances") or []
+    if not isinstance(saldot, list):
+        return None
+
+    def _arvo(b):
+        m = b.get("balance_amount") or b.get("amount") or {}
+        try:
+            return round(float(m.get("amount")), 2), siisti(str(m.get("currency", "")))
+        except (TypeError, ValueError):
+            return None
+
+    for tyyppi_toive in ("ITBD", "CLBD", "ITAV", ""):
+        for b in saldot:
+            tyyppi = str(b.get("balance_type") or b.get("balanceType") or "").upper()
+            if tyyppi_toive and not tyyppi.startswith(tyyppi_toive):
+                continue
+            arvo = _arvo(b)
+            if arvo:
+                return {"saldo": arvo[0], "saldo_valuutta": arvo[1],
+                        "saldo_tyyppi": tyyppi or "?",
+                        "saldo_nimi": siisti(str(b.get("name") or "")),
+                        "saldo_hetki": str(b.get("reference_date")
+                                           or b.get("last_change_date_time") or ""),
+                        "saldo_viimeisin_tapahtuma": str(b.get("last_committed_transaction") or ""),
+                        "saldo_kaikki": [{"tyyppi": str(x.get("balance_type") or ""),
+                                          "summa": (_arvo(x) or [None])[0],
+                                          "nimi": siisti(str(x.get("name") or ""))}
+                                         for x in saldot]}
+    return None
+
+
 def _eb_raja(paivia, cfg_alkaen, tili_alkaen):
     """Noudon alkupäivä: enintään `paivia` taakse, ei ennen globaalia eikä
     tilikohtaista alkaen-katkopäivää."""
@@ -3154,6 +3227,44 @@ def kirjoita_pankkicsv(tili, rivit, polku):
     turvakirjoita(polku, puskuri.getvalue())
 
 
+def _hae_saldo(aid, tili, pakota=False, raaka=False):
+    """Saldo talteen, jos edellisestä on kulunut tarpeeksi. Epäonnistuminen ei
+    ole vakavaa: tapahtumat on jo haettu, ja saldo on tarkistusta varten."""
+    tila = lue_pankkitila().get(str(aid), {})
+    if not _saldo_kaipaa_hakua(tila, pakota):
+        return
+    try:
+        vastaus = eb_saldot(aid)
+    except EBVirhe as e:
+        if e.koodi == 429:
+            print(f"  ℹ {tili}: saldoa ei haettu — pankin päivittäinen hakuraja tuli "
+                  "vastaan. Tapahtumat saatiin, saldo yritetään ensi kerralla.")
+        else:
+            print(f"  ℹ {tili}: saldoa ei saatu ({e.koodi})")
+        return
+    except (OSError, ValueError) as e:
+        print(f"  ℹ {tili}: saldoa ei saatu — {e}")
+        return
+    if raaka:
+        try:
+            kansio = DATA / "raaka"
+            kansio.mkdir(parents=True, exist_ok=True)
+            turvakirjoita_json(kansio / f"saldot_{tili.replace(' ', '_')}_"
+                                        f"{date.today().isoformat()}.json", vastaus)
+        except (OSError, RuntimeError):
+            pass
+    poimittu = _poimi_saldo(vastaus)
+    if not poimittu:
+        print(f"  ℹ {tili}: saldovastauksesta ei löytynyt saldoa lainkaan")
+        return
+    paivita_pankkitila(aid, saldo_haettu=datetime.now().isoformat(timespec="seconds"),
+                       **poimittu)
+    tyyppi = poimittu["saldo_tyyppi"]
+    lisa = "" if tyyppi.startswith(("ITBD", "CLBD")) else "  (sisältää varaukset)"
+    print(f"  · {tili}: saldo {fmt_eur(poimittu['saldo'])} "
+          f"{poimittu['saldo_valuutta']} ({tyyppi}){lisa}")
+
+
 def cmd_hae(args):
     cfg = lue_config()
     ph = cfg.get("pankkihaku") or {}
@@ -3234,6 +3345,9 @@ def cmd_hae(args):
             print(f"  \u2699 {tili}: raaka \u2192 data/raaka/{rpolku.name} ({n} objektia)")
         paivita_pankkitila(aid, haettu=date.today().isoformat(), virhe="",
                            virhekoodi=0, tili=tili)
+        if palvelu == "enablebanking":
+            _hae_saldo(aid, tili, getattr(args, "saldot", False),
+                       getattr(args, "raaka", False))
         ohitetut = Counter()
         tilin_varaukset = []
         rivit = (eb_riveiksi(data, ohitetut, tilin_varaukset)
@@ -4483,16 +4597,29 @@ def pankkiyhteydet_html(cfg):
             tilateksti, luokka = f"{paivia} pv ({tt['valtuutus_asti']})", ""
         if luokka:
             varoitukset.append(f"{nimi}: {tilateksti}")
+        saldo = tt.get("saldo")
+        if isinstance(saldo, (int, float)):
+            tyyppi = str(tt.get("saldo_tyyppi", ""))
+            # Varauksia sisältävä saldo ei ole vertailukelpoinen kirjattujen
+            # tapahtumien kanssa, ja se on syytä sanoa siinä missä luku näkyy.
+            merkinta = "" if tyyppi.startswith(("ITBD", "CLBD")) else " *"
+            saldoteksti = f'{fmt_eur(saldo)} {tt.get("saldo_valuutta", "")}{merkinta}'.strip()
+        else:
+            saldoteksti = "—"
         rivit.append(
             f'<tr><td>{html.escape(str(nimi))}</td><td>{html.escape(str(tt.get("pankki", "")))}</td>'
+            f'<td class="num">{html.escape(saldoteksti)}</td>'
             f'<td>{html.escape(str(tt.get("haettu", "—")))}</td>'
             f'<td class="{luokka}">{html.escape(tilateksti)}</td></tr>')
     if not rivit:
         return "", ""
     taulu = ('<h2>Pankkiyhteydet</h2>\n<div style="overflow-x:auto"><table>'
-             '<tr><th>Tili</th><th>Pankki</th><th>Haettu viimeksi</th>'
-             '<th>Valtuutus voimassa</th></tr>' + "".join(rivit) + '</table></div>\n'
-             '<p class="pikkuteksti">Valtuutus uusitaan Pankkiyhteys-napista tai '
+             '<tr><th>Tili</th><th>Pankki</th><th class="num">Saldo pankissa</th>'
+             '<th>Haettu viimeksi</th><th>Valtuutus voimassa</th></tr>' + "".join(rivit) + '</table></div>\n'
+             '<p class="pikkuteksti">Saldo on pankin kirjattu saldo; tähdellä (*) '
+             'merkitty sisältää myös odottavat korttivaraukset, jolloin se ei ole '
+             'vertailukelpoinen kirjanpidon kanssa. '
+             'Valtuutus uusitaan Pankkiyhteys-napista tai '
              'komennolla <code>pankkihaku</code>. Uusiminen ei koske tilien '
              'liittämistä portaalissa — se on tehty kerran.</p>')
     varoitus = (f'<p class="huomio">⚠ Pankkiyhteys kaipaa huomiota — '
@@ -7399,6 +7526,9 @@ def main():
                    help="listaa olemassa olevan EB-istunnon tilit ja uid:t")
     h.add_argument("--yhdista", metavar="PANKKI",
                    help="Enable Banking: valtuuta pankki ja tallenna tilit (sandboxissa: mock)")
+    h.add_argument("--saldot", action="store_true",
+                   help="hae tilien saldot vaikka edellisestä olisi alle vuorokausi "
+                        "(kuluttaa pankin päivittäistä hakurajaa)")
     h.add_argument("--raaka", action="store_true",
                    help="tallenna pankin täydet raakavastaukset tiedostoon (data/raaka/) diagnoosia varten")
     o = ala.add_parser("opi", help="lue täytetty tarkistettavat.csv")
