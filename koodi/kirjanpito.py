@@ -1415,6 +1415,38 @@ def _varmuuskopioi_ledger():
     _karsi_varmuuskopiot(kansio, "tapahtumat_", ".csv")
 
 
+# Selaa-tila ei kirjoita raporttia levylle joka sivunlatauksella (se olisi lähes
+# megatavu pilvikansiaan per lataus). Tiedosto on silti se, jonka puhelin avaa
+# Drivestä, joten sen pitää seurata muutoksia — vain hitaammin. Kirjoitus
+# ajastetaan viimeisen muutoksen jälkeen: peräkkäiset luokittelut kuittaantuvat
+# yhdellä kirjoituksella, eikä viimeinenkään jää tekemättä.
+SELAA_KAYNNISSA = False
+RAPORTTI_VIIVE_S = 20.0
+_raportti_ajastin = None
+_raportti_lukko = threading.Lock()
+
+
+def _kirjoita_raportti_taustalla():
+    try:
+        rakenna_raportit(lue_ledger(), lue_config(), kk=13)
+    except (OSError, ValueError, RuntimeError, KeyError):
+        pass  # raportti syntyy joka tapauksessa seuraavassa ajossa
+
+
+def _raportti_vanheni():
+    """Merkitse levyllä oleva raportti vanhentuneeksi ja ajasta uusi kirjoitus."""
+    global _raportti_ajastin
+    if not SELAA_KAYNNISSA:
+        return
+    with _raportti_lukko:
+        if _raportti_ajastin is not None:
+            _raportti_ajastin.cancel()
+        _raportti_ajastin = threading.Timer(RAPORTTI_VIIVE_S,
+                                            _kirjoita_raportti_taustalla)
+        _raportti_ajastin.daemon = True
+        _raportti_ajastin.start()
+
+
 def kirjoita_ledger(rivit):
     DATA.mkdir(exist_ok=True)
     lukon_virkistys()
@@ -1429,6 +1461,7 @@ def kirjoita_ledger(rivit):
     w.writeheader()
     w.writerows(rivit)
     turvakirjoita(LEDGER, puskuri.getvalue())
+    _raportti_vanheni()
 
 
 def avain(tili, pvm, summa, saaja):
@@ -7312,11 +7345,20 @@ def cmd_selaa(args):
         webbrowser.open(osoite)
     except Exception:
         pass
+    global SELAA_KAYNNISSA
+    SELAA_KAYNNISSA = True
     try:
         with http.server.ThreadingHTTPServer(("127.0.0.1", portti), Kasittelija) as srv:
             srv.serve_forever()
     except KeyboardInterrupt:
         print("\nSuljetaan\u2026")
+        SELAA_KAYNNISSA = False
+        with _raportti_lukko:
+            odottaa = _raportti_ajastin is not None and _raportti_ajastin.is_alive()
+            if odottaa:
+                _raportti_ajastin.cancel()
+        if odottaa:
+            _kirjoita_raportti_taustalla()  # viimeisin muutos myös levylle
 
 
 def cmd_onko_dataa(args):
