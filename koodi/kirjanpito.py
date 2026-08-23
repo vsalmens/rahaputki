@@ -236,7 +236,7 @@ BUDJETTI = ASETUKSET / "budjetti.csv"
 ENV = ASETUKSET / "pankkihaku.env"
 TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 
-VERSIO = "v125"
+VERSIO = "v126"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
