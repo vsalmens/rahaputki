@@ -9,6 +9,9 @@ Ohjelma on käytännössä yksi tiedosto, `koodi/kirjanpito.py`.
 
 ## Rajat, joita ei ylitetä
 
+- Koodin ja olennaisten toimintojen on toimittava sekä Mac OS X-ympäristössä, 
+  että Windowsilla. Lisäksi ainakin perusraportin/selauksen tulisi toimia 
+  webbiselaimella (oletuksena Chrome, iOS:illa Chrome tai Safari ).
 - **`koodi/` korvataan päivityksessä kokonaan.** Päivitysohje on "vedä uusi
   `koodi`-kansio vanhan päälle", joten sinne ei saa kirjoittaa mitään
   käyttäjän omaa. Kaikki käyttäjän tila menee kansioihin `asetukset/`
