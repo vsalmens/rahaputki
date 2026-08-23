@@ -241,7 +241,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.10"
+VERSIO = "v0.11"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -7272,6 +7272,10 @@ label { display:block; margin:.8rem 0 .3rem; font-size:.9em; color:#6b665c }
 table { width:100%; border-collapse:collapse; margin:.6rem 0 }
 th, td { text-align:left; padding:.35rem .5rem .35rem 0; border-bottom:1px solid var(--vaalea) }
 .pikku { font-size:.85em; color:#6b665c }
+code.arvo { background:var(--vaalea); padding:.1rem .35rem; border-radius:4px;
+            font:12.5px ui-monospace,Menlo,Consolas,monospace; word-break:break-all }
+table.kentat th { font-weight:normal; color:#6b665c; white-space:nowrap;
+                  vertical-align:top; padding-right:1rem }
 .ohjeet { margin:.4rem 0 .8rem; padding-left:1.3rem }
 .ohjeet li { margin:0 0 .45rem; max-width:60ch }
 .pankkilista { max-height:19rem; overflow:auto; border:1px solid var(--raja);
@@ -7420,10 +7424,15 @@ function paneeliSovellus(){
        '<div class="kortti valinta" role="button" tabindex="0" data-avaa="avain"' +
        (AVATTU === 'avain' ? ' aria-pressed="true"' : '') +
        '><h4>Rahaputki on jo rekisteröity</h4><p>Otetaan käyttöön rekisteröinnin ' +
-       '.pem-avaintiedosto.</p></div>';
+       '.pem-avaintiedosto.</p></div>' +
+       '<div class="kortti valinta" role="button" tabindex="0" data-avaa="lomake"' +
+       (AVATTU === 'lomake' ? ' aria-pressed="true"' : '') +
+       '><h4>Rekisteröin itse portaalin lomakkeella</h4><p>Täytät kentät käsin. ' +
+       'Rahaputki kertoo mitä niihin kuuluu.</p></div>';
 
   if(AVATTU === 'uusi'){ h += alilomakeUusi(); }
   else if(AVATTU === 'avain'){ h += alilomakeAvain(); }
+  else if(AVATTU === 'lomake'){ h += alilomakeLomake(); }
   return h;
 }
 
@@ -7454,6 +7463,38 @@ function alilomakeUusi(){
     '<input type="text" id="sposti" data-syote="sposti" value="' + e(SYOTE.sposti) + '" placeholder="oma@osoite.fi">' +
     '<div class="rivi"><button class="toiminto paa" data-t="luo_sovellus">Rekisteröi</button></div>' +
     ilmoitukset('uusi');
+}
+
+function kentta(nimi, arvo){
+  return '<tr><th scope="row">' + e(nimi) + '</th><td><code class="arvo">' +
+         e(arvo) + '</code></td></tr>';
+}
+
+function alilomakeLomake(){
+  var v = T.vakiot;
+  return '<h3>Rekisteröinti portaalin lomakkeella</h3>' +
+    '<ol class="ohjeet">' +
+    '<li><a class="paalinkki pikkupaa" target="_blank" rel="noopener" href="' +
+      e(v.portaali) + '">Avaa portaali</a> ja kirjaudu sähköpostiosoitteellasi.</li>' +
+    '<li>Valitse ylhäältä <strong>API applications</strong> ja vieritä kohtaan ' +
+      '<strong>Add a new application</strong>.</li>' +
+    '<li>Täytä kentät alla olevilla arvoilla. <strong>Environment: Production</strong>, ' +
+      'ja avaimen luonnissa jätä ensimmäinen vaihtoehto valituksi (selain luo ' +
+      'avaimen ja lataa .pem-tiedoston).</li>' +
+    '<li>Klikkaa <strong>Register</strong>. Selain lataa .pem-tiedoston.</li>' +
+    '<li>Palaa tähän, valitse <strong>Rahaputki on jo rekisteröity</strong> ja ota ' +
+      'ladattu tiedosto käyttöön.</li></ol>' +
+    '<table class="kentat"><tbody>' +
+    kentta('Application name', v.nimi) +
+    kentta('Allowed redirect URLs', v.paluuosoite) +
+    kentta('Application description', v.kuvaus) +
+    kentta('Privacy URL', v.tietosuoja) +
+    kentta('Terms URL', v.ehdot) +
+    '</tbody></table>' +
+    '<p class="pikku">Paluuosoite on se, johon pankki palauttaa sinut ' +
+    'tunnistautumisen jälkeen. Sen on oltava täsmälleen tuo — muuten valtuutus ' +
+    'ei lähde käyntiin. Sähköpostikenttään tulee <strong>sinun</strong> ' +
+    'osoitteesi: sovellus on sinun.</p>';
 }
 
 function alilomakeAvain(){
@@ -7551,8 +7592,10 @@ function paneeliPankit(){
            ilmoitukset('pankki');
     } else {
       h += '<p>Avaa tunnistautuminen ja kirjaudu pankkiisi. Pankki palauttaa sinut ' +
-           'sivulle, joka näyttää tyhjältä — se on kunnossa. <strong>Kopioi silloin ' +
-           'selaimen osoiterivi</strong> ja liitä se tähän.</p>' +
+           'osoitteeseen <code class="arvo">' + e(T.auth.redirect) + '</code>, ja se ' +
+           'sivu näyttää tyhjältä lomakkeelta — se on kunnossa. Tunnistautumiskoodi ' +
+           'on selaimen osoiterivillä, ei sivulla. <strong>Kopioi koko osoiterivi</strong> ' +
+           'ja liitä se tähän.</p>' +
            '<div class="rivi"><a class="paalinkki" target="_blank" rel="noopener" href="' +
            e(T.auth.url) + '">Avaa pankin tunnistautuminen</a></div>' +
            '<label for="koodi">Osoiterivi pankista palanneelta sivulta</label>' +
@@ -7749,6 +7792,10 @@ def velho_julkinen():
             "pankkivaihe": v["pankkivaihe"], "valinta": v["valinta"],
             "auth": v["auth"], "tilit": v["tilit"],
             "yhdistetyt": _velho_yhdistetyt(cfg),
+            "vakiot": {"paluuosoite": EB_TESTIPALUU, "kuvaus": EB_KUVAUS,
+                       "portaali": EB_PORTAALI, "nimi": "Rahaputki",
+                       "tietosuoja": f"{EHDOT}/tietosuoja.md",
+                       "ehdot": f"{EHDOT}/kayttoehdot.md"},
             "viesti": v["viesti"], "virhe": v["virhe"]}
 
 
