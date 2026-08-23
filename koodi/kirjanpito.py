@@ -4367,7 +4367,14 @@ def olympos_osio(ledger, cfg=None):
             f"</div></details>")
 
 
-def rakenna_raportit(ledger, cfg, kk=13):
+def rakenna_raportit(ledger, cfg, kk=13, kirjoita_sivu=True):
+    """Rakentaa raportit ja palauttaa raporttisivun HTML:n.
+
+    kirjoita_sivu=False jättää raportti.html:n levylle kirjoittamatta. Sitä
+    käyttää selaa-tila, joka rakentaa sivun joka pyynnöllä: kirjoitus tarkoittaa
+    pilvikansiossa lähes megatavun latausta jokaisesta sivunlatauksesta, eikä
+    kukaan lue sitä tiedostoa juuri silloin. Tiedosto syntyy ajossa (aja,
+    raportti), jolloin se on olemassa myös ilman palvelinta."""
     RAPORTIT.mkdir(exist_ok=True)
     kuukaudet, taulu, tulot, menot = koosta(ledger, cfg)
     kaikki_kk = list(kuukaudet)
@@ -4425,8 +4432,11 @@ def rakenna_raportit(ledger, cfg, kk=13):
         w.writerow(["Säästö €"] + [fmt_eur(tulot[m] - menot[m]) for m in kuukaudet])
         w.writerow(["Säästö %"] + [f"{(tulot[m] - menot[m]) / tulot[m] * 100:.1f}".replace(".", ",")
                                    if tulot[m] > 0 else "" for m in kuukaudet])
-    tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit, ledger,
-             koonti, koonti_summat, jakso, n_kk, kaikki_kk, tyypit)
+    sivu = tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit,
+                    ledger, koonti, koonti_summat, jakso, n_kk, kaikki_kk, tyypit)
+    if kirjoita_sivu:
+        (RAPORTIT / "raportti.html").write_text(sivu, encoding="utf-8")
+    return sivu
 
 
 def tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit, ledger,
@@ -4636,16 +4646,25 @@ def tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit, ledg
     olympos_html = olympos_osio(ledger, cfg)
     with open(RAPORTIT / "yhteistalous_erittely.html", "w", encoding="utf-8") as f_oe:
         f_oe.write(olympos_erittely_html(ledger))
+    # Säännön tiedot kerran rivillä, ei jokaisessa linkissä: seitsemän linkkiä
+    # × kolme data-attribuuttia teki 280 säännöstä 325 kilotavua, eli kolmasosan
+    # koko sivusta. JS lukee ne nyt riviltä (closest('tr')).
     saannot_html = "".join(
-        f'<tr class="saantorivi"><td class="num"><a href="#" class="saantosija" '
-        f'data-malli="{e(s["malli"])}" data-kategoria="{e(s["kategoria"])}" data-ehto="{e(s["ehto"])}" '
+        f'<tr class="saantorivi" data-malli="{e(s["malli"])}" '
+        f'data-kategoria="{e(s["kategoria"])}" data-ehto="{e(s["ehto"])}" '
+        f'data-n="{kaytto.get("sääntö: " + normalisoi(s["malli"]), 0)}">'
+        f'<td class="num"><a href="#" class="saantosija" '
         f'title="klikkaa: siirrä numeroituun sijaintiin">{i}</a></td>'
         f'<td>{e(s["malli"])}</td><td>{e(s["kategoria"])}</td>'
         f'<td>{e(s["ehto"])}</td><td class="num">{_osumia(s)}</td>'
         f'<td class="num">{kaytto.get("sääntö: " + normalisoi(s["malli"]), 0) or ""}</td>'
-        f'<td><a href="#" class="saantopoisto" data-malli="{e(s["malli"])}" '
-        f'data-kategoria="{e(s["kategoria"])}" data-ehto="{e(s["ehto"])}" '
-        f'data-n="{kaytto.get("sääntö: " + normalisoi(s["malli"]), 0)}">poista</a> · <a href="#" class="saantomuokkaus" data-malli="{e(s["malli"])}" data-kategoria="{e(s["kategoria"])}" data-ehto="{e(s["ehto"])}">muokkaa</a> · <a href="#" class="saantosiirto" data-suunta="-1" data-malli="{e(s["malli"])}" data-kategoria="{e(s["kategoria"])}" data-ehto="{e(s["ehto"])}" title="askel ylös">↑</a><a href="#" class="saantosiirto" data-suunta="1" data-malli="{e(s["malli"])}" data-kategoria="{e(s["kategoria"])}" data-ehto="{e(s["ehto"])}" title="askel alas">↓</a><a href="#" class="saantosiirto" data-suunta="alkuun" data-malli="{e(s["malli"])}" data-kategoria="{e(s["kategoria"])}" data-ehto="{e(s["ehto"])}" title="siirrä ylimmäksi">⤒</a><a href="#" class="saantosiirto" data-suunta="loppuun" data-malli="{e(s["malli"])}" data-kategoria="{e(s["kategoria"])}" data-ehto="{e(s["ehto"])}" title="siirrä alimmaksi">⤓</a></td></tr>'
+        f'<td><a href="#" class="saantopoisto">poista</a> · '
+        f'<a href="#" class="saantomuokkaus">muokkaa</a> · '
+        f'<a href="#" class="saantosiirto" data-suunta="-1" title="askel ylös">↑</a>'
+        f'<a href="#" class="saantosiirto" data-suunta="1" title="askel alas">↓</a>'
+        f'<a href="#" class="saantosiirto" data-suunta="alkuun" title="siirrä ylimmäksi">⤒</a>'
+        f'<a href="#" class="saantosiirto" data-suunta="loppuun" title="siirrä alimmaksi">⤓</a>'
+        f'</td></tr>'
         for i, s in enumerate(saannot_raaka, 1))
     avoimia = sum(1 for r in ledger if r["kategoria"] == "TARKISTA")
     # --- saldot & kulukatsaus ---
@@ -5053,11 +5072,15 @@ function massaMuuta(){
     naytaKumoa(idt.length+' rivi\u00e4 jonossa');
   }
 }
+function saannonTiedot(el){
+  // Säännön tiedot ovat rivillä kerran, eivät jokaisessa linkissä.
+  const tr=el.closest('tr');
+  return {malli:tr.getAttribute('data-malli'),kategoria:tr.getAttribute('data-kategoria'),
+          ehto:tr.getAttribute('data-ehto')};
+}
 function muokkaaRivi(tr, a){
   if(MUOKKAUS){MUOKKAUS.tr.innerHTML=MUOKKAUS.html;}
-  MUOKKAUS={tr:tr,html:tr.innerHTML,
-    vanha:{malli:a.getAttribute('data-malli'),kategoria:a.getAttribute('data-kategoria'),
-           ehto:a.getAttribute('data-ehto')}};
+  MUOKKAUS={tr:tr,html:tr.innerHTML,vanha:saannonTiedot(a)};
   const osat=MUOKKAUS.vanha.kategoria.split(':');
   tr.innerHTML='<td class="num"></td>'+
     '<td><input id="mk-malli" class="minp" size="20" value="'+esc(MUOKKAUS.vanha.malli)+'"></td>'+
@@ -5935,8 +5958,7 @@ document.addEventListener('click',function(ev){
   const ss=ev.target.closest('.saantosiirto')||sj;
   if(ss){ev.preventDefault();
     if(!SERVER){alert('J\u00e4rjestely vaatii selaa-tilan (tai muokkaa saannot.csv:t\u00e4 suoraan).');return;}
-    const runko={malli:ss.getAttribute('data-malli'),kategoria:ss.getAttribute('data-kategoria'),
-      ehto:ss.getAttribute('data-ehto')};
+    const runko=saannonTiedot(ss);
     const n=document.querySelectorAll('.saantorivi').length;
     if(sj){
       const uusiSija=prompt('Siirr\u00e4 s\u00e4\u00e4nt\u00f6 sijaintiin (1\u2013'+n+'):',
@@ -5964,9 +5986,9 @@ document.addEventListener('click',function(ev){
   if(sm){ev.preventDefault();muokkaaRivi(sm.closest('tr'),sm);return;}
   const sp=ev.target.closest('.saantopoisto');
   if(sp){ev.preventDefault();
-    const malli=sp.getAttribute('data-malli'),katr=sp.getAttribute('data-kategoria'),
-      ehto=sp.getAttribute('data-ehto');
-    const kayttoja=sp.getAttribute('data-n')||'0';
+    const tiedot=saannonTiedot(sp);
+    const malli=tiedot.malli,katr=tiedot.kategoria,ehto=tiedot.ehto;
+    const kayttoja=sp.closest('tr').getAttribute('data-n')||'0';
     if(!confirm('Poistetaanko s\u00e4\u00e4nt\u00f6  '+malli+' \u2192 '+katr+'  ?'+
       String.fromCharCode(10)+'Se on perusteena '+kayttoja+' rivill\u00e4 \u2014 ne arvioidaan '+
       'uudelleen ja voivat palata avoimiksi. K\u00e4sin luokiteltuja ei muuteta.')){return;}
@@ -6056,10 +6078,9 @@ window.addEventListener('DOMContentLoaded',function(){
       try{km=sessionStorage.getItem('rahaputki_korosta');sessionStorage.removeItem('rahaputki_korosta');}catch(err){}
       let loytyi=false;
       if(km){
-        document.querySelectorAll('.saantosija').forEach(function(a){
-          if(!loytyi&&a.getAttribute('data-malli')===km){
-            const rt=a.closest('tr');
-            if(rt){rt.classList.add('korostettu');rt.scrollIntoView({block:'center'});loytyi=true;}
+        document.querySelectorAll('tr.saantorivi').forEach(function(rt){
+          if(!loytyi&&rt.getAttribute('data-malli')===km){
+            rt.classList.add('korostettu');rt.scrollIntoView({block:'center'});loytyi=true;
           }
         });
       }
@@ -6360,7 +6381,7 @@ Siirrot omien tilien välillä, sijoitukset ja pois-tyyppiset kategoriat eivät 
 </main>
 {skripti}
 </body></html>"""
-    (RAPORTIT / "raportti.html").write_text(sivu, encoding="utf-8")
+    return sivu
 
 
 def cmd_raportti(args):
@@ -6878,8 +6899,14 @@ def cmd_selaa(args):
                                    "kaynnissa": SELAIN_AJO["komento"],
                                    "virhe": SELAIN_AJO["virhe"]})
             if self.path in ("/", "/raportti.html"):
-                rakenna_raportit(lue_ledger(), lue_config(), kk=13)
-                self.path = "/raportti.html"
+                sivu = rakenna_raportit(lue_ledger(), lue_config(), kk=13,
+                                        kirjoita_sivu=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(sivu)))
+                self.end_headers()
+                self.wfile.write(sivu)
+                return
             return super().do_GET()
 
         def do_POST(self):
