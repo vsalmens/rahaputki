@@ -66,6 +66,13 @@ KOODIJUURI = KOODI.parent if KOODI.name == "koodi" else KOODI
 # kaksoisklikkauksella ilman kysymyksiä — .ini:llä ei ole macOS:ssä
 # oletussovellusta lainkaan, ja .conf on kehittäjien tapa, ei kenenkään muun.
 PAIKALLISET_TIEDOSTO = "koneen-asetukset.txt"
+# Osoitin kirjanpitoon asuu koodin juuressa eikä koodi/-kansiossa, jotta
+# päivitys ei hukkaa sitä. Koko kansion korvaaminen hukkaa sen silti, eikä
+# tiedosto ole paketissa mukana — se on konekohtainen. Siksi viimeksi toiminut
+# polku muistetaan myös kotihakemistoon: se ei ole totuus vaan varmuuskopio,
+# jonka turvin ohjelma osaa ehdottaa itsensä takaisin kuntoon sen sijaan että
+# aloittaisi tyhjän kirjanpidon väärässä paikassa.
+TIETOKANSIO_MUISTI = Path.home() / ".rahaputki" / "tietokansio.txt"
 # Aiemmat nimet luetaan yhä ja kirjoitetaan uudella nimellä. Osoitin
 # tietokansioon ei saa kadota kesken päivityksen: ilman sitä ohjelma aloittaisi
 # tyhjän kirjanpidon väärässä paikassa.
@@ -121,6 +128,33 @@ def _lue_avainarvot(polku):
         avain, _, arvo = rivi.partition("=")
         arvot[avain.strip().lower()] = arvo.strip()
     return arvot
+
+
+def _muistettu_tietokansio():
+    """Viimeksi toiminut tietokansio kotihakemistosta, tai tyhjä."""
+    try:
+        arvo = TIETOKANSIO_MUISTI.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return ""
+    polku = Path(_siisti_polkuarvo(arvo)).expanduser()
+    return arvo if arvo and polku.is_dir() else ""
+
+
+def _muista_tietokansio(polku):
+    """Merkitse toimiva tietokansio muistiin. Epäonnistuminen ei haittaa:
+    tämä on varmuuskopio, ei tallennus."""
+    try:
+        TIETOKANSIO_MUISTI.parent.mkdir(parents=True, exist_ok=True)
+        # Ei _lyhenna_polku: se suhteuttaa polun datajuureen, ja datajuuresta
+        # itsestään tulisi "." — muistiinpano, joka osoittaa mihin tahansa.
+        try:
+            uusi = "~/" + str(Path(polku).relative_to(Path.home())).replace(os.sep, "/")
+        except ValueError:
+            uusi = str(polku)
+        if _muistettu_tietokansio() != uusi:
+            turvakirjoita(TIETOKANSIO_MUISTI, uusi + "\n")
+    except (OSError, RuntimeError):
+        pass
 
 
 def _nimea_avaimet(arvot):
@@ -241,7 +275,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.12"
+VERSIO = "v0.13"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -326,6 +360,33 @@ def _env_polku():
         if polku.is_file():
             return polku
     return _paikallinen_env() or ENV
+
+
+def _palauta_tietokansio():
+    """Osoitin puuttuu, mutta kone muistaa viimeksi toimineen kansion.
+
+    Näin käy, kun päivityksessä korvataan koko kansio eikä vain koodi/. Ilman
+    palautusta ohjelma aloittaisi tyhjän kirjanpidon ohjelman omaan kansioon —
+    ja kaksi rinnakkaista pääkirjaa on pahempi vika kuin mikään virheilmoitus.
+    Palautus tehdään, ei kysytä: kysymys ei ole kaksoisklikkaajan tavoitettavissa
+    eikä vastaus voisi olla mikään muu."""
+    if PAIKALLISET_LAHDE is not None or DATAJUURI != KOODIJUURI:
+        return
+    muistettu = _muistettu_tietokansio()
+    if not muistettu or Path(muistettu).expanduser().resolve() == KOODIJUURI:
+        return
+    try:
+        _kirjoita_paikalliset({"tietokansio": muistettu})
+    except (OSError, RuntimeError):
+        return
+    print(f"""
+ℹ Osoitin kirjanpitoosi puuttui, mutta tämä kone muisti sen. Palautettu:
+  {muistettu}
+  (tiedosto {KOODIJUURI / PAIKALLISET_TIEDOSTO})
+
+Näin käy, jos päivityksessä korvataan koko kansio eikä vain koodi/-kansiota.
+Käynnistä ohjelma uudelleen, niin se lukee kirjanpitosi oikeasta paikasta.""")
+    raise SystemExit(0)
 
 
 def _varmista_datajuuri():
@@ -443,7 +504,9 @@ def varmista_aloitus():
     """Luo puuttuvat kansiot ja mallitiedostot. Uusi käyttäjä ei saa törmätä
     traceback-tulosteeseen ennen kuin on edes päässyt alkuun. Olemassa olevaa
     ei kosketa koskaan, joten tämän voi ajaa turvallisesti joka kerta."""
+    _palauta_tietokansio()
     _varmista_datajuuri()
+    _muista_tietokansio(DATAJUURI)
     _paivita_paikalliset()
     _siirra_vanhat_asetukset()
     ensikerta = not CONFIG.exists()

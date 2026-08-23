@@ -509,6 +509,7 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 | `koneen-asetukset.txt` | koneen omat asetukset (mm. `tietokansio`), koodin juuressa; syntyy vain jos jotain on asetettavaa (ks. Kustomointi) |
 | `data/.lukko.<kone>.json` | ajonaikainen lukko, vain jaetussa tilassa (`"lukitus": "jaettu"`); katoaa itsestään |
 | `data/pankkitila.json` | pankkiyhteyksien tila: saldo, milloin tililtä viimeksi saatiin tapahtumia ja mihin asti valtuutus on voimassa |
+| `~/.rahaputki/tietokansio.txt` | koneen muisti viimeksi toimineesta tietokansiosta; palauttaa osoittimen, jos koko kansio korvataan päivityksessä |
 | `data/pankkiloki.csv` | rajapintakutsujen loki: aika, kohde, tulos, kesto. Ei tunnuksia eikä tilinumeroita; tilin tunnus on tiivisteenä |
 | `data/varaukset.json` | odottavat korttivaraukset — `hae` kirjoittaa, `aja` täsmäyttää; poistettavissa milloin vain |
 | `data/yhteistalous.json` | yhteistalouden tila: tasauspäivä (mihin asti yhteiskulut on huomioitu), kk-vakiot, läsnäolot, kirjaukset — raportin osio ylläpitää tätä puolestasi |
