@@ -429,6 +429,12 @@ Kaksi tapaa, sama näkymä:
    Valikon "+ uusi kategoria…" lisää kategorian asetukset/config.json:iin lennossa.
    Taulukot ja käyrät päivittyvät kun lataat sivun uudelleen. Ctrl-C sammuttaa.
 
+   Hakukentän vieressä on myös linkki **Pankkiyhteys**, joka avaa ohjatun
+   käyttöönoton selaimessa (`/velho`). Se on sama velho kuin komennossa
+   `pankkihaku`: kysymykset vain tulevat sivulle nappeina ja tekstikenttinä,
+   ja liittäminen (curl-komento, pankin paluuosoite) onnistuu suoraan
+   kenttään ilman leikepöydän lukemista. Terminaalivelho toimii ennallaan.
+
    Hakukentän vieressä on kaksi nappia: **Hae pankista** noutaa tuoreet
    tapahtumat rajapinnasta ja **Lue inbox** lukee inbox-kansion tiedostot
    pääkirjaan. Ne tekevät saman kuin komennot `hae` ja `aja`, ja tuloste

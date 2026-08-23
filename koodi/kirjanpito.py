@@ -24,6 +24,7 @@ import io
 import time
 import json
 import os
+import queue
 import re
 import shutil
 import socket
@@ -1693,8 +1694,20 @@ def _komentorivi():
     return "py koodi\\kirjanpito.py" if os.name == "nt" else "python3 koodi/kirjanpito.py"
 
 
+# Velho kysyy kysymyksensä yhdellä tavalla, mutta vastaus voi tulla kahdesta
+# suunnasta. Kun VELHO_UI on asetettu, kysymykset menevät selaimeen ja
+# vastaukset palaavat sieltä; muuten käytetään input():ia kuten aina. Näin
+# velhosta on vain yksi toteutus — kaksi rinnakkaista versiota ajautuisi
+# vääjäämättä eri linjoille, ja juuri velho on se osa, jota kukaan ei muista
+# testata molemmilla tavoilla.
+VELHO_UI = None
+
+
 def _kysy(kysymys, oletus=""):
     """input(), joka ei kaadu putkitettuun tyhjään syötteeseen."""
+    if VELHO_UI is not None:
+        return VELHO_UI.kysy({"tyyppi": "teksti", "kysymys": kysymys,
+                              "oletus": oletus}) or oletus
     try:
         vastaus = siisti(input(kysymys))
     except EOFError:
@@ -1704,6 +1717,14 @@ def _kysy(kysymys, oletus=""):
 
 def _valikko(otsikko, vaihtoehdot, oletus=1):
     """Numeroitu valinta. Palauttaa valitun avaimen; Enter ottaa oletuksen."""
+    if VELHO_UI is not None:
+        vastaus = VELHO_UI.kysy({
+            "tyyppi": "valikko", "kysymys": otsikko, "oletus": str(oletus),
+            "vaihtoehdot": [{"arvo": str(i), "teksti": str(t)}
+                            for i, (_, t) in enumerate(vaihtoehdot, 1)]})
+        if vastaus.isdigit() and 1 <= int(vastaus) <= len(vaihtoehdot):
+            return vaihtoehdot[int(vastaus) - 1][0]
+        return vaihtoehdot[oletus - 1][0]
     print(f"\n{otsikko}")
     for i, (_, teksti) in enumerate(vaihtoehdot, 1):
         rivit = str(teksti).split("\n")
@@ -1718,11 +1739,20 @@ def _valikko(otsikko, vaihtoehdot, oletus=1):
 
 
 def _kylla(kysymys, oletus=True):
+    if VELHO_UI is not None:
+        vastaus = VELHO_UI.kysy({"tyyppi": "kylla", "kysymys": kysymys,
+                                 "oletus": "k" if oletus else "e"})
+        return oletus if not vastaus else vastaus[0].lower() in "kyj1"
     vastaus = _kysy(f"{kysymys} [{'K/e' if oletus else 'k/E'}] ").lower()
     return oletus if not vastaus else vastaus[0] in "kyj1"
 
 
 def _odota_enter(teksti="Paina Enter kun olet valmis..."):
+    if VELHO_UI is not None:
+        # Sama teksti, oikea ele: selaimessa ei ole Enteriä vaan nappi.
+        VELHO_UI.kysy({"tyyppi": "jatka", "oletus": "",
+                       "kysymys": teksti.replace("Paina Enter", "Klikkaa Jatka")})
+        return
     _kysy(f"\n{teksti} ")
 
 
@@ -1741,6 +1771,11 @@ def _leikepoydalta():
 
     tkinter kuuluu standardikirjastoon, mutta esim. Homebrew-Pythonista se
     puuttuu; siksi perässä on käyttöjärjestelmän oma komento."""
+    # Selainvelhossa koko kikka on tarpeeton: liittäminen tekstikenttään on se
+    # asia, jonka selain osaa ilman apua. Palautetaan None, jolloin velho
+    # kysyy sisältöä kuten se muutenkin kysyy epäonnistuneen luvun jälkeen.
+    if VELHO_UI is not None:
+        return None
     try:
         import tkinter
         ikkuna = tkinter.Tk()
@@ -1764,6 +1799,12 @@ def _leikepoydalta():
 
 
 def _avaa_selain(url):
+    # Selainvelhossa sivu avaa linkin itse: uusi välilehti syntyy käyttäjän
+    # klikkauksesta, jolloin ponnahdusikkunoiden esto ei ehdi väliin. Palvelin
+    # ei siis avaa mitään, vaan tarjoaa osoitteen sivulle.
+    if VELHO_UI is not None:
+        VELHO_UI.avaa(url)
+        return True
     try:
         import webbrowser
         if webbrowser.open(url):
@@ -6267,7 +6308,7 @@ code {{ font-family:ui-monospace,Menlo,monospace }}
 <p class="meta">Rahaputki {VERSIO} · päivitetty {date.today().strftime('%d.%m.%Y')} · {len(ledger)} tapahtumaa ·
 kategorian nimeä, matriisin solua tai kaavion palkkia klikkaamalla pääset katsomaan ja muokkaamaan rivejä</p>
 {huomio}
-<div class="tyokalut"><input id="haku" type="search" placeholder="hae tapahtumia… (Esc tyhjentää)" size="26"><span id="tila" class="pikkuteksti"></span><span id="ajonapit" hidden> <button type="button" id="nappi-hae">Hae pankista</button> <button type="button" id="nappi-aja">Lue inbox</button></span></div>
+<div class="tyokalut"><input id="haku" type="search" placeholder="hae tapahtumia… (Esc tyhjentää)" size="26"><span id="tila" class="pikkuteksti"></span><span id="ajonapit" hidden> <button type="button" id="nappi-hae">Hae pankista</button> <button type="button" id="nappi-aja">Lue inbox</button> <a href="velho" id="nappi-velho">Pankkiyhteys</a></span></div>
 <div id="ajoloki" hidden><div id="ajoloki-otsikko" class="pikkuteksti"></div><pre id="ajoloki-teksti"></pre><button type="button" id="ajoloki-nappi" hidden>Päivitä raportti</button> <button type="button" id="ajoloki-piilota">Piilota</button></div>
 <div id="paneeli"></div>
 <h2>Tulot ja menot kuukausittain <span class="pikkuteksti">(vihreä = tulot, ruskea = menot, tumma viiva = menojen 3 kk liukuva keskiarvo, % = säästöaste)</span></h2>
@@ -6508,6 +6549,217 @@ def cmd_tarkista_kortit(args):
           "suuntaa-antavia — YHTEENSÄ-rivin erotus on luotettava mittari.")
 
 
+def _kysely_luku(polku, nimi):
+    """Yksi kokonaisluku osoitteen kyselyosasta. urllib.parse olisi tähän
+    järeä, ja se tuotaisiin vain tämän takia."""
+    for pala in polku.partition("?")[2].split("&"):
+        avain, _, arvo = pala.partition("=")
+        if avain == nimi and arvo.isdigit():
+            return int(arvo)
+    return 0
+
+
+class SelainVelho:
+    """Velhon kysymykset selaimeen ja vastaukset takaisin.
+
+    Velho ajaa omassa säikeessään ja pysähtyy jokaisen kysymyksen kohdalla
+    odottamaan jonoa. Sivu kysyy tilaa säännöllisesti, näyttää kysymyksen ja
+    lähettää vastauksen, joka vapauttaa säikeen jatkamaan. Velhon oma koodi ei
+    tiedä tästä mitään — se kutsuu _kysy():ä kuten ennenkin."""
+
+    def __init__(self):
+        self.loki = []
+        self.kysymys = None
+        self.linkit = []
+        self.virhe = ""
+        self.kaynnissa = True
+        self._jono = queue.Queue()
+        self._laskuri = 0
+
+    def kysy(self, kysymys):
+        self._laskuri += 1
+        kysymys = dict(kysymys, id=self._laskuri)
+        self.kysymys = kysymys
+        while self.kaynnissa:
+            try:
+                tunnus, arvo = self._jono.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if tunnus == kysymys["id"]:
+                self.kysymys = None
+                return siisti(str(arvo))
+        raise SystemExit("velho keskeytettiin selaimesta")
+
+    def vastaa(self, tunnus, arvo):
+        self._jono.put((tunnus, arvo))
+
+    def avaa(self, url):
+        # Sivu avaa linkin käyttäjän klikkauksesta: silloin ponnahdusikkunoiden
+        # esto ei ehdi väliin, ja käyttäjä näkee minne on menossa.
+        self.linkit.append(url)
+
+    def lopeta(self):
+        self.kaynnissa = False
+
+
+VELHO_AJO = {"ui": None}
+VELHO_LUKKO = threading.Lock()
+
+
+def _aja_velho():
+    """Käyttöönotto selaimesta: sama cmd_pankkihaku, eri käyttöliittymä."""
+    global VELHO_UI
+    ui = VELHO_AJO["ui"]
+    konsoli = sys.stdout
+    sys.stdout = _Haarukka(konsoli, ui.loki)
+    VELHO_UI = ui
+    try:
+        cmd_pankkihaku(argparse.Namespace(uusi_sovellus=False, paivia=89,
+                                          palvelu=None, istunto=None, yhdista=None,
+                                          raaka=False, siivoa_alkaen=False,
+                                          pakota=False, ei_velhoa=True))
+    except SystemExit as e:
+        ui.loki.append(f"Keskeytyi: {e}")
+        ui.virhe = str(e)
+    except Exception as e:
+        ui.loki.append(f"⚠ käyttöönotto epäonnistui: {e}")
+        ui.virhe = str(e)
+    finally:
+        VELHO_UI = None
+        sys.stdout = konsoli
+        ui.kaynnissa = False
+        ui.kysymys = None
+
+
+VELHO_SIVU = r"""<!doctype html>
+<html lang="fi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rahaputki — pankkiyhteyden käyttöönotto</title>
+<style>
+:root { --muste:#26241f; --paperi:#f7f5f0; --vaalea:#eae6dd; }
+* { box-sizing:border-box }
+body { font:15px/1.55 "Iowan Old Style","Palatino Linotype",Georgia,serif;
+       color:var(--muste); background:var(--paperi); margin:0; padding:2rem 1rem 4rem }
+main { max-width:760px; margin:0 auto }
+h1 { font-size:1.5rem; margin:0 0 .2rem }
+.meta { color:#6b665c; margin:0 0 1.5rem }
+pre { font:12.5px/1.55 ui-monospace,Menlo,monospace; white-space:pre-wrap;
+      background:#fff; border:1px solid #c9c3b8; border-radius:8px;
+      padding:.8rem 1rem; max-height:26rem; overflow:auto; margin:0 0 1rem }
+button { font:inherit; font-size:.95em; padding:.35rem .9rem; border:1px solid #c9c3b8;
+         border-radius:6px; background:#fff; cursor:pointer }
+button:hover { background:var(--vaalea) }
+button.paa { background:#26241f; color:#f7f5f0; border-color:#26241f }
+button.paa:hover { background:#3d3a33 }
+#kysymys { background:#fff; border:1px solid #c9c3b8; border-radius:8px;
+           padding:1rem 1.2rem; margin:0 0 1rem }
+#kysymysteksti { white-space:pre-wrap; margin:0 0 .8rem }
+input[type=text] { font:inherit; width:100%; padding:.4rem .6rem; border:1px solid #c9c3b8;
+                   border-radius:6px; margin:0 0 .8rem }
+.valinnat button { display:block; width:100%; text-align:left; white-space:pre-wrap;
+                   margin:0 0 .4rem }
+#linkit a { display:inline-block; margin:0 .6rem .6rem 0 }
+</style></head><body><main>
+<h1>Pankkiyhteyden käyttöönotto</h1>
+<p class="meta">Sama ohjattu käyttöönotto kuin terminaalissa — kysymykset vain
+tulevat tänne. Voit sulkea sivun milloin tahansa; tehty ei katoa.</p>
+<div id="linkit"></div>
+<pre id="loki"></pre>
+<div id="kysymys" hidden>
+  <div id="kysymysteksti"></div>
+  <div id="kentat"></div>
+</div>
+<div id="alku"><button class="paa" id="aloita">Aloita käyttöönotto</button></div>
+<script>
+var alkaen = 0, vastattu = 0;
+function el(id){ return document.getElementById(id); }
+function nayta(v){
+  if(v.rivit && v.rivit.length){
+    el('loki').textContent += v.rivit.join('\n') + '\n';
+    el('loki').scrollTop = el('loki').scrollHeight;
+    alkaen = v.seuraava;
+  }
+  var lk = el('linkit');
+  if(v.linkit && v.linkit.length > lk.childElementCount){
+    lk.innerHTML = '';
+    v.linkit.forEach(function(u){
+      var a = document.createElement('a');
+      a.href = u; a.target = '_blank'; a.rel = 'noopener';
+      a.innerHTML = '<button class="paa">Avaa: ' + u.slice(0, 60) + '…</button>';
+      lk.appendChild(a);
+    });
+  }
+  var k = v.kysymys;
+  if(!k || k.id === vastattu){ el('kysymys').hidden = true; return; }
+  el('kysymys').hidden = false;
+  el('kysymysteksti').textContent = k.kysymys;
+  var kentat = el('kentat');
+  if(kentat.dataset.id == k.id) return;
+  kentat.dataset.id = k.id;
+  kentat.innerHTML = '';
+  function laheta(arvo){
+    vastattu = k.id;
+    el('kysymys').hidden = true;
+    fetch('api/velho/vastaus', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id:k.id, arvo:arvo})});
+  }
+  if(k.tyyppi === 'valikko'){
+    var d = document.createElement('div'); d.className = 'valinnat';
+    k.vaihtoehdot.forEach(function(v2){
+      var b = document.createElement('button');
+      b.textContent = v2.arvo + ') ' + v2.teksti;
+      if(v2.arvo === k.oletus) b.className = 'paa';
+      b.onclick = function(){ laheta(v2.arvo); };
+      d.appendChild(b);
+    });
+    kentat.appendChild(d);
+  } else if(k.tyyppi === 'kylla'){
+    [['Kyllä','k'],['Ei','e']].forEach(function(par){
+      var b = document.createElement('button');
+      b.textContent = par[0];
+      if(par[1] === k.oletus) b.className = 'paa';
+      b.onclick = function(){ laheta(par[1]); };
+      b.style.marginRight = '.5rem';
+      kentat.appendChild(b);
+    });
+  } else if(k.tyyppi === 'jatka'){
+    var b = document.createElement('button');
+    b.className = 'paa'; b.textContent = 'Jatka';
+    b.onclick = function(){ laheta(''); };
+    kentat.appendChild(b);
+  } else {
+    var i = document.createElement('input');
+    i.type = 'text'; i.placeholder = k.oletus ? ('oletus: ' + k.oletus) : '';
+    var b2 = document.createElement('button');
+    b2.className = 'paa'; b2.textContent = 'Lähetä';
+    b2.onclick = function(){ laheta(i.value); };
+    i.onkeydown = function(e){ if(e.key === 'Enter') b2.onclick(); };
+    kentat.appendChild(i); kentat.appendChild(b2);
+    i.focus();
+  }
+}
+function seuraa(){
+  fetch('api/velho?alkaen=' + alkaen, {cache:'no-store'})
+    .then(function(r){ return r.json(); })
+    .then(function(v){
+      nayta(v);
+      if(v.kaynnissa){ setTimeout(seuraa, 600); }
+      else { el('alku').hidden = false;
+             el('aloita').textContent = 'Aloita alusta'; }
+    })
+    .catch(function(){ setTimeout(seuraa, 2000); });
+}
+el('aloita').onclick = function(){
+  el('alku').hidden = true; el('loki').textContent = ''; alkaen = 0; vastattu = 0;
+  fetch('api/velho/aloita', {method:'POST'}).then(function(){ seuraa(); });
+};
+fetch('api/velho?alkaen=0', {cache:'no-store'}).then(function(r){ return r.json(); })
+  .then(function(v){ if(v.kaynnissa){ el('alku').hidden = true; seuraa(); } });
+</script></main></body></html>
+"""
+
+
 # Selaimesta käynnistetty komento ajetaan tässä prosessissa, ei uutena
 # prosessina. Silloin se käyttää jo otettua pääkirjalukkoa eikä joudu
 # kilpailemaan siitä itsensä kanssa — kahden käynnistimen mallissa juuri se
@@ -6599,13 +6851,27 @@ def cmd_selaa(args):
                 del self.headers["If-Modified-Since"]  # aina tuore sivu, ei 304-oikotietä
             if self.path == "/api/ping":
                 return self._json({"ok": True})
+            if self.path.rstrip("/") == "/velho":
+                sivu = VELHO_SIVU.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(sivu)))
+                self.end_headers()
+                self.wfile.write(sivu)
+                return
+            if self.path.startswith("/api/velho"):
+                ui = VELHO_AJO["ui"]
+                if ui is None:
+                    return self._json({"ok": True, "rivit": [], "seuraava": 0,
+                                       "kysymys": None, "linkit": [],
+                                       "kaynnissa": False, "virhe": ""})
+                alkaen = _kysely_luku(self.path, "alkaen")
+                return self._json({"ok": True, "rivit": ui.loki[alkaen:],
+                                   "seuraava": len(ui.loki),
+                                   "kysymys": ui.kysymys, "linkit": ui.linkit,
+                                   "kaynnissa": ui.kaynnissa, "virhe": ui.virhe})
             if self.path.startswith("/api/loki"):
-                kysely = self.path.partition("?")[2]
-                alkaen = 0
-                for pala in kysely.split("&"):
-                    avain, _, arvo = pala.partition("=")
-                    if avain == "alkaen" and arvo.isdigit():
-                        alkaen = int(arvo)
+                alkaen = _kysely_luku(self.path, "alkaen")
                 rivit = SELAIN_AJO["loki"]
                 return self._json({"ok": True, "rivit": rivit[alkaen:],
                                    "seuraava": len(rivit),
@@ -6862,6 +7128,21 @@ def cmd_selaa(args):
                     del cfg["kategoriat"][nimi]
                     turvakirjoita_json(CONFIG, cfg)
                     return self._json({"ok": True, "siirretty": siirretty})
+                if self.path == "/api/velho/aloita":
+                    with VELHO_LUKKO:
+                        vanha_ui = VELHO_AJO["ui"]
+                        if vanha_ui is not None and vanha_ui.kaynnissa:
+                            return self._json({"ok": False,
+                                               "virhe": "käyttöönotto on jo käynnissä"})
+                        VELHO_AJO["ui"] = SelainVelho()
+                    threading.Thread(target=_aja_velho, daemon=True).start()
+                    return self._json({"ok": True})
+                if self.path == "/api/velho/vastaus":
+                    ui = VELHO_AJO["ui"]
+                    if ui is None:
+                        return self._json({"ok": False, "virhe": "velho ei ole käynnissä"})
+                    ui.vastaa(pyynto.get("id"), pyynto.get("arvo", ""))
+                    return self._json({"ok": True})
                 if self.path == "/api/komento":
                     komento = siisti(pyynto.get("komento", ""))
                     if komento not in ("hae", "aja"):
