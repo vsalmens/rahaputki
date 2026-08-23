@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.23"
+VERSIO = "v0.24"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -5217,7 +5217,7 @@ def _oly_kaudet_html(L, eur2):
     return "".join(osat)
 
 
-def budjetti_osio(taulu, raamit, tyypit, kaikki_kk):
+def budjetti_osio(taulu, raamit, tyypit):
     """Kuluvan kuukauden budjettitilanne, sivun tärkeimmällä paikalla.
 
     Kuluva kuukausi eikä viimeisin täysi: budjetti on päätös siitä, mitä
@@ -5608,7 +5608,7 @@ def tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit, ledg
             rivit_html.append(f'<tr><td{kat_attr(k, kohde)}>{e(k)}</td><td class="num">{fmt_eur(tot)}</td>{raami_s}{erotus}'
                               f'{pros}<td>{palkki}</td></tr>')
 
-    budjetti_html = budjetti_osio(taulu, raamit, tyypit, kaikki_kk)
+    budjetti_html = budjetti_osio(taulu, raamit, tyypit)
 
     # --- kertyvät erät: vuosilaskut ja muut kertasummat, joita säästetään kokoon ---
     kertyva_rivit = []
