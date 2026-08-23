@@ -649,6 +649,14 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   ennen kuin edellinen on valmis. Lukkoon törmätessään käynnistin pysähtyy
   siihen: se ei jatka raportin avaamiseen, vaan jättää varoituksen ruudulle
   luettavaksi (paluuarvo 4 erottaa lukon muista virheistä).
+- **Saldot ja täsmäytys**: `python3 koodi/kirjanpito.py hae --saldot` hakee myös
+  tilien saldot ja näyttää ne raportin Pankkiyhteydet-taulukossa. Saldoa **ei
+  haeta koskaan itsestään**: PSD2 velvoittaa pankin sallimaan vain neljä hakua
+  vuorokaudessa tiliä kohden silloin kun et ole itse paikalla, ja saldo on oma
+  pyyntönsä samasta budjetista. Täsmäytys on siis tietoinen toimitus, kuten
+  YNABissa — ei taustalla jyskyttävä tarkistus. Vertailuun kelpaa vain kirjattu
+  saldo (ITBD/CLBD); tähdellä merkitty sisältää myös odottavat korttivaraukset,
+  joita kirjanpidossa ei vielä ole.
 - **Uusi pankki / muuttunut CSV-muoto**: aja
   `python3 koodi/kirjanpito.py kurkista tiedosto.csv` — se näyttää enkoodauksen,
   erottimen ja otsikot. Lisää/korjaa lähde `asetukset/config.json`:iin niillä

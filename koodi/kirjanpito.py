@@ -1668,31 +1668,18 @@ def eb_riveiksi(data, kerro=None, varaukset=None):
     return ulos
 
 
-# PSD2:n tekninen sääntö (RTS 36 art.) velvoittaa pankin sallimaan vähintään
-# neljä hakua vuorokaudessa silloin kun käyttäjä ei ole itse paikalla. Saldo on
-# oma pyyntönsä ja kuluttaa siis samaa budjettia kuin tapahtumat: jos sen hakisi
-# joka ajolla, ajokertoja jäisi neljän sijaan kaksi. Saldo haetaan siksi
-# korkeintaan kerran vuorokaudessa tiliä kohden — täsmäytys on tarkistus, ei
-# jokaisen ajon tarve.
-SALDO_VALI_H = 20
+# PSD2:n tekninen sääntö (RTS 36 art.) velvoittaa pankin sallimaan vain neljä
+# hakua vuorokaudessa tiliä kohden silloin kun käyttäjä ei ole itse paikalla.
+# Saldo on oma pyyntönsä ja kuluttaa samaa budjettia kuin tapahtumat, joten sitä
+# ei haeta koskaan itsestään: se haetaan vain kun käyttäjä sitä pyytää
+# (täsmäytys). Sama malli kuin YNABissa — täsmäytys on tietoinen toimitus, ei
+# taustalla jyskyttävä tarkistus, ja niukka hakubudjetti kuluu siihen mihin
+# käyttäjä sen haluaa kuluvan.
 
 
 def eb_saldot(account_uid):
     """Tilin saldot rajapinnasta. Palauttaa pankin vastauksen sellaisenaan."""
     return _eb_kutsu(f"/accounts/{account_uid}/balances", eb_token())
-
-
-def _saldo_kaipaa_hakua(tila, pakota=False):
-    """Onko tämän tilin saldo tarpeeksi vanha haettavaksi uudelleen?"""
-    if pakota:
-        return True
-    hetki = str((tila or {}).get("saldo_haettu", ""))
-    if not hetki:
-        return True
-    try:
-        return (datetime.now() - datetime.fromisoformat(hetki)).total_seconds() > SALDO_VALI_H * 3600
-    except ValueError:
-        return True
 
 
 def _poimi_saldo(vastaus):
@@ -3227,12 +3214,9 @@ def kirjoita_pankkicsv(tili, rivit, polku):
     turvakirjoita(polku, puskuri.getvalue())
 
 
-def _hae_saldo(aid, tili, pakota=False, raaka=False):
-    """Saldo talteen, jos edellisestä on kulunut tarpeeksi. Epäonnistuminen ei
-    ole vakavaa: tapahtumat on jo haettu, ja saldo on tarkistusta varten."""
-    tila = lue_pankkitila().get(str(aid), {})
-    if not _saldo_kaipaa_hakua(tila, pakota):
-        return
+def _hae_saldo(aid, tili, raaka=False):
+    """Saldo talteen. Kutsutaan vain kun käyttäjä on pyytänyt täsmäytystä.
+    Epäonnistuminen ei ole vakavaa: tapahtumat on jo haettu."""
     try:
         vastaus = eb_saldot(aid)
     except EBVirhe as e:
@@ -3345,9 +3329,8 @@ def cmd_hae(args):
             print(f"  \u2699 {tili}: raaka \u2192 data/raaka/{rpolku.name} ({n} objektia)")
         paivita_pankkitila(aid, haettu=date.today().isoformat(), virhe="",
                            virhekoodi=0, tili=tili)
-        if palvelu == "enablebanking":
-            _hae_saldo(aid, tili, getattr(args, "saldot", False),
-                       getattr(args, "raaka", False))
+        if palvelu == "enablebanking" and getattr(args, "saldot", False):
+            _hae_saldo(aid, tili, getattr(args, "raaka", False))
         ohitetut = Counter()
         tilin_varaukset = []
         rivit = (eb_riveiksi(data, ohitetut, tilin_varaukset)
@@ -4603,7 +4586,11 @@ def pankkiyhteydet_html(cfg):
             # Varauksia sisältävä saldo ei ole vertailukelpoinen kirjattujen
             # tapahtumien kanssa, ja se on syytä sanoa siinä missä luku näkyy.
             merkinta = "" if tyyppi.startswith(("ITBD", "CLBD")) else " *"
-            saldoteksti = f'{fmt_eur(saldo)} {tt.get("saldo_valuutta", "")}{merkinta}'.strip()
+            # Saldo haetaan vain pyydettäessä, joten se voi olla viikkoja vanha.
+            # Luku ilman päivämäärää johtaisi luulemaan sitä tämänhetkiseksi.
+            hetki = str(tt.get("saldo_haettu", ""))[:10]
+            saldoteksti = (f'{fmt_eur(saldo)} {tt.get("saldo_valuutta", "")}{merkinta}'
+                           + (f' ({hetki})' if hetki else '')).strip()
         else:
             saldoteksti = "—"
         rivit.append(
@@ -7527,8 +7514,8 @@ def main():
     h.add_argument("--yhdista", metavar="PANKKI",
                    help="Enable Banking: valtuuta pankki ja tallenna tilit (sandboxissa: mock)")
     h.add_argument("--saldot", action="store_true",
-                   help="hae tilien saldot vaikka edellisestä olisi alle vuorokausi "
-                        "(kuluttaa pankin päivittäistä hakurajaa)")
+                   help="hae myös tilien saldot täsmäytystä varten (yksi lisähaku "
+                        "per tili pankin neljän vuorokausihaun budjetista)")
     h.add_argument("--raaka", action="store_true",
                    help="tallenna pankin täydet raakavastaukset tiedostoon (data/raaka/) diagnoosia varten")
     o = ala.add_parser("opi", help="lue täytetty tarkistettavat.csv")
