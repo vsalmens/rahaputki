@@ -72,7 +72,13 @@ PAIKALLISET_TIEDOSTO = "koneen-asetukset.txt"
 # polku muistetaan myös kotihakemistoon: se ei ole totuus vaan varmuuskopio,
 # jonka turvin ohjelma osaa ehdottaa itsensä takaisin kuntoon sen sijaan että
 # aloittaisi tyhjän kirjanpidon väärässä paikassa.
-TIETOKANSIO_MUISTI = Path.home() / ".rahaputki" / "tietokansio.txt"
+# Muisti on asennuskohtainen, ei konekohtainen: nimessä on koodin juuren
+# tiiviste. Muuten koneelle purettu uusi asennus perisi toisen asennuksen
+# kirjanpidon — mitä ei voi erottaa hukatun osoittimen palautuksesta, ja
+# väärään suuntaan erehtyminen tarkoittaisi vieraan kirjanpidon avaamista.
+TIETOKANSIO_MUISTI = (Path.home() / ".rahaputki" /
+                      ("tietokansio-" + hashlib.sha1(
+                          str(KOODIJUURI).encode("utf-8")).hexdigest()[:10] + ".txt"))
 # Aiemmat nimet luetaan yhä ja kirjoitetaan uudella nimellä. Osoitin
 # tietokansioon ei saa kadota kesken päivityksen: ilman sitä ohjelma aloittaisi
 # tyhjän kirjanpidon väärässä paikassa.
@@ -275,7 +281,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.13"
+VERSIO = "v0.14"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -307,6 +313,11 @@ MIN_PYTHON = (3, 9)
 ALOITUSKANSIOT = (INBOX, DATA, RAPORTIT, ASETUKSET)
 ALOITUSMALLIT = ((CONFIG, "config.esimerkki.json"),
                  (SAANNOT, "saannot.esimerkki.csv"))
+# Koneen omat asetukset syntyvät mallipohjasta koodin juureen. Tiedosto on
+# paketissa mukana mallina mutta ei valmiina: sen sisältö on konekohtainen,
+# eikä päivitys saa kirjoittaa käyttäjän omaa arvoa yli. Siksi mallipohja on
+# koodi/-kansiossa (joka korvataan) ja tiedosto juuressa (jota ei korvata).
+PAIKALLISET_MALLI = "koneen-asetukset.esimerkki.txt"
 
 # Aiemmat versiot pitivät nämä juuressa; siirretään kerran asetukset-kansioon.
 VANHAT_ASETUKSET = (("config.json", CONFIG), ("saannot.csv", SAANNOT),
@@ -370,10 +381,23 @@ def _palauta_tietokansio():
     ja kaksi rinnakkaista pääkirjaa on pahempi vika kuin mikään virheilmoitus.
     Palautus tehdään, ei kysytä: kysymys ei ole kaksoisklikkaajan tavoitettavissa
     eikä vastaus voisi olla mikään muu."""
-    if PAIKALLISET_LAHDE is not None or DATAJUURI != KOODIJUURI:
+    # Laukeaa myös silloin kun tiedosto on olemassa mutta osoittaa ohjelman
+    # omaan kansioon: koko kansion korvaava päivitys tuo mallipohjan oletuksen
+    # käyttäjän oman arvon tilalle, ja lopputulos on sama kuin puuttuva tiedosto.
+    if DATAJUURI != KOODIJUURI:
         return
     muistettu = _muistettu_tietokansio()
-    if not muistettu or Path(muistettu).expanduser().resolve() == KOODIJUURI:
+    if not muistettu:
+        return
+    kohde = Path(_siisti_polkuarvo(muistettu)).expanduser()
+    if kohde.resolve() == KOODIJUURI:
+        return
+    # Palautetaan vain, jos muistetussa paikassa on kirjanpito eikä täällä ole:
+    # muuten yhden kansion asennus, joka on tietoisesti siirtynyt takaisin,
+    # vedettäisiin väkisin vanhaan paikkaan.
+    if not (kohde / "data" / "tapahtumat.csv").is_file():
+        return
+    if (KOODIJUURI / "data" / "tapahtumat.csv").is_file():
         return
     try:
         _kirjoita_paikalliset({"tietokansio": muistettu})
@@ -387,6 +411,25 @@ def _palauta_tietokansio():
 Näin käy, jos päivityksessä korvataan koko kansio eikä vain koodi/-kansiota.
 Käynnistä ohjelma uudelleen, niin se lukee kirjanpitosi oikeasta paikasta.""")
     raise SystemExit(0)
+
+
+def _luo_paikalliset_mallista():
+    """Luo koneen-asetukset.txt mallipohjasta, jos sitä ei ole.
+
+    Tiedoston olemassaolo on itsessään ohje: käyttäjä näkee mitä voi asettaa,
+    ilman että sitä pitää lukea dokumentaatiosta. Oletusarvo on piste eli
+    ohjelman oma kansio, joten tiedoston syntyminen ei muuta mitään."""
+    kohde = KOODIJUURI / PAIKALLISET_TIEDOSTO
+    if kohde.exists():
+        return
+    malli = KOODI / PAIKALLISET_MALLI
+    try:
+        if malli.is_file():
+            turvakirjoita_kopio(malli, kohde)
+        else:
+            _kirjoita_paikalliset({"tietokansio": "."})
+    except (OSError, RuntimeError):
+        pass
 
 
 def _varmista_datajuuri():
@@ -505,6 +548,7 @@ def varmista_aloitus():
     traceback-tulosteeseen ennen kuin on edes päässyt alkuun. Olemassa olevaa
     ei kosketa koskaan, joten tämän voi ajaa turvallisesti joka kerta."""
     _palauta_tietokansio()
+    _luo_paikalliset_mallista()
     _varmista_datajuuri()
     _muista_tietokansio(DATAJUURI)
     _paivita_paikalliset()
