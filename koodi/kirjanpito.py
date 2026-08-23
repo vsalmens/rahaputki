@@ -241,7 +241,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.8"
+VERSIO = "v0.9"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -2736,25 +2736,19 @@ def _rekisteroi_sovellus(token, varmenne, nimi="Rahaputki", gdpr_email=""):
                  terms_url=f"{EHDOT}/kayttoehdot.md")
     if gdpr_email:
         laaja["gdpr_email"] = gdpr_email
-    yritykset = [dict(laaja, redirect_urls=[EB_TESTIPALUU, EB_PAIKALLINEN]),
-                 laaja, perus]
+    # Paikallista http://localhost-osoitetta ei enää yritetä rekisteröidä.
+    # Enable Banking ei hyväksy http-skeemaa, joten yritys epäonnistui joka
+    # kerta ja tulosti rivin, joka selitti saman asian uudelleen — kohina,
+    # joka opettaa ohittamaan myös ne rivit, jotka kertovat jotain.
+    yritykset = [laaja, perus]
     for i, runko in enumerate(yritykset):
         try:
-            vastaus = _hallintakutsu(token, runko)
+            return _hallintakutsu(token, runko)
         except EBVirhe as e:
             if e.koodi not in (400, 422) or i + 1 == len(yritykset):
                 raise
-            if i == 0:
-                print("ℹ rajapinta ei hyväksynyt paikallista paluuosoitetta — "
-                      "koodi kopioidaan jatkossa selaimen osoiteriviltä")
-            else:
-                print("ℹ rajapinta ei ottanut valinnaisia kenttiä vastaan — "
-                      "täytä kuvaus ja URLit portaalissa myöhemmin")
-            continue
-        if i == 0:
-            print(f"✓ paikallinen paluuosoite {EB_PAIKALLINEN} rekisteröity — "
-                  "tunnistautumiskoodia ei tarvitse kopioida")
-        return vastaus
+            print("ℹ rajapinta ei ottanut valinnaisia kenttiä vastaan — "
+                  "täytä kuvaus ja URLit portaalissa myöhemmin")
 
 
 def _sovellus_id(vastaus):
@@ -2886,17 +2880,18 @@ def _on_paikallinen(osoite):
 
 
 def _valitse_paluuosoite(app, cfg):
-    """Paikallinen paluuosoite on paras: koodi napataan selaimesta itsestään.
-    Muussa tapauksessa käytetään sovellukselle rekisteröityä osoitetta."""
-    paluut = _paluuosoitteet(app)
+    """Sovellukselle rekisteröity https-paluuosoite.
+
+    Paikallista http://localhost-osoitetta ei enää kokeilla. Se olisi paras
+    ratkaisu — koodi napattaisiin selaimesta eikä käyttäjän tarvitsisi kopioida
+    mitään — mutta Enable Banking ei hyväksy http-skeemaa, ja https vaatisi
+    varmenteen jota emme voi tarjota. Yritys epäonnistui siis joka kerta,
+    kulutti yhden rajapintakutsun ja tulosti rivin, joka selitti saman asian
+    uudelleen. Osoitteet suodatetaan siksi jo tässä."""
+    paluut = [u for u in _paluuosoitteet(app) if not _on_paikallinen(u)]
     nykyinen = siisti((cfg.get("pankkihaku") or {}).get("redirect_url", ""))
-    # Paikallinen kuuntelija on paras, jos sovellukselle on rekisteröity
-    # sellainen osoite: silloin koodia ei tarvitse kopioida lainkaan. Kaikki
-    # rajapinnan versiot eivät http-skeemaa hyväksy, joten eb_valtuuta osaa
-    # pudota takaisin https-osoitteeseen.
-    paikallinen = next((u for u in paluut if _on_paikallinen(u)), "")
-    if paikallinen:
-        return paikallinen
+    if _on_paikallinen(nykyinen):
+        nykyinen = ""
     if nykyinen and (not paluut or nykyinen in paluut):
         return nykyinen
     if paluut:
@@ -3340,7 +3335,11 @@ def eb_valtuuta(cfg, hakusana="", app=None):
     print(f"\nTunnistaudu pankkiisi selaimessa. Jos selain ei avaudu, "
           f"kopioi osoite:\n  {url}")
     _avaa_selain(url)
-    koodi = _odota_koodi(redirect)
+    # Paikallinen kuuntelija toimii vain http-paluuosoitteella, jota Enable
+    # Banking ei hyväksy. Ehto on siis käytännössä aina epätosi — mutta se on
+    # rehellisempi kuin kuuntelijan käynnistäminen osoitteelle, joka osoittaa
+    # jonnekin muualle kuin tälle koneelle.
+    koodi = _odota_koodi(redirect) if _on_paikallinen(redirect) else ""
     if koodi:
         print("✓ paluu napattu automaattisesti")
     else:
@@ -7391,9 +7390,10 @@ function paneeliSovellus(){
 
   if(s.app_id){
     h += '<h3>Rekisteröinti käytössä</h3><div class="kortti">' +
-         '<h4>' + e(s.app_id) + (s.nimi ? ' — ' + e(s.nimi) : '') + '</h4>' +
-         '<p>Avain: ' + e(s.avain || '—') + '<br>' +
-         (s.varmistettu ? '✓ Yhteys tarkistettu' : 'Yhteyttä ei ole vielä tarkistettu') +
+         '<h4>' + e(s.nimi || 'Rahaputki') + (s.ymparisto ? ' (' + e(s.ymparisto) + ')' : '') +
+         '</h4><p>Tunnus: ' + e(s.app_id) + '<br>Avain: ' + e(s.avain || '—') + '<br>' +
+         (s.varmistettu ? '✓ Yhteys toimii ja haku on käytettävissä'
+                        : 'Yhteyttä ei ole vielä tarkistettu') +
          '</p></div><div class="rivi">' +
          '<button class="toiminto ' + (s.varmistettu ? '' : 'paa') + '" data-t="varmista">' +
          'Tarkista yhteys</button></div>';
@@ -7655,7 +7655,7 @@ def _velho_alkutila():
     return {"vaihe": "sovellus",
             "kirjastot": None,
             "sovellus": {"app_id": "", "avain": "", "varmistettu": False,
-                         "nimi": "", "reitti": ""},
+                         "nimi": "", "reitti": "", "ymparisto": "", "aktiivinen": None},
             "avainehdokkaat": [], "avain_odottaa": None,
             "maa": "FI", "haku": "", "pankit": [],
             "pankkivaihe": "valinta", "valinta": None,
@@ -7818,18 +7818,47 @@ def velho_toiminto(nimi, p):
                 v["virhe"] = f"Rekisteröinti epäonnistui: {e}"
 
     elif nimi == "varmista":
+        # Sovelluksen lukeminen onnistuu myös aktivoimattomalta sovellukselta,
+        # joten pelkkä /application ei kerro toimiiko haku. Se pitää kokeilla:
+        # pankkilista on kevyin oikea kutsu eikä kuluta tilikohtaista
+        # hakubudjettia. Ensimmäinen versio ilmoitti "yhteys toimii" pelkän
+        # sovelluksen luvun perusteella, ja seuraava ruutu kaatui virheeseen
+        # "Application is not active" — väärä vastaus väärään kysymykseen.
+        v["sovellus"]["varmistettu"] = False
         try:
-            app = eb_sovellus()
-            v["sovellus"]["varmistettu"] = True
-            v["sovellus"]["nimi"] = siisti(str((app or {}).get("name", "")))
-            v["viesti"] = "Yhteys toimii."
+            app = eb_sovellus() or {}
+            v["sovellus"]["nimi"] = siisti(str(_kentta(app, "name") or ""))
+            v["sovellus"]["ymparisto"] = str(_kentta(app, "environment") or "").upper()
+            aktiivinen = _kentta(app, "active")
+            v["sovellus"]["aktiivinen"] = aktiivinen
         except EBVirhe as e:
             v["virhe"] = ("Avain ja sovelluksen tunnus eivät ole samasta "
                           "sovelluksesta. Valitse oikea avain uudelleen."
                           if e.koodi in (401, 403) else
                           f"Enable Banking vastasi {e.koodi}: {e.runko}")
+            return velho_julkinen()
         except Exception as e:
             v["virhe"] = f"Avainta ei voitu käyttää: {e}"
+            return velho_julkinen()
+        try:
+            eb_pankkilista(v["maa"])
+        except EBVirhe as e:
+            if e.koodi == 403 and "not active" in str(e.runko).lower():
+                v["virhe"] = (
+                    "Avain kelpaa, mutta Enable Banking ei ole aktivoinut "
+                    "sovellusta: haku ei vielä toimi. Käy portaalin "
+                    "sovellussivulla ja liitä tilisi sovellukseen (Link "
+                    "accounts) — ilmaisessa, omiin tileihin rajatussa tilassa "
+                    "se on se vaihe, joka puuttuu useimmiten. Tarkista sitten "
+                    "yhteys uudelleen.")
+            else:
+                v["virhe"] = f"Haku ei toimi vielä ({e.koodi}): {e.runko}"
+            return velho_julkinen()
+        except (OSError, ValueError) as e:
+            v["virhe"] = f"Yhteys ei toiminut: {e}"
+            return velho_julkinen()
+        v["sovellus"]["varmistettu"] = True
+        v["viesti"] = "Yhteys toimii ja haku on käytettävissä."
 
     elif nimi == "pankit":
         v["maa"] = (siisti(str(p.get("maa", ""))) or v["maa"]).upper()[:2]
