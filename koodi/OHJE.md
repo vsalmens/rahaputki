@@ -493,6 +493,7 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 | `koneen-asetukset.txt` | koneen omat asetukset (mm. `tietokansio`), koodin juuressa; syntyy vain jos jotain on asetettavaa (ks. Kustomointi) |
 | `data/.lukko.<kone>.json` | ajonaikainen lukko, vain jaetussa tilassa (`"lukitus": "jaettu"`); katoaa itsestään |
 | `data/pankkitila.json` | pankkiyhteyksien tila: saldo, milloin tililtä viimeksi saatiin tapahtumia ja mihin asti valtuutus on voimassa |
+| `data/pankkiloki.csv` | rajapintakutsujen loki: aika, kohde, tulos, kesto. Ei tunnuksia eikä tilinumeroita; tilin tunnus on tiivisteenä |
 | `data/varaukset.json` | odottavat korttivaraukset — `hae` kirjoittaa, `aja` täsmäyttää; poistettavissa milloin vain |
 | `data/yhteistalous.json` | yhteistalouden tila: tasauspäivä (mihin asti yhteiskulut on huomioitu), kk-vakiot, läsnäolot, kirjaukset — raportin osio ylläpitää tätä puolestasi |
 | `asetukset/pankkihaku.env` | pankkihaun tunnukset — **ei jaeta, ei versioida** |
@@ -657,6 +658,15 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
   YNABissa — ei taustalla jyskyttävä tarkistus. Vertailuun kelpaa vain kirjattu
   saldo (ITBD/CLBD); tähdellä merkitty sisältää myös odottavat korttivaraukset,
   joita kirjanpidossa ei vielä ole.
+
+  Jokainen rajapintakutsu kirjautuu tiedostoon `data/pankkiloki.csv`: aika,
+  kohde, tulos, HTTP-koodi, kesto ja vastauksen koko. Rajan ylittyessä mukaan
+  tulee pankin `Retry-After`-otsake, jos se on mukana. Näin hakurajan
+  käyttäytymisen näkee jälkikäteen omasta datasta — säädös puhuu "24 tunnin
+  jaksosta" muttei määrää, onko kyse liukuvasta ikkunasta vai keskiyöllä
+  nollautuvasta kiintiöstä, ja pankit voivat toteuttaa sen eri tavoin. Lokiin ei
+  kirjoiteta tunnuksia, pyyntöjen runkoja eikä tilinumeroita: tilin tunnus on
+  tiivisteenä ja virheteksteistä siivotaan kaikki tunnukselta näyttävä.
 - **Uusi pankki / muuttunut CSV-muoto**: aja
   `python3 koodi/kirjanpito.py kurkista tiedosto.csv` — se näyttää enkoodauksen,
   erottimen ja otsikot. Lisää/korjaa lähde `asetukset/config.json`:iin niillä
