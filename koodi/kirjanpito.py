@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.19"
+VERSIO = "v0.20"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -7366,6 +7366,7 @@ nav button[aria-current="step"] { background:#fff; border-color:var(--raja); fon
 nav .nro { font:12px ui-monospace,Menlo,Consolas,monospace; color:#8a8578 }
 nav .tila { display:block; font-size:.78em; color:#8a8578; font-weight:normal }
 nav .valmis .tila { color:var(--hyva) }
+nav .paluu { display:inline-block; margin:1rem 0 0 .7rem; font-size:.88em; color:#6b665c }
 nav .kesken .tila { color:var(--huono) }
 section.paneeli { background:#fff; border:1px solid var(--raja); border-radius:10px;
                   padding:1.4rem 1.6rem }
@@ -7425,7 +7426,8 @@ table.kentat th { font-weight:normal; color:#6b665c; white-space:nowrap;
 <h1>Pankkiyhteys</h1>
 <p class="johdanto">Tapahtumat tulevat pankista suoraan koneellesi. Voit palata
 mihin tahansa vaiheeseen ja muuttaa valintaa — mikään ei lukitu.</p>
-<nav><ol id="rail"></ol></nav>
+<nav><ol id="rail"></ol>
+<a class="paluu" href="raportti.html">← Takaisin raporttiin</a></nav>
 <section class="paneeli" id="paneeli"></section>
 </main>
 <script>
@@ -7736,7 +7738,7 @@ function paneeliPankit(){
         var nappi = r.pankki
           ? '<button class="toiminto" data-t="valitse-haku" data-pankki="' + e(r.pankki) +
             '">Uusi valtuutus</button>'
-          : '<button class="toiminto" data-t="peru_pankki">Valitse pankki</button>';
+          : '<button class="toiminto" data-t="pankkilistaan">Valitse pankki</button>';
         return '<tr><td>' + e(r.tili) + '</td><td class="pikku">' +
           (r.pankki ? e(r.pankki) : 'ei tiedossa') + '</td><td' +
           (r.paivia !== null && r.paivia <= 14 ? ' style="color:var(--huono)"' : '') +
@@ -7748,7 +7750,7 @@ function paneeliPankit(){
   }
 
   if(T.pankkivaihe === 'valinta' && T.sovellus.app_id){
-    h += '<h3>' + (T.yhdistetyt.length ? 'Lisää pankki' : 'Yhdistä ensimmäinen pankki') + '</h3>';
+    h += '<h3 id="pankkivalinta">' + (T.yhdistetyt.length ? 'Lisää pankki' : 'Yhdistä ensimmäinen pankki') + '</h3>';
     h += '<label for="haku">Hae pankkia</label>' +
          '<input type="text" id="haku" data-syote="haku" value="' + e(SYOTE.haku || T.haku) + '" placeholder="esim. OP">' +
          '<div class="rivi"><button class="toiminto" data-t="pankit">Hae lista</button>' +
@@ -7828,7 +7830,7 @@ function paneeliValmis(){
        '<table><tbody>' + T.yhdistetyt.map(function(r){
          return '<tr><td>' + e(r.tili) + '</td><td class="pikku">' +
                 (r.pankki ? e(r.pankki) : '') + '</td></tr>'; }).join('') + '</tbody></table>' +
-       '<div class="rivi"><a class="paalinkki" href="raportti.html">Takaisin raporttiin</a></div>';
+       '';
   return h;
 }
 
@@ -7860,6 +7862,18 @@ function sido(){
       var t = b.dataset.t, d = {};
       if(t === 'vaihe'){ d.vaihe = b.dataset.vaihe; }
       else if(t === 'valitse'){ d.pankki = b.dataset.pankki; }
+      else if(t === 'pankkilistaan'){
+        /* Nappi ei saa olla tyhjä ele: pelkkä tilan nollaus ei näytä miltään,
+           koska valintalohko oli jo sivulla alempana. Haetaan lista ja
+           vieritetään siihen, jolloin klikkauksella on näkyvä seuraus. */
+        toiminto('peru_pankki')
+          .then(function(){ return toiminto('pankit', {haku: SYOTE.haku, maa: T.maa}); })
+          .then(function(){
+            var kohta = el('pankkivalinta');
+            if(kohta) kohta.scrollIntoView({block:'start'});
+          });
+        return;
+      }
       else if(t === 'valitse-haku'){
         // Uusi valtuutus: haetaan lista ja valitaan sama pankki
         toiminto('pankit', {haku: b.dataset.pankki, maa: T.maa}).then(function(){
