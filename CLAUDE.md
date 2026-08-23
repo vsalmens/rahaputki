@@ -96,6 +96,20 @@ muuttunut HEADiin verrattuna. Muistin varaan tätä ei jätetä — v125 pysyi
 paikallaan kolmisenkymmentä committia, eikä toisella koneella voinut
 päätellä mikä siellä ajaa.
 
+## koneen-asetukset.txt kehittäjän koneella
+
+Tiedosto on paketissa mukana oletusarvolla `tietokansio = .`, joten se on
+versionhallinnassa. Omalla koneella siihen kirjoitetaan oma polku, ja ohjelma
+päivittää sen versioleiman — eli tiedosto on jatkuvasti muokattu. Jotta oma
+polku ei päädy committiin:
+
+```
+git update-index --skip-worktree koneen-asetukset.txt
+```
+
+Kun tiedostoa pitää oikeasti muuttaa repoon, poista lippu ensin
+(`--no-skip-worktree`), tee muutos ja laita lippu takaisin.
+
 ## Testaus
 
 Testipakettia ei ole. Muutokset varmistetaan ajamalla ohjelma

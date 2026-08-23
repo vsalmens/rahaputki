@@ -15,8 +15,10 @@ saannot.csv
 budjetti.csv
 budjetti_ehdotus.csv
 
-# Koneen omat asetukset — eri jokaisella koneella
-koneen-asetukset.txt
+# Koneen omat asetukset. koneen-asetukset.txt on paketissa mukana oletusarvolla
+# (tietokansio = .), joten se on versionhallinnassa; oma arvo pidetään poissa
+# committeista komennolla  git update-index --skip-worktree koneen-asetukset.txt
+# Aiemmat nimet eivät kuulu repoon lainkaan.
 paikalliset.txt
 datakansio.txt
 
