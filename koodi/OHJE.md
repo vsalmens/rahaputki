@@ -585,7 +585,8 @@ päivään painettu sulkeminen perutaan napista *avaa viimeisin kausi*.
   ```
 
   Poikkeusrivistä tulee raportissa merkintä `·kk` kategorian nimen perään, ja
-  saman napin takaa sen voi palauttaa perusraamiin. **Poista budjetista**
+  saman napin takaa sen voi palauttaa perusraamiin. Enter tallentaa
+  kuukausiraamin, Esc peruu. **Poista budjetista**
   ottaa kategorian pois raameista kokonaan; kertyvän erän tiedot samalla
   rivillä säilyvät. Ilman raamia jääneet kategoriat, joissa on tämän kuun
   menoja, listataan osion alle — ja niille voi antaa raamin +-napista.
