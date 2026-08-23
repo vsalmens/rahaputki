@@ -14,13 +14,15 @@ if str(TIEDOSTO) not in lavastetut:
     sys.exit(0)
 
 teksti = TIEDOSTO.read_text(encoding="utf-8")
-osuma = re.search(r'^VERSIO = "v(\d+)\.(\d+)"$', teksti, re.M)
+# Rivin lopussa voi olla kommentti. Ilman tätä koukku lakkaisi kasvattamasta
+# numeroa hiljaa — juuri se vika, jota vastaan koukku on olemassa.
+osuma = re.search(r'^VERSIO = "v(\d+)\.(\d+)"', teksti, re.M)
 if not osuma:
     sys.exit(0)
 
 vanha = subprocess.run(["git", "show", "HEAD:" + str(TIEDOSTO)],
                        capture_output=True, text=True).stdout
-vanha_osuma = re.search(r'^VERSIO = "(v\d+\.\d+)"$', vanha, re.M)
+vanha_osuma = re.search(r'^VERSIO = "(v\d+\.\d+)"', vanha, re.M)
 nykyinen = f"v{osuma.group(1)}.{osuma.group(2)}"
 if vanha_osuma and vanha_osuma.group(1) != nykyinen:
     sys.exit(0)  # versio on jo nostettu käsin tässä committissa
