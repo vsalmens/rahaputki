@@ -73,6 +73,29 @@ hiekkalaatikossa, ei oman kirjanpidon päällä (ks. Testaus).
   (`tila`-sarake, `data/varaukset.json`). Budjetin *kertyvä erä*
   (`lue_kertyvat`) on eri asia; älä sekoita nimiä.
 
+## Versionumero
+
+`VERSIO` tiedostossa `koodi/kirjanpito.py` näkyy raportin alalaidassa ja
+`selaa`-tilan tulosteessa, ja se on myös `koneen-asetukset.txt`:n leima. Sen
+ainoa tehtävä on vastata kysymykseen "kumpi koodi tällä koneella ajaa" —
+kysymys, joka tulee vastaan aina kun jokin ei toimi toisella koneella.
+
+Numerointi on muotoa `v0.N` ja alkaa nollasta: tämä on kehitysversio.
+Ensimmäinen julkaisu on `v1.0`.
+
+Numero kasvaa **automaattisesti jokaisessa committissa**, joka muuttaa
+`koodi/kirjanpito.py`:tä — sen tekee `.githooks/pre-commit`. Uudessa
+checkoutissa koukut pitää ottaa käyttöön kerran:
+
+```
+git config core.hooksPath .githooks
+```
+
+Käsin nostettu versio kelpaa: koukku ei kasvata numeroa, jos se on jo
+muuttunut HEADiin verrattuna. Muistin varaan tätä ei jätetä — v125 pysyi
+paikallaan kolmisenkymmentä committia, eikä toisella koneella voinut
+päätellä mikä siellä ajaa.
+
 ## Testaus
 
 Testipakettia ei ole. Muutokset varmistetaan ajamalla ohjelma

@@ -6,3 +6,6 @@
 
 # Kehittäjän tiedosto: ei kuulu ladattavaan pakettiin.
 CLAUDE.md export-ignore
+
+# Kehittäjän git-koukut: eivät kuulu ladattavaan pakettiin.
+.githooks export-ignore

@@ -1,0 +1,33 @@
+#!/bin/sh
+# Kasvattaa VERSIO-numeroa aina kun ohjelmaa muutetaan.
+#
+# Versionumeron ainoa tehtävä on vastata kysymykseen "kumpi koodi tällä
+# koneella ajaa". Se tehtävä epäonnistuu hiljaa, jos numeron kasvattaminen on
+# muistin varassa — niin kävi v125:lle. Siksi se tehdään täällä eikä käsin.
+python3 - "$@" <<'PYEOF'
+import re, subprocess, sys, pathlib
+
+TIEDOSTO = pathlib.Path("koodi/kirjanpito.py")
+lavastetut = subprocess.run(["git", "diff", "--cached", "--name-only"],
+                            capture_output=True, text=True).stdout.split()
+if str(TIEDOSTO) not in lavastetut:
+    sys.exit(0)
+
+teksti = TIEDOSTO.read_text(encoding="utf-8")
+osuma = re.search(r'^VERSIO = "v(\d+)\.(\d+)"$', teksti, re.M)
+if not osuma:
+    sys.exit(0)
+
+vanha = subprocess.run(["git", "show", "HEAD:" + str(TIEDOSTO)],
+                       capture_output=True, text=True).stdout
+vanha_osuma = re.search(r'^VERSIO = "(v\d+\.\d+)"$', vanha, re.M)
+nykyinen = f"v{osuma.group(1)}.{osuma.group(2)}"
+if vanha_osuma and vanha_osuma.group(1) != nykyinen:
+    sys.exit(0)  # versio on jo nostettu käsin tässä committissa
+
+uusi = f"v{osuma.group(1)}.{int(osuma.group(2)) + 1}"
+TIEDOSTO.write_text(teksti.replace(f'VERSIO = "{nykyinen}"',
+                                   f'VERSIO = "{uusi}"', 1), encoding="utf-8")
+subprocess.run(["git", "add", str(TIEDOSTO)], check=True)
+print(f"  versio {nykyinen} -> {uusi}")
+PYEOF

@@ -236,7 +236,12 @@ BUDJETTI = ASETUKSET / "budjetti.csv"
 ENV = ASETUKSET / "pankkihaku.env"
 TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 
-VERSIO = "v126"
+# Numerointi alkaa nollasta: tämä on kehitysversio, ei julkaisu. Ensimmäinen
+# julkaisu on v1.0. Viimeinen numero kasvaa jokaisella committilla —
+# .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
+# kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
+# toisella koneella voinut päätellä kumpi koodi siellä ajaa.
+VERSIO = "v0.2"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila"]
@@ -359,7 +364,17 @@ def _kirjoita_paikalliset(arvot):
     rivit = [PAIKALLISET_OHJE.format(versio=VERSIO)]
     rivit += [f"{avain} = {arvot[avain]}" for avain in sorted(arvot)
               if avain not in PAIKALLISET_VARATUT]
-    turvakirjoita(KOODIJUURI / PAIKALLISET_TIEDOSTO, "\n".join(rivit) + "\n")
+    sisalto = "\n".join(rivit) + "\n"
+    turvakirjoita(KOODIJUURI / PAIKALLISET_TIEDOSTO, sisalto)
+    return sisalto
+
+
+def _vain_leima_vaihtui(vanha, uusi):
+    """Erosivatko tiedostot vain versioleiman riviltä?"""
+    def ilman_leimaa(teksti):
+        return [r for r in (teksti or "").splitlines()
+                if not PAIKALLISET_LEIMA.search(r)]
+    return ilman_leimaa(vanha) == ilman_leimaa(uusi)
 
 
 def _paivita_paikalliset():
@@ -380,14 +395,25 @@ def _paivita_paikalliset():
         return
     if PAIKALLISET_VERSIO == VERSIO and PAIKALLISET_LAHDE.name == PAIKALLISET_TIEDOSTO:
         return
+    # Versio kasvaa jokaisella committilla, joten pelkkä leiman vaihtuminen on
+    # tavallisin syy tulla tänne. Se ei ole uutinen käyttäjälle: rivi
+    # "asetukset päivitetty" joka ainoan päivityksen jälkeen opettaisi vain
+    # ohittamaan sen silloinkin kun se kertoo jotain.
+    vanha_sisalto = ""
     try:
-        _kirjoita_paikalliset(PAIKALLISET)
+        vanha_sisalto = PAIKALLISET_LAHDE.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        pass
+    try:
+        uusi_sisalto = _kirjoita_paikalliset(PAIKALLISET)
     except OSError as e:
         print(f"⚠ Paikallisia asetuksia ei saatu kirjoitettua ({e}).\n"
               f"  {PAIKALLISET_LAHDE.name} kelpaa yhä, joten mikään ei katkennut.")
         return
     vanha = PAIKALLISET_LAHDE.name
     if vanha == PAIKALLISET_TIEDOSTO:
+        if _vain_leima_vaihtui(vanha_sisalto, uusi_sisalto):
+            return
         print(f"Paikalliset asetukset päivitetty versiolle {VERSIO}.")
         return
     try:
