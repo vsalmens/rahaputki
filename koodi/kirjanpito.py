@@ -4741,7 +4741,11 @@ def pankkiyhteydet_html(cfg):
 
     Ilman tätä "ei tapahtumia" ja "yhteys katkennut" näyttävät samalta:
     molemmissa raportti vain lakkaa täyttymästä. Valtuutus vanhenee pankista
-    riippuen 90–180 päivän välein, eikä siitä varoita kukaan."""
+    riippuen 90–180 päivän välein, eikä siitä varoita kukaan.
+
+    Sarakkeet on nimetty sen mukaan mitä niissä oikeasti on: "haettu" ilman
+    kohdetta oli epäselvä, koska tapahtumat ja saldo haetaan eri hetkinä ja
+    eri syistä."""
     tilit = ((cfg.get("pankkihaku") or {}).get("tilit") or [])
     tila = lue_pankkitila()
     if not tilit or not tila:
@@ -4753,65 +4757,74 @@ def pankkiyhteydet_html(cfg):
             continue
         tt = tila.get(aid, {})
         nimi = t.get("tili", "") or tt.get("tili", "")
+        pankki = str(tt.get("pankki", "") or t.get("pankki", ""))
+
+        # --- valtuutus ---
         paivia = _paivia_jaljella(tt.get("valtuutus_asti"))
+        uusittava = False
         if tt.get("virhekoodi") in (401, 403):
-            tilateksti, luokka = "valtuutus ei kelpaa — uusi se", "huono"
+            valtuutus, valt_luokka, uusittava = "ei kelpaa", "huono", True
         elif paivia is None:
-            tilateksti, luokka = "voimassaoloa ei tiedetä", ""
+            valtuutus, valt_luokka = "ei tiedossa", ""
         elif paivia < 0:
-            tilateksti, luokka = f"vanhentui {tt['valtuutus_asti']}", "huono"
+            valtuutus, valt_luokka, uusittava = f"vanhentui {tt['valtuutus_asti']}", "huono", True
         elif paivia <= 14:
-            tilateksti, luokka = f"vanhenee {paivia} pv ({tt['valtuutus_asti']})", "huono"
+            valtuutus, valt_luokka, uusittava = f"{paivia} pv jäljellä", "huono", True
         else:
-            tilateksti, luokka = f"{paivia} pv ({tt['valtuutus_asti']})", ""
-        if luokka:
-            varoitukset.append(f"{nimi}: {tilateksti}")
+            valtuutus, valt_luokka = f"{paivia} pv ({tt['valtuutus_asti']})", ""
+        if uusittava:
+            varoitukset.append(f"{nimi}: valtuutus {valtuutus}")
+            valtuutus += (f' <a href="velho?pankki={html.escape(pankki, quote=True)}"'
+                          f' class="uusilinkki">uusi</a>')
+
+        # --- saldo ---
         saldo = tt.get("saldo")
         if isinstance(saldo, (int, float)):
-            tyyppi = str(tt.get("saldo_tyyppi", ""))
-            # Varauksia sisältävä saldo ei ole vertailukelpoinen kirjattujen
-            # tapahtumien kanssa, ja se on syytä sanoa siinä missä luku näkyy.
-            merkinta = "" if tyyppi.startswith(("ITBD", "CLBD")) else " *"
-            # Saldo haetaan vain pyydettäessä, joten se voi olla viikkoja vanha.
-            # Luku ilman päivämäärää johtaisi luulemaan sitä tämänhetkiseksi.
-            hetki = str(tt.get("saldo_haettu", ""))[:10]
-            saldoteksti = (f'{fmt_eur(saldo)} {tt.get("saldo_valuutta", "")}{merkinta}'
-                           + (f' ({hetki})' if hetki else '')).strip()
+            valuutta = str(tt.get("saldo_valuutta", "")) or "EUR"
+            merkki = "€" if valuutta == "EUR" else html.escape(valuutta)
+            # Varauksellinen saldo ei ole vertailukelpoinen kirjattujen rivien
+            # kanssa; tähti kertoo sen siinä missä luku näkyy.
+            tahti = "" if _vertailukelpoinen(tt.get("saldo_tyyppi")) else " *"
+            saldoteksti = f'{fmt_eur(saldo)} {merkki}{tahti}'
+            saldo_pvm = str(tt.get("saldo_haettu", ""))[:10] or "—"
         else:
-            saldoteksti = "—"
+            saldoteksti, saldo_pvm = "—", "—"
+
+        # --- täsmäytys ---
         ero = tt.get("ankkuri_ero")
         if not isinstance(tt.get("ankkuri_saldo"), (int, float)):
             tasm, tasm_luokka = "ei täsmäytetty", ""
         elif ero:
-            tasm = f'ero {fmt_eur(ero)} € ({tt.get("tasmaytetty", "")})'
-            tasm_luokka = "huono"
+            tasm, tasm_luokka = f'ero {fmt_eur(ero)} €', "huono"
         else:
-            tasm, tasm_luokka = f'✓ {tt.get("tasmaytetty", "")}', ""
+            tasm, tasm_luokka = f'täsmäsi {tt.get("tasmaytetty", "")}', ""
+
         rivit.append(
-            f'<tr data-tili-idx="{indeksi}"><td>{html.escape(str(nimi))}</td>'
-            f'<td>{html.escape(str(tt.get("pankki", "")))}</td>'
-            f'<td class="num">{html.escape(saldoteksti)}</td>'
+            f'<tr data-tili-idx="{indeksi}">'
+            f'<td>{html.escape(str(nimi))}</td>'
+            f'<td>{html.escape(pankki)}</td>'
             f'<td>{html.escape(str(tt.get("haettu", "—")))}</td>'
-            f'<td class="{luokka}">{html.escape(tilateksti)}</td>'
+            f'<td class="num">{saldoteksti}</td>'
+            f'<td>{html.escape(saldo_pvm)}</td>'
+            f'<td class="{valt_luokka}">{valtuutus}</td>'
             f'<td class="{tasm_luokka}">{html.escape(tasm)}'
             f'<button type="button" class="tasmnappi" hidden>Täsmäytä</button></td></tr>')
     if not rivit:
         return "", ""
     taulu = ('<h2>Pankkiyhteydet</h2>\n<div style="overflow-x:auto"><table>'
-             '<tr><th>Tili</th><th>Pankki</th><th class="num">Saldo pankissa</th>'
-             '<th>Haettu viimeksi</th><th>Valtuutus voimassa</th>'
-             '<th>Täsmäytys</th></tr>' + "".join(rivit) + '</table></div>\n'
-             '<p class="pikkuteksti">Täsmäytys hakee tilin saldon pankista '
-             '(yksi haku pankin neljän vuorokausihaun budjetista) ja vertaa sitä '
-             'kirjanpitoon. Vertailu tehdään ankkurista: hyväksytystä saldosta ja '
-             'sen hetken pääkirjan summasta, jolloin jälkikäteen ilmestyvät '
-             'takautuvat tapahtumat siirtävät odotusta oikein. '
-             'Saldo on pankin kirjattu saldo; tähdellä (*) '
-             'merkitty sisältää myös odottavat korttivaraukset, jolloin se ei ole '
-             'vertailukelpoinen kirjanpidon kanssa. '
-             'Valtuutus uusitaan Pankkiyhteys-napista tai '
-             'komennolla <code>pankkihaku</code>. Uusiminen ei koske tilien '
-             'liittämistä portaalissa — se on tehty kerran.</p>')
+             '<tr><th>Tili</th><th>Pankki</th><th>Tapahtumat haettu</th>'
+             '<th class="num">Saldo pankissa</th><th>Saldo haettu</th>'
+             '<th>Valtuutus voimassa</th><th>Täsmäytys</th></tr>'
+             + "".join(rivit) + '</table></div>\n'
+             '<p class="pikkuteksti">Tapahtumat haetaan Hae pankkitapahtumat '
+             '-napista, saldo vain Täsmäytä-napista — kumpikin kuluttaa yhden '
+             'pankin neljästä vuorokausihausta. Täsmäytys vertaa saldoa '
+             'kirjanpitoon ankkurista: hyväksytystä saldosta ja sen hetken '
+             'pääkirjan summasta, jolloin jälkikäteen ilmestyvät takautuvat '
+             'tapahtumat siirtävät odotusta oikein. Tähdellä (*) merkitty saldo '
+             'sisältää odottavat korttivaraukset. Valtuutus uusitaan rivin omasta '
+             '<em>uusi</em>-linkistä; uusiminen koskee koko pankkia, ei yksittäistä '
+             'tiliä, eikä tilejä tarvitse liittää portaalissa uudelleen.</p>')
     varoitus = (f'<p class="huomio">⚠ Pankkiyhteys kaipaa huomiota — '
                 f'{html.escape("; ".join(varoitukset))}.</p>') if varoitukset else ""
     return taulu, varoitus
@@ -5240,6 +5253,14 @@ def tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit, ledg
     huomio = (f'<p class="huomio">⚠ {avoimia} tapahtumaa luokittelematta (kategoria TARKISTA) — '
               f'luvut tarkentuvat kun täytät tarkistettavat.csv ja ajat <code>opi</code>.</p>') if avoimia else ""
     yhteydet_html, yhteysvaroitus = pankkiyhteydet_html(cfg)
+    # Ilman pankkiyhteyttä haku ei voi tehdä mitään järkevää, joten nappi on
+    # pois käytöstä ja kertoo miksi. Vaihtoehto olisi nappi, joka näyttää
+    # toimivalta ja tulostaa sitten kuivaharjoittelun.
+    on_pankkitileja = any(not _on_paikanpitaja(t.get("account_id"))
+                          for t in ((cfg.get("pankkihaku") or {}).get("tilit") or []))
+    hae_pois = ("" if on_pankkitileja else
+                ' disabled class="pois" title="Yhdistä ensin pankkeihin — '
+                'ilman pankkiyhteyttä ei ole mistä hakea"')
     huomio = yhteysvaroitus + huomio
     varausrivit = [r for r in ledger if r.get("tila") == VARAUS]
     if varausrivit:
@@ -6611,7 +6632,8 @@ window.addEventListener('DOMContentLoaded',function(){
         if(v.rivit.length){teksti.textContent+=v.rivit.join('\\n')+'\\n';
           teksti.scrollTop=teksti.scrollHeight;}
         if(v.kaynnissa){setTimeout(function(){seuraaAjoa(komento,v.seuraava);},700);return;}
-        naytaLoki(v.virhe?(komento+' keskeytyi'):(komento+' valmis'));
+        const nimi=komento==='hae'?'Haku':'Tiliotteiden luku';
+        naytaLoki(v.virhe?(nimi+' keskeytyi'):(nimi+' valmis'));
         document.getElementById('ajoloki-nappi').hidden=false;
         napitKaytossa(true);
       }).catch(function(){
@@ -6621,7 +6643,9 @@ window.addEventListener('DOMContentLoaded',function(){
   }
   function napitKaytossa(paalle){
     ['nappi-hae','nappi-aja'].forEach(function(id){
-      document.getElementById(id).disabled=!paalle;});
+      const n=document.getElementById(id);
+      if(n.classList.contains('pois'))return;  // ei pankkiyhteyttä: pysyy poissa
+      n.disabled=!paalle;});
   }
   function kaynnista(komento){
     napitKaytossa(false);
@@ -6790,10 +6814,11 @@ tr.varausrivi td {{ background:#f7fafc }}
        padding:.2rem .7rem; border:1px solid #c9c3b8; border-radius:5px; background:#fff;
        cursor:pointer; text-decoration:none; color:inherit; display:inline-block }}
 #ajonapit button:hover:enabled, #ajonapit a:hover, #ajoloki button:hover {{ background:var(--vaalea) }}
-#ajonapit button:disabled {{ opacity:.5; cursor:default }}
+#ajonapit button:disabled {{ opacity:.45; cursor:not-allowed }}
 .tasmnappi {{ font:inherit; font-size:.8em; padding:.1rem .5rem; margin-left:.5rem;
        border:1px solid #c9c3b8; border-radius:5px; background:#fff; cursor:pointer }}
 .tasmnappi:hover {{ background:var(--vaalea) }}
+.uusilinkki {{ margin-left:.4rem; font-size:.85em }}
 #ajoloki {{ border:1px solid #c9c3b8; border-radius:8px; background:#fff;
        padding:.7rem .9rem; margin:.6rem 0 }}
 #ajoloki-teksti {{ font:12px/1.5 ui-monospace,Menlo,monospace; white-space:pre-wrap;
@@ -6826,7 +6851,7 @@ code {{ font-family:ui-monospace,Menlo,monospace }}
 <p class="meta">Rahaputki {VERSIO} · päivitetty {date.today().strftime('%d.%m.%Y')} · {len(ledger)} tapahtumaa ·
 kategorian nimeä, matriisin solua tai kaavion palkkia klikkaamalla pääset katsomaan ja muokkaamaan rivejä</p>
 {huomio}
-<div class="tyokalut"><input id="haku" type="search" placeholder="hae tapahtumia… (Esc tyhjentää)" size="26"><span id="tila" class="pikkuteksti"></span><span id="ajonapit" hidden> <button type="button" id="nappi-hae">Hae pankista</button> <button type="button" id="nappi-aja">Lue inbox</button> <a href="velho" id="nappi-velho">Pankkiyhteys</a></span></div>
+<div class="tyokalut"><input id="haku" type="search" placeholder="hae tapahtumia… (Esc tyhjentää)" size="26"><span id="tila" class="pikkuteksti"></span><span id="ajonapit" hidden> <button type="button" id="nappi-hae"{hae_pois}>Hae pankkitapahtumat</button> <button type="button" id="nappi-aja">Lue tiliotteet</button> <a href="velho" id="nappi-velho">Yhdistä pankkeihin</a></span></div>
 <div id="ajoloki" hidden><div id="ajoloki-otsikko" class="pikkuteksti"></div><pre id="ajoloki-teksti"></pre><button type="button" id="ajoloki-nappi" hidden>Päivitä raportti</button> <button type="button" id="ajoloki-piilota">Piilota</button></div>
 <div id="paneeli"></div>
 <h2>Tulot ja menot kuukausittain <span class="pikkuteksti">(vihreä = tulot, ruskea = menot, tumma viiva = menojen 3 kk liukuva keskiarvo, % = säästöaste)</span></h2>
@@ -7125,18 +7150,43 @@ VELHO_AJO = {"ui": None}
 VELHO_LUKKO = threading.Lock()
 
 
-def _aja_velho():
-    """Käyttöönotto selaimesta: sama cmd_pankkihaku, eri käyttöliittymä."""
+def velho_uusi_valtuutus(pankki):
+    """Vain valtuutuksen uusinta, ei koko käyttöönottoa.
+
+    Sovellus ja avain ovat jo olemassa, eikä tilejä tarvitse liittää
+    portaalissa uudelleen — uusittava on vain pankin antama lupa hakea
+    tapahtumia. Se koskee koko pankkia, ei yksittäistä tiliä, joten saman
+    pankin kaikki tilit uusiutuvat kerralla."""
+    cfg = lue_config()
+    print(f"""
+Valtuutuksen uusiminen — {pankki}
+
+Pankin antama lupa hakea tapahtumia vanhenee 90–180 päivän välein. Uusiminen
+on sama vaihe kuin käyttöönotossa: tunnistaudut pankkiisi, ja lupa jatkuu.
+Sovellusta ei luoda uudelleen eikä tilejä tarvitse liittää portaalissa.""")
+    if not _varmista_kirjastot():
+        return
+    app = _velho_tarkista()
+    if app is None:
+        return
+    eb_valtuuta(cfg, pankki, app)
+
+
+def _aja_velho(pankki=""):
+    """Käyttöönotto selaimesta: sama velho, eri käyttöliittymä."""
     global VELHO_UI
     ui = VELHO_AJO["ui"]
     konsoli = sys.stdout
     sys.stdout = _Haarukka(konsoli, ui.loki)
     VELHO_UI = ui
     try:
-        cmd_pankkihaku(argparse.Namespace(uusi_sovellus=False, paivia=89,
-                                          palvelu=None, istunto=None, yhdista=None,
-                                          raaka=False, siivoa_alkaen=False,
-                                          pakota=False, ei_velhoa=True))
+        if pankki:
+            velho_uusi_valtuutus(pankki)
+        else:
+            cmd_pankkihaku(argparse.Namespace(uusi_sovellus=False, paivia=89,
+                                              palvelu=None, istunto=None, yhdista=None,
+                                              raaka=False, siivoa_alkaen=False,
+                                              pakota=False, ei_velhoa=True))
     except SystemExit as e:
         ui.loki.append(f"Keskeytyi: {e}")
         ui.virhe = str(e)
@@ -7179,9 +7229,9 @@ input[type=text] { font:inherit; width:100%; padding:.4rem .6rem; border:1px sol
                    margin:0 0 .4rem }
 #linkit a { display:inline-block; margin:0 .6rem .6rem 0 }
 </style></head><body><main>
-<h1>Pankkiyhteyden käyttöönotto</h1>
-<p class="meta">Sama ohjattu käyttöönotto kuin terminaalissa — kysymykset vain
-tulevat tänne. Voit sulkea sivun milloin tahansa; tehty ei katoa.</p>
+<h1 id="otsikko">Yhdistä pankkeihin</h1>
+<p class="meta" id="selite">Sama ohjattu käyttöönotto kuin terminaalissa — kysymykset
+vain tulevat tänne. Voit sulkea sivun milloin tahansa; tehty ei katoa.</p>
 <div id="linkit"></div>
 <pre id="loki"></pre>
 <div id="kysymys" hidden>
@@ -7191,6 +7241,17 @@ tulevat tänne. Voit sulkea sivun milloin tahansa; tehty ei katoa.</p>
 <div id="alku"><button class="paa" id="aloita">Aloita käyttöönotto</button></div>
 <script>
 var alkaen = 0, vastattu = 0;
+var PANKKI = new URLSearchParams(location.search).get('pankki') || '';
+if (PANKKI) {
+  document.title = 'Rahaputki \u2014 uusi valtuutus: ' + PANKKI;
+  document.getElementById('otsikko').textContent = 'Uusi valtuutus: ' + PANKKI;
+  document.getElementById('aloita').textContent = 'Uusi valtuutus';
+  document.getElementById('selite').textContent =
+    'Pankin antama lupa hakea tapahtumia vanhenee 90\u2013180 p\u00e4iv\u00e4n v\u00e4lein. ' +
+    'Uusiminen on sama vaihe kuin k\u00e4ytt\u00f6\u00f6notossa: tunnistaudut pankkiisi ja lupa jatkuu. ' +
+    'Sovellusta ei luoda uudelleen eik\u00e4 tilej\u00e4 tarvitse liitt\u00e4\u00e4 portaalissa. ' +
+    'Uusiminen koskee koko pankkia, joten saman pankin kaikki tilit uusiutuvat kerralla.';
+}
 function el(id){ return document.getElementById(id); }
 function nayta(v){
   if(v.rivit && v.rivit.length){
@@ -7271,7 +7332,9 @@ function seuraa(){
 }
 el('aloita').onclick = function(){
   el('alku').hidden = true; el('loki').textContent = ''; alkaen = 0; vastattu = 0;
-  fetch('api/velho/aloita', {method:'POST'}).then(function(){ seuraa(); });
+  fetch('api/velho/aloita', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({pankki: PANKKI})}).then(function(){ seuraa(); });
 };
 fetch('api/velho?alkaen=0', {cache:'no-store'}).then(function(r){ return r.json(); })
   .then(function(v){ if(v.kaynnissa){ el('alku').hidden = true; seuraa(); } });
@@ -7320,7 +7383,16 @@ def _aja_selaimesta(komento):
     konsoli, rivit = sys.stdout, SELAIN_AJO["loki"]
     sys.stdout = _Haarukka(konsoli, rivit)
     try:
-        (cmd_hae if komento == "hae" else cmd_aja)(args)
+        # "Hae pankkitapahtumat" tarkoittaa käyttäjälle valmista lopputulosta,
+        # ei puolikasta: nouto jättää tiedostot inboxiin, ja pelkkä nouto
+        # jättäisi tehtäväksi toisen napin painamisen ilman että siitä seuraa
+        # mitään uutta päätettävää.
+        if komento == "hae":
+            cmd_hae(args)
+            print()
+            cmd_aja(args)
+        else:
+            cmd_aja(args)
     except SystemExit as e:
         rivit.append(f"Keskeytyi: {e}")
         SELAIN_AJO["virhe"] = str(e)
@@ -7370,7 +7442,9 @@ def cmd_selaa(args):
                 del self.headers["If-Modified-Since"]  # aina tuore sivu, ei 304-oikotietä
             if self.path == "/api/ping":
                 return self._json({"ok": True})
-            if self.path.rstrip("/") == "/velho":
+            # Osoitteessa voi olla ?pankki=… (valtuutuksen uusinta), joten
+            # kyselyosa pudotetaan ennen vertailua.
+            if self.path.partition("?")[0].rstrip("/") == "/velho":
                 sivu = VELHO_SIVU.encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -7678,7 +7752,8 @@ def cmd_selaa(args):
                             return self._json({"ok": False,
                                                "virhe": "käyttöönotto on jo käynnissä"})
                         VELHO_AJO["ui"] = SelainVelho()
-                    threading.Thread(target=_aja_velho, daemon=True).start()
+                    threading.Thread(target=_aja_velho, daemon=True,
+                                     args=(siisti(pyynto.get("pankki", "")),)).start()
                     return self._json({"ok": True})
                 if self.path == "/api/velho/vastaus":
                     ui = VELHO_AJO["ui"]

@@ -429,20 +429,27 @@ Kaksi tapaa, sama näkymä:
    Valikon "+ uusi kategoria…" lisää kategorian asetukset/config.json:iin lennossa.
    Taulukot ja käyrät päivittyvät kun lataat sivun uudelleen. Ctrl-C sammuttaa.
 
-   Hakukentän vieressä on myös linkki **Pankkiyhteys**, joka avaa ohjatun
-   käyttöönoton selaimessa (`/velho`). Se on sama velho kuin komennossa
+   **Yhdistä pankkeihin** avaa ohjatun käyttöönoton selaimessa (`/velho`). Se on sama velho kuin komennossa
    `pankkihaku`: kysymykset vain tulevat sivulle nappeina ja tekstikenttinä,
    ja liittäminen (curl-komento, pankin paluuosoite) onnistuu suoraan
    kenttään ilman leikepöydän lukemista. Terminaalivelho toimii ennallaan.
 
-   Hakukentän vieressä on kaksi nappia: **Hae pankista** noutaa tuoreet
-   tapahtumat rajapinnasta ja **Lue inbox** lukee inbox-kansion tiedostot
-   pääkirjaan. Ne tekevät saman kuin komennot `hae` ja `aja`, ja tuloste
-   näkyy sivulla rivi riviltä sitä mukaa kuin sitä syntyy (myös terminaalissa,
-   jos sellainen on auki). Kun ajo on valmis, "Päivitä raportti" lataa sivun
-   uusiksi. Komento ajetaan samassa prosessissa kuin selaa, joten se käyttää
-   jo otettua pääkirjalukkoa eikä voi törmätä siihen — toisin kuin erikseen
-   käynnistetty komento.
+   Hakukentän vieressä on kolme toimintoa:
+
+   - **Hae pankkitapahtumat** noutaa tapahtumat pankista *ja* lukee ne
+     pääkirjaan (`hae` + `aja` yhtenä työnä — nouto ilman lukemista jättäisi
+     tehtäväksi toisen napin painamisen ilman uutta päätettävää). Nappi on
+     pois käytöstä, jos pankkiyhteyttä ei ole vielä kytketty.
+   - **Lue tiliotteet** lukee vain `inbox/`-kansion tiedostot pääkirjaan
+     (`aja`). Tätä tarvitset, jos tuot tiliotteita CSV:nä tai korttilaskujen
+     PDF-muuntimella.
+   - **Yhdistä pankkeihin** avaa ohjatun käyttöönoton.
+
+   Tuloste näkyy sivulla rivi riviltä sitä mukaa kuin sitä syntyy (myös
+   terminaalissa, jos sellainen on auki). Kun ajo on valmis, "Päivitä
+   raportti" lataa sivun uusiksi. Komento ajetaan samassa prosessissa kuin
+   selaa, joten se käyttää jo otettua pääkirjalukkoa eikä voi törmätä siihen —
+   toisin kuin erikseen käynnistetty komento.
 2. **Pelkkä raportti.html avattuna** (ilman palvelinta): samat muokkaukset
    kerätään muistiin ja alapalkin nappi lataa ne muutokset.csv-tiedostona.
    `python3 koodi/kirjanpito.py opi` etsii muutokset*.csv:t automaattisesti myös
