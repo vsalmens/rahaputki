@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.35"
+VERSIO = "v0.36"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila", "muistiinpano"]
@@ -1792,6 +1792,81 @@ def tee_id(av, jarjestys):
 
 # ---------------------------------------------------------------- komennot
 
+# --------------------------------------------------- suojattu yhteys
+
+class VarmenneVirhe(OSError):
+    """Koneelta puuttuvat juurivarmenteet, joilla https-yhteyden voi tarkistaa.
+
+    Oma luokka siksi, että selitys kirjoitetaan suomeksi yhteen paikkaan ja se
+    näkyy sellaisenaan kaikkialla, missä verkkovirhe muutenkin näytetään —
+    OSErrorin perillisenä se osuu jo olemassa oleviin kiinniottoihin."""
+
+
+def _varmenneohje():
+    """Mitä koneella pitää tehdä, jotta juurivarmenteet löytyvät.
+
+    Macin python.org-asentaja ei asenna varmennelistaa, vaan jättää sen
+    erilliseen Install Certificates.command -tiedostoon, jota kukaan ei osaa
+    avata, koska mikään ei kerro siitä. Etsitään se valmiiksi, jotta ohjeessa
+    voi lukea tiedoston oikea sijainti eikä 'jokin tiedosto jossain'."""
+    if sys.platform == "darwin":
+        loydot = sorted(Path("/Applications").glob(
+            "Python 3.*/Install Certificates.command"))
+        if loydot:
+            return ("Avaa Finderissa Ohjelmat → " + loydot[-1].parent.name +
+                    " → Install Certificates.command (kaksoisnapsauta) ja "
+                    "käynnistä Rahaputki sen jälkeen uudelleen.")
+        return ("Avaa Pääte ja aja: python3 -m pip install certifi — "
+                "käynnistä Rahaputki sen jälkeen uudelleen.")
+    if os.name == "nt":
+        return ("Windowsissa syy on useimmiten yrityksen välityspalvelin tai "
+                "virustorjunta, joka avaa suojatun yhteyden omalla "
+                "varmenteellaan; pyydä sen juurivarmenne IT-tuelta. Muuten "
+                "auttaa komentokehotteessa: python -m pip install certifi")
+    return "Asenna järjestelmän juurivarmenteet (ca-certificates)."
+
+
+def _verkkovirhe(e):
+    """Verkkovirhe siinä muodossa, jossa se kannattaa näyttää käyttäjälle.
+
+    Varmennevirhe on oma tapauksensa: se ei kerro pankista, tunnuksista eikä
+    tokenista mitään, koska yhteyttä ei ehditty ottaa. Ilman tätä käyttäjä
+    näkee rekisteröinnin tilalla rivin '[SSL: CERTIFICATE_VERIFY_FAILED] …
+    (_ssl.c:997)' ja etsii vikaa juuri niistä asioista, jotka ovat kunnossa.
+    Muut verkkovirheet palautetaan sellaisenaan."""
+    import ssl
+    if not (isinstance(getattr(e, "reason", None), ssl.SSLCertVerificationError)
+            or "CERTIFICATE_VERIFY_FAILED" in str(e)):
+        return e
+    return VarmenneVirhe(
+        "suojattua yhteyttä ei voitu tarkistaa, koska tältä koneelta puuttuvat "
+        "juurivarmenteet. Vika ei ole tunnuksissa eikä pankissa: yhteyttä ei "
+        "ehditty ottaa. " + _varmenneohje())
+
+
+_SSL_KONTEKSTI = None
+
+
+def _ssl_konteksti():
+    """Yhteyskonteksti, joka löytää juurivarmenteet myös vajaalta Pythonilta.
+
+    certifi ei ole riippuvuus eikä sitä asenneta täältä käsin: jos se sattuu
+    olemaan koneella (moni muu ohjelma tuo sen mukanaan), sitä käytetään
+    silloin kun Pythonin oma varmennevarasto on tyhjä. Muuten mennään
+    Pythonin omilla varmenteilla kuten ennenkin."""
+    global _SSL_KONTEKSTI
+    if _SSL_KONTEKSTI is None:
+        import ssl
+        _SSL_KONTEKSTI = ssl.create_default_context()
+        if not _SSL_KONTEKSTI.cert_store_stats().get("x509_ca"):
+            try:
+                import certifi
+                _SSL_KONTEKSTI = ssl.create_default_context(cafile=certifi.where())
+            except (ImportError, OSError, ValueError):
+                pass
+    return _SSL_KONTEKSTI
+
+
 GC_API = "https://bankaccountdata.gocardless.com/api/v2"
 
 
@@ -1815,6 +1890,7 @@ def gc_nouda(account_id, cfg):
     HUOM: kirjoitettu dokumentaation mukaan, EI testattu livenä (uusien
     tunnusten luonti oli palvelussa tauolla 7/2026). Mock-adapteri kattaa
     kaiken tämän jälkeisen putken."""
+    import urllib.error
     import urllib.request
     sal = _env_salaisuudet()
     if not sal["GC_SECRET_ID"] or not sal["GC_SECRET_KEY"]:
@@ -1825,8 +1901,12 @@ def gc_nouda(account_id, cfg):
         req = urllib.request.Request(GC_API + polku, data=data,
                                      headers={"Content-Type": "application/json",
                                               **({"Authorization": f"Bearer {token}"} if token else {})})
-        with urllib.request.urlopen(req, timeout=30) as v:
-            return json.loads(v.read().decode())
+        try:
+            with urllib.request.urlopen(req, timeout=30,
+                                        context=_ssl_konteksti()) as v:
+                return json.loads(v.read().decode())
+        except urllib.error.URLError as e:
+            raise _verkkovirhe(e) from e
 
     tok = _kutsu("/token/new/", {"secret_id": sal["GC_SECRET_ID"],
                                  "secret_key": sal["GC_SECRET_KEY"]})["access"]
@@ -1899,7 +1979,8 @@ def _eb_kutsu(polku, token, runko=None):
     toiminto = ("POST " if data is not None else "GET ") + kohde
     alku = time.time()
     try:
-        with urllib.request.urlopen(req, timeout=30) as v:
+        with urllib.request.urlopen(req, timeout=30,
+                                    context=_ssl_konteksti()) as v:
             vastaus = v.read()
             pankkiloki(toiminto, kohde, "ok", v.status, time.time() - alku, len(vastaus))
             return json.loads(vastaus.decode())
@@ -1922,7 +2003,7 @@ def _eb_kutsu(polku, token, runko=None):
         raise EBVirhe(e.code, teksti) from e
     except OSError as e:
         pankkiloki(toiminto, kohde, "katkos", "", time.time() - alku, None, str(e))
-        raise
+        raise _verkkovirhe(e) from e
 
 
 def eb_riveiksi(data, kerro=None, varaukset=None):
@@ -2840,7 +2921,8 @@ def _hallintakutsu(token, runko):
         headers={"Authorization": f"Bearer {token}",
                  "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(pyynto, timeout=30) as vastaus:
+        with urllib.request.urlopen(pyynto, timeout=30,
+                                    context=_ssl_konteksti()) as vastaus:
             return json.loads(vastaus.read().decode() or "{}")
     except urllib.error.HTTPError as e:
         try:
@@ -2848,6 +2930,8 @@ def _hallintakutsu(token, runko):
         except OSError:
             teksti = ""
         raise EBVirhe(e.code, teksti) from e
+    except urllib.error.URLError as e:
+        raise _verkkovirhe(e) from e
 
 
 def _rekisteroi_sovellus(token, varmenne, nimi="Rahaputki", gdpr_email=""):
