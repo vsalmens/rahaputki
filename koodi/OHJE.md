@@ -572,6 +572,29 @@ päivään painettu sulkeminen perutaan napista *avaa viimeisin kausi*.
   säännöt jättivät tahallaan listalle (esim. yli 50 € henkilömaksut).
 - **Omat IBANit** `asetukset/config.json`:iin → siirrot omille tileille tunnistetaan
   automaattisesti Siirto-kategoriaan.
+- **Luottokortit**: raportin *Saldot & kulukatsaus* -osiossa on rivi jokaisesta
+  korttitilistä, jolla on rivejä pääkirjassa — kortti tunnistetaan tilin
+  nimestä (`kortti`, `visa`, `mastercard`, `luotto`, `credit`, `amex`).
+  Korttia, jota sinulla ei ole, ei siis listata. Velka luetaan ensisijaisesti
+  pankista haetusta saldosta: se on tarkempi kuin ostojen ja maksujen erotus
+  eikä laske samaa lyhennystä kahdesti silloin, kun maksu näkyy sekä maksavalla
+  tilillä että kortilla. Jos korttia ei ole yhdistetty pankkiin, laskun maksu
+  yritetään tunnistaa maksavan tilin otteelta — ja jos sekään ei osu, rivi
+  sanoo sen suoraan eikä keksi velkasummaa. Eräpäivän ja minimierän ohjelma
+  tietää vain tuntemistaan korteista; oman korttisi ehdot voit kertoa
+  `asetukset/config.json`:issa:
+
+  ```json
+  "kortit": {
+    "Nordea kortti": {"era_paiva": 28, "minimi_pct": 3,
+                      "maksu_avaimet": ["nordea rahoitus"]}
+  }
+  ```
+
+  Avain on korttitilin nimi sellaisena kuin se on pääkirjassa. `era_paiva` on
+  kuukauden päivä tai `"loppu"`, `minimi_pct` minimierä prosentteina velasta
+  (vähintään 30 €) ja `maksu_avaimet` ne tekstinpätkät, joista laskun maksu
+  tunnistetaan tiliotteelta.
 - **Alkupäivä**: `asetukset/config.json` → `alkaen` (muotoa `2025-07-01`) jättää sitä
   vanhemmat rivit tuomatta, vaikka ne olisivat tiedostossa — kätevä, jos et
   halua ottaa mukaan koko historiaa. Tuonti kertoo aina montako riviä rajaus

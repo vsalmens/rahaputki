@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.36"
+VERSIO = "v0.37"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila", "muistiinpano"]
@@ -6140,25 +6140,57 @@ def tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit, ledg
                 d = date(v, k2, paiva)
         return f"{d.day}.{d.month}."
 
-    for nimi, (maksut, tuodut) in kortti_summat(ledger).items():
-        ero = round(sum(maksut.values()) - sum(t[1] for t in tuodut.values()), 2)
-        if ero < -5:
-            spec = KORTIT_SPEC.get(nimi, {})
-            era = _seuraava_era(spec.get("era_paiva", "loppu"))
-            minimi = -ero * spec.get("minimi_pct", 2) / 100
-            teksti = (f"avointa korttivelkaa ~{fmt_eur(-ero)} € · seuraava eräpäivä ~{era} "
-                      f"(minimierä ~{fmt_eur(max(30.0, minimi))} €)")
-        elif ero > 5:
-            teksti = f"täsmäytysvakio +{fmt_eur(ero)} € (rajapäivä/ennakot)"
+    def _erapaivavihje(spec, velka):
+        """Eräpäivä ja minimierä vain jos kortin ehdot tiedetään. Tuntemattomalle
+        kortille arvattu eräpäivä olisi väärää tietoa oikean näköisessä muodossa."""
+        if not spec.get("era_paiva"):
+            return ""
+        minimi = velka * (spec.get("minimi_pct") or 2) / 100
+        return (f" · seuraava eräpäivä ~{_seuraava_era(spec['era_paiva'])} "
+                f"(minimierä ~{fmt_eur(max(30.0, minimi))} €)")
+
+    # Korttirivi tulee vain kortista, jolla on rivejä tässä pääkirjassa. Kiinteä
+    # korttilista kertoi jokaiselle käyttäjälle, että kaksi koodissa sattunutta
+    # korttia täsmäävät — myös sellaiselle, jolla ei ole kumpaakaan korttia.
+    kortit = korttien_speksit(ledger, cfg)
+    pankkisaldot = {str(t["tili"]): float(t["saldo"]) for t in lue_pankkitila().values()
+                    if t.get("tili") and isinstance(t.get("saldo"), (int, float))}
+    for nimi, (maksut, tuodut) in kortti_summat(ledger, kortit).items():
+        spec = kortit[nimi]
+        ostot = sum(t[1] for t in tuodut.values())
+        saldo = pankkisaldot.get(nimi)
+        if saldo is not None:
+            # Pankin oma saldo kertoo velan tarkemmin kuin maksujen ja ostojen
+            # erotus: se ei ole kiinni siitä, tunnistetaanko laskun maksu
+            # tiliotteelta, eikä laske samaa maksua kahdesti silloin kun
+            # lyhennys näkyy sekä maksavalla tilillä että kortilla.
+            if saldo < -5:
+                teksti = f"avointa korttivelkaa {fmt_eur(-saldo)} €{_erapaivavihje(spec, -saldo)}"
+            elif saldo > 5:
+                teksti = f"saldo +{fmt_eur(saldo)} € (maksettu etukäteen)"
+            else:
+                teksti = "✓ ei avointa velkaa"
+        elif maksut:
+            ero = round(sum(maksut.values()) - ostot, 2)
+            if ero < -5:
+                teksti = f"avointa korttivelkaa ~{fmt_eur(-ero)} €{_erapaivavihje(spec, -ero)}"
+            elif ero > 5:
+                teksti = f"täsmäytysvakio +{fmt_eur(ero)} € (rajapäivä/ennakot)"
+            else:
+                teksti = "✓ maksut ja ostot täsmäävät"
+        elif ostot > 5:
+            teksti = (f"ostoja {fmt_eur(ostot)} € — laskun maksua ei tunnisteta tiliotteelta, "
+                      f"joten avointa velkaa ei voi tästä laskea. Yhdistä kortti pankkiin, "
+                      f"niin saldo kertoo sen.")
         else:
-            teksti = "✓ maksut ja ostot täsmäävät"
-        saldo_rivit.append(f'<tr><td>{e(nimi)} (kortti)</td><td>{teksti}</td></tr>')
+            continue
+        saldo_rivit.append(f'<tr><td>{e(nimi)}</td><td>{teksti}</td></tr>')
 
     korko_kaikki = korko_viim3 = 0.0
     raja3 = sorted({r["pvm"][:7] for r in ledger})[-3:]
     for r in ledger:
         t = normalisoi(f"{r['saaja']} {r['selite']}")
-        if r["tili"] in ("OP-kortti", "S-Pankki Visa") and ("korko" in t or "tilinhoito" in t):
+        if r["tili"] in kortit and ("korko" in t or "tilinhoito" in t):
             korko_kaikki += -float(r["summa"])
             if r["pvm"][:7] in raja3:
                 korko_viim3 += -float(r["summa"])
@@ -8320,34 +8352,73 @@ def cmd_siivoa_kopiot(args):
     print(f"Valmis — pääkirjassa nyt {len(ledger)} riviä (varmuuskopio kansiossa data/varmuuskopiot).")
 
 
+# Korttitilin nimessä on aina jokin näistä: velho antaa luottokorttitilille
+# nimen "<pankki> kortti" ja lasku-PDF:n Tili-sarake on kortin oma nimi.
+KORTTISANAT = ("kortti", "visa", "mastercard", "luotto", "credit", "amex")
+
+# Sen verran korttien ehtoja kuin niitä voi tietää etukäteen. Eräpäivä ja
+# minimierä ovat kortin sopimuksesta, eikä niitä näe pääkirjasta; maksu_avaimet
+# kertoo, miltä laskun maksu näyttää maksavan tilin otteella. Tuntematon kortti
+# pärjää ilman: silloin rivi kertoo velan muttei eräpäivää. Omat lisäykset
+# menevät configiin ("kortit"), eivät tänne — tämä tiedosto vaihtuu
+# päivityksessä, eikä kenenkään korttinumero kuulu jaettuun koodiin.
 KORTIT_SPEC = {
-    "OP Visa": {"tili_kortti": "OP-kortti", "era_paiva": "loppu", "minimi_pct": 2,
-                "maksu_avaimet": ["vähittäisasiakkaat"]},
-    "S-Pankki Visa": {"tili_kortti": "S-Pankki Visa", "era_paiva": 15, "minimi_pct": 4,
-                      "maksu_avaimet": ["1194426", "s-pankki visa", "visa credit",
-                                        "visa-luotto", "luoton maksu", "s-pankki oyj",
-                                        "s-pankki ville",
-                                        "55843 90027", "5584390027",
-                                        "3939 0008 2005", "393900082005"]},
+    "OP-kortti": {"era_paiva": "loppu", "minimi_pct": 2,
+                  "maksu_avaimet": ["vähittäisasiakkaat"]},
+    "S-Pankki Visa": {"era_paiva": 15, "minimi_pct": 4,
+                      "maksu_avaimet": ["s-pankki visa", "visa credit", "visa-luotto",
+                                        "luoton maksu", "s-pankki oyj"]},
 }
 
 
-def kortti_summat(ledger):
-    """Kortti -> (maksut_kk, tuodut_kk) täsmäytystä varten."""
+def korttitilit(ledger):
+    """Käytössä olevat korttitilit pääkirjasta, esiintymisjärjestyksessä.
+
+    Erillistä luetteloa korteista ei ylläpidetä: kortti on käytössä silloin kun
+    sillä on rivejä. Näin Nordea-asiakas saa oman korttinsa eikä kenenkään
+    muun."""
+    nimet = []
+    for r in ledger:
+        nimi = str(r.get("tili") or "")
+        if nimi and nimi not in nimet and any(sana in normalisoi(nimi) for sana in KORTTISANAT):
+            nimet.append(nimi)
+    return nimet
+
+
+def korttien_speksit(ledger, cfg=None):
+    """Korttitili -> ehdot. Configin "kortit"-osio voittaa sisäänrakennetut."""
+    omat = (cfg or {}).get("kortit") or {}
+    kortit = {}
+    for nimi in korttitilit(ledger):
+        speksi = {"era_paiva": None, "minimi_pct": 2, "maksu_avaimet": []}
+        speksi.update(KORTIT_SPEC.get(nimi, {}))
+        if isinstance(omat.get(nimi), dict):
+            speksi.update(omat[nimi])
+        kortit[nimi] = speksi
+    return kortit
+
+
+def kortti_summat(ledger, kortit=None):
+    """Kortti -> (maksut_kk, tuodut_kk) täsmäytystä varten.
+
+    Maksuja etsitään kaikilta muilta kuin korttitileiltä: laskun voi maksaa
+    miltä tililtä tahansa, ja kortilta kortille ei makseta."""
+    kortit = korttien_speksit(ledger) if kortit is None else kortit
+    korttinimet = set(kortit)
     tulos = {}
-    for nimi, k in KORTIT_SPEC.items():
+    for nimi, k in kortit.items():
         maksut = defaultdict(float)
         tuodut = defaultdict(lambda: [0, 0.0])
         for r in ledger:
-            teksti = normalisoi(f"{r['saaja']} {r['selite']}")
             summa = float(r["summa"])
-            if (r["tili"] in ("OP-tili", "S-Pankki") and summa < 0
-                    and any(a in teksti for a in k["maksu_avaimet"])):
-                maksut[r["pvm"][:7]] += -summa
-            if r["tili"] == k["tili_kortti"]:
+            if r["tili"] == nimi:
                 t = tuodut[r["pvm"][:7]]
                 t[0] += 1
                 t[1] += -summa
+            elif k["maksu_avaimet"] and summa < 0 and r["tili"] not in korttinimet:
+                teksti = normalisoi(f"{r['saaja']} {r['selite']}")
+                if any(a in teksti for a in k["maksu_avaimet"]):
+                    maksut[r["pvm"][:7]] += -summa
         tulos[nimi] = (maksut, tuodut)
     return tulos
 
@@ -8356,13 +8427,16 @@ def cmd_tarkista_kortit(args):
     """Täsmäytä korttilaskujen maksut tileillä vs. tuodut korttirivit."""
     ledger = lue_ledger()
     summat = kortti_summat(ledger)
+    if not summat:
+        print("Pääkirjassa ei ole korttitilejä — ei mitään täsmäytettävää.")
+        return
     kaikki_kk = sorted({r["pvm"][:7] for r in ledger})
     for nimi, (maksut, tuodut) in summat.items():
         print(f"\n═══ {nimi} ═══")
-        if not maksut and not tuodut:
-            print("  ei maksuja eikä tuotuja rivejä — jos kortti on käytössä, maksurivin "
-                  "nimi ei osu hakusanoihin (kerro miltä maksu näyttää tiliotteella).")
-            continue
+        if not maksut:
+            print("  laskun maksua ei tunnisteta maksavan tilin otteelta — lisää kortin "
+                  "maksu_avaimet configin \"kortit\"-osioon, tai yhdistä kortti pankkiin, "
+                  "jolloin saldo kertoo velan ilman arvailua.")
         m_yht = t_yht = 0.0
         print(f"  {'kuukausi':10} {'maksettu €':>11} {'tuotu € (rivit)':>18}   huomio")
         for m in kaikki_kk:
