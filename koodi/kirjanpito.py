@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.37"
+VERSIO = "v0.38"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila", "muistiinpano"]
@@ -3297,13 +3297,47 @@ def _tunniste(acc):
     return siisti(aid.get("iban") or (aid.get("other") or {}).get("identification") or "")
 
 
+def _vanha_rivi(lista, tunniste, uid, nimi="", varatut=()):
+    """Config-rivi, jota noudettu tili vastaa: tunniste (IBAN) ensin, sitten uid.
+
+    Kolmantena nimi, mutta vain riveillä joilla ei ole tunnistetta. Ne on
+    valtuutettu ennen kuin tunniste alettiin tallentaa, ja kun uid vaihtuu
+    uusinnassa, nimi on ainoa mikä niistä on jäljellä — ilman sitä uusinta
+    kirjoitti saman tilin toiseen kertaan ja vanha rivi jäi tuottamaan 401:tä
+    joka haussa. Tunnisteellinen rivi ei koskaan osu nimellä: Revolutin
+    taskut ovat saman nimisiä mutta eri tilejä. `varatut` on tässä ajossa jo
+    käytettyjen rivien id-joukko, jottei kaksi tiliä valtaa samaa riviä."""
+    def vapaat():
+        return [t for t in lista if id(t) not in varatut]
+    for t in vapaat():
+        if tunniste and siisti(str(t.get("tunniste", ""))) == tunniste:
+            return t
+    for t in vapaat():
+        if t.get("account_id") == uid:
+            return t
+    for t in vapaat():
+        if nimi and not t.get("tunniste") and t.get("tili") == nimi:
+            return t
+    return None
+
+
+def _vanhentuneet_rivit(lista, pankki, nahdyt):
+    """Saman pankin rivit, jotka eivät olleet mukana juuri tehdyssä
+    valtuutuksessa. Vanhat rivit (ennen tunniste-kenttää) eivät tiedä
+    pankkiaan, joten ne tunnistetaan juuri tallennetun tilinimen perusteella."""
+    nimet = {t.get("tili") for t in lista if t.get("account_id") in nahdyt}
+    return [t for t in lista if t.get("account_id") not in nahdyt
+            and (siisti(str(t.get("pankki", ""))) == siisti(pankki)
+                 or (not t.get("pankki") and t.get("tili") in nimet))]
+
+
 def _tallenna_tilit(cfg, pankki, tilit, istunto=None):
     """Nimeä noudetut tilit ja kirjoita ne config.jsoniin.
 
     Suostumus uusitaan pankeittain 90–180 päivän välein, ja tilin uid voi
-    vaihtua sen mukana. Rivi tunnistetaan siksi ensisijaisesti IBANista:
-    uusinta päivittää vanhan rivin sen sijaan että kasvattaisi listaa
-    kuolleilla tunnuksilla."""
+    vaihtua sen mukana. Rivi tunnistetaan siksi ensisijaisesti IBANista
+    (ks. _vanha_rivi): uusinta päivittää vanhan rivin sen sijaan että
+    kasvattaisi listaa kuolleilla tunnuksilla."""
     ph = cfg.setdefault("pankkihaku", {})
     ph["palvelu"] = "enablebanking"
     lista = ph.setdefault("tilit", [])
@@ -3314,20 +3348,20 @@ def _tallenna_tilit(cfg, pankki, tilit, istunto=None):
           "muut (Revolut, kortit) yleisessä muodossa.")
     # Käsin asetettu alkupäivä ei saa kadota, kun vanha rivi korvautuu.
     vanhat_alkaen = {t.get("tili"): t.get("alkaen") for t in lista if t.get("alkaen")}
-    nahdyt, uusia = [], 0
+    nahdyt, uusia, varatut = [], 0, set()
     for acc in tilit:
         uid = str(acc.get("uid", ""))
         if not uid:
             continue
         tunniste = _tunniste(acc)
-        vanha = (next((t for t in lista if tunniste
-                       and siisti(str(t.get("tunniste", ""))) == tunniste), None)
-                 or next((t for t in lista if t.get("account_id") == uid), None))
+        vanha = _vanha_rivi(lista, tunniste, uid, _ehdota_tilinimi(pankki, acc), varatut)
         kuvaus = siisti(" ".join(str(x) for x in [acc.get("name"), acc.get("product"),
                                                   acc.get("usage")] if x))
         ehdotus = (vanha or {}).get("tili") or _ehdota_tilinimi(pankki, acc)
         print(f"\n  tili {tunniste or uid}  {kuvaus}".rstrip())
         nimi = _kysy(f"  Nimi raportissa [{ehdotus}]: ", ehdotus)
+        # Käyttäjän antama nimi voi osua vanhaan riviin, vaikka ehdotus ei osunut.
+        vanha = vanha or _vanha_rivi(lista, "", "", nimi, varatut)
         rivi = {"tili": nimi, "account_id": uid, "tunniste": tunniste,
                 "pankki": siisti(pankki)}
         # Voimassaolo on pankin antama, ei meidän pyyntömme: tallennetaan se
@@ -3348,13 +3382,9 @@ def _tallenna_tilit(cfg, pankki, tilit, istunto=None):
             if vanha.get("account_id") != uid:
                 print("  ↻ valtuutus uusittu — tilin tunnus päivitetty vanhalle riville")
             vanha.update(rivi)
+            varatut.add(id(vanha))
         nahdyt.append(uid)
-    # Vanhat rivit (ennen tunniste-kenttää) eivät tiedä pankkiaan, joten
-    # tunnistetaan ne juuri tallennetun tilinimen perusteella — ja kysytään.
-    nimet = {t.get("tili") for t in lista if t.get("account_id") in nahdyt}
-    vanhentuneet = [t for t in lista if t.get("account_id") not in nahdyt
-                    and (siisti(str(t.get("pankki", ""))) == siisti(pankki)
-                         or (not t.get("pankki") and t.get("tili") in nimet))]
+    vanhentuneet = _vanhentuneet_rivit(lista, pankki, nahdyt)
     if vanhentuneet:
         print("\nNämä saman pankin rivit eivät olleet mukana tässä valtuutuksessa:")
         for t in vanhentuneet:
@@ -3431,9 +3461,7 @@ def tilien_ehdotukset(cfg, pankki, tilit):
         if not uid:
             continue
         tunniste = _tunniste(acc)
-        vanha = (next((t for t in lista if tunniste
-                       and siisti(str(t.get("tunniste", ""))) == tunniste), None)
-                 or next((t for t in lista if t.get("account_id") == uid), None))
+        vanha = _vanha_rivi(lista, tunniste, uid, _ehdota_tilinimi(pankki, acc))
         ulos.append({
             "uid": uid, "tunniste": tunniste,
             "kuvaus": siisti(" ".join(str(x) for x in [acc.get("name"), acc.get("product"),
@@ -3454,15 +3482,13 @@ def tallenna_tilit_nimilla(cfg, pankki, valinnat, istunto=None):
     lista[:] = [t for t in lista if not _on_paikanpitaja(t.get("account_id"))]
     vanhat_alkaen = {t.get("tili"): t.get("alkaen") for t in lista if t.get("alkaen")}
     paasy = ((istunto or {}).get("access") or {})
-    uusia, nahdyt = 0, []
+    uusia, nahdyt, varatut = 0, [], set()
     for v in valinnat:
         uid, nimi = str(v.get("uid", "")), siisti(str(v.get("tili", "")))
         if not uid or not nimi or not v.get("mukaan", True):
             continue
         tunniste = siisti(str(v.get("tunniste", "")))
-        vanha = (next((t for t in lista if tunniste
-                       and siisti(str(t.get("tunniste", ""))) == tunniste), None)
-                 or next((t for t in lista if t.get("account_id") == uid), None))
+        vanha = _vanha_rivi(lista, tunniste, uid, nimi, varatut)
         rivi = {"tili": nimi, "account_id": uid, "tunniste": tunniste,
                 "pankki": siisti(pankki)}
         if vanha is None:
@@ -3471,13 +3497,20 @@ def tallenna_tilit_nimilla(cfg, pankki, valinnat, istunto=None):
             uusia += 1
         else:
             vanha.update(rivi)
+            varatut.add(id(vanha))
         nahdyt.append(uid)
         paivita_pankkitila(uid, pankki=siisti(pankki), tili=nimi,
                            session_id=str((istunto or {}).get("session_id") or "") or None,
                            valtuutus_asti=str(paasy.get("valid_until") or "")[:10] or None,
                            valtuutettu=date.today().isoformat(), virhe="", virhekoodi=0)
+    # Terminaali kysyy, poistetaanko saman pankin rivit jotka jäivät
+    # valtuutuksesta pois; selaimessa kysymykselle ei ole paikkaa, ja rivi
+    # jonka tunnus on vanhasta istunnosta tuottaa vain 401:tä joka haussa.
+    # Poistetaan, ja kerrotaan vastauksessa.
+    vanhentuneet = {id(t) for t in _vanhentuneet_rivit(lista, pankki, nahdyt)}
+    lista[:] = [t for t in lista if id(t) not in vanhentuneet]
     turvakirjoita_json(CONFIG, cfg)
-    return {"uusia": uusia, "yhteensa": len(nahdyt)}
+    return {"uusia": uusia, "yhteensa": len(nahdyt), "poistettuja": len(vanhentuneet)}
 
 
 def eb_valtuuta(cfg, hakusana="", app=None):
@@ -9375,7 +9408,9 @@ def velho_toiminto(nimi, p):
             cfg = lue_config()
             tulos = tallenna_tilit_nimilla(cfg, v["valinta"]["name"], valinnat, v["istunto"])
             v["viesti"] = (f"{v['valinta']['name']}: {tulos['yhteensa']} tiliä tallennettu"
-                           + (f", {tulos['uusia']} uutta." if tulos["uusia"] else "."))
+                           + (f", {tulos['uusia']} uutta" if tulos["uusia"] else "")
+                           + (f", {tulos['poistettuja']} vanhentunutta riviä poistettu"
+                              if tulos["poistettuja"] else "") + ".")
             _velho_nollaa_pankki()
 
     elif nimi == "peru_pankki":
