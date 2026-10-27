@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.38"
+VERSIO = "v0.39"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila", "muistiinpano"]
@@ -4725,6 +4725,33 @@ def oly_netto(L):
     return netto, vanhat
 
 
+def oly_siirrot(L):
+    """Kuka maksaa kenelle: kauden siirrot ja aiempien laskujen avoin osa.
+
+    Kauden saldot tasataan keskenään (tasausmaksut), ja aiemmilta laskuilta
+    avoinna oleva lisätään erikseen siirtona pankkiirille — se on laskutettu
+    hänelle, ja juuri sitä maksujen täsmäytys odottaa. Jos kausi ja vanhat
+    laskut yhdistettäisiin yhdeksi nettolaskelmaksi, vanha saatava voisi
+    ohjautua toiselle jäsenelle, pankkiiri ei näkisi sitä koskaan ja lasku
+    jäisi kirjanpidossa ikuisesti avoimeksi.
+
+    Palauttaa listan (maksaja, saaja, summa, josta aiemmilta laskuilta)."""
+    pankkiiri = L["pankkiiri"]
+    _, vanhat = oly_netto(L)
+    siirrot = [[m, sa, summa, 0.0] for m, sa, summa in tasausmaksut(L["velka"])]
+    for nm, v in sorted(vanhat.items()):
+        if v <= 0.005 or nm == pankkiiri:
+            continue
+        for rivi in siirrot:
+            if rivi[0] == nm and rivi[1] == pankkiiri:
+                rivi[2] = round(rivi[2] + v, 2)
+                rivi[3] = v
+                break
+        else:
+            siirrot.append([nm, pankkiiri, round(v, 2), v])
+    return [tuple(r) for r in siirrot]
+
+
 def kausivali(alku_txt, loppu_txt):
     """Kauden päivät luettavana välinä. Juuri suljetun kauden jälkeen uusi
     kausi alkaa huomenna, jolloin väli olisi takaperin — silloin kerrotaan
@@ -4794,12 +4821,21 @@ def olympos_laskelma(ledger, oly, tanaan=None, alku_yli=None):
                 saat[str(nm)] = float(v or 0)
             except (TypeError, ValueError):
                 continue
+        siirrot = []
+        for x in (k.get("siirrot") or []):
+            try:
+                siirrot.append({"maksaja": str(x.get("maksaja", "")),
+                                "saaja": str(x.get("saaja", "")),
+                                "summa": float(x.get("summa", 0) or 0)})
+            except (TypeError, ValueError, AttributeError):
+                continue
         kausi_tila.append({"alku": str(k["alku"]),
                            "alkupaiva": kauden_alkupaiva(k),
                            "loppu": str(k["loppu"]),
                            "suljettu": str(k.get("suljettu", "")),
                            "yhteenveto": k.get("yhteenveto") or {},
                            "saatavat": saat,
+                           "siirrot": siirrot,
                            "maksettu": {nm: 0.0 for nm in saat},
                            "maksut": []})
     jasenet = oly.get("jasenet", [])
@@ -4944,13 +4980,18 @@ def olympos_laskelma(ledger, oly, tanaan=None, alku_yli=None):
                          "summa": jaljella_m, "tyyppi": "palautus",
                          "jasen": jasen_m, "rid": rid_m, "jalki": ""})
 
+    # Positiivinen kirjaus on yhteiskulu tilien ulkopuolelta (maksaja maksoi
+    # omasta pussistaan), negatiivinen yhteinen hyvitys tilien ulkopuolelta
+    # (esim. käteisenä saatu palautus, joka jäi "maksajan" haltuun). Sama
+    # kaava hoitaa molemmat: osuudet ja maksajan saldo liikkuvat etumerkin
+    # mukaan.
     for k in oly.get("kirjaukset", []):
         try:
             p = date.fromisoformat(str(k.get("pvm", "")))
             s = float(k.get("summa", 0) or 0)
         except ValueError:
             continue
-        if p > tanaan or s <= 0:
+        if p > tanaan or s == 0:
             continue
         kid = _kirjaus_id(k)
         if kid in suljetut_ridt:
@@ -5038,16 +5079,27 @@ def oly_sulje_kausi(ledger, oly, loppu, alku=None, laskuta=True):
     tunnistetaan jälkijättöiseksi ja siirtyy seuraavalle laskulle sen sijaan
     että se katoaisi kokonaan.
 
+    Saatavaksi jää vain se, mikä laskun siirroista tulee pankkiirille.
+    Jäsenten keskinäiset siirrot (Viivi maksaa Sarille) tallennetaan tiedoksi,
+    mutta niitä ei odoteta: pankkiirin kirjanpito ei näe niitä koskaan, ja
+    odotettuna ne pitäisivät laskun avoimena vaikka kaikki olisi maksettu.
+
     laskuta=False sulkee kauden ilman saatavia — silloin rahat on jo siirretty
     eikä kenenkään tarvitse maksaa mitään."""
     loppu_d = date.fromisoformat(str(loppu))
     alku_s = siisti(str(alku or "")) or oly_avoin_alku(oly)
     L = olympos_laskelma(ledger, oly, tanaan=loppu_d, alku_yli=(alku_s or None))
+    siirrot = tasausmaksut(L["velka"]) if laskuta else []
+    saatavat = {}
+    for maksaja, saaja, summa in siirrot:
+        if saaja == L["pankkiiri"]:
+            saatavat[maksaja] = round(saatavat.get(maksaja, 0.0) + summa, 2)
     kausi = {"alku": L["alku"], "alkupaiva": kausi_alku_nayton(L["alku"]),
              "loppu": loppu_d.isoformat(),
              "suljettu": date.today().isoformat(),
-             "saatavat": ({nm: round(v, 2) for nm, v in L["velka"].items() if v > 0.005}
-                          if laskuta else {}),
+             "saatavat": saatavat,
+             "siirrot": [{"maksaja": m, "saaja": sa, "summa": summa}
+                         for m, sa, summa in siirrot],
              "rivit": sorted({str(x["rid"]) for x in L["poimitut"] if x.get("rid")}
                              | {str(x["kid"]) for x in L["poimitut"] if x.get("kid")}),
              "yhteenveto": {"boksi": round(L["boksi_yht"], 2),
@@ -5168,20 +5220,20 @@ def olympos_erittely_html(ledger, alku=None, loppu=None, alkupaiva=None):
             tili_map[j.get("nimi", "")] = t
     # Aiemmilta laskuilta avoinna oleva kulkee mukana: muuten uusi lasku
     # näyttäisi pienemmältä kuin mitä maksettavaa oikeasti on.
-    netto, vanhat = oly_netto(L)
+    siirrot = oly_siirrot(L)
     toimet = []
-    for maksaja, saaja, summa in tasausmaksut(netto):
+    for maksaja, saaja, summa, vanha in siirrot:
         kohde = tili_map.get(saaja, "")
         kohde_txt = (f' tilille {e(kohde)}' if kohde else
                      ' <span class="pikku">(tili puuttuu)</span>')
-        vanha_txt = (f' <span class="pikku">(sis. {eur2(vanhat[maksaja])} € aiemmilta '
-                     f'laskuilta)</span>' if vanhat.get(maksaja, 0.0) > 0.005 else "")
+        vanha_txt = (f' <span class="pikku">(sis. {eur2(vanha)} € aiemmilta '
+                     f'laskuilta)</span>' if vanha > 0.005 else "")
         toimet.append(f'<li><b>{e(maksaja)}</b> maksaa <b>{eur2(summa)} €</b> '
                       f'{e(saaja)}lle{kohde_txt}.{vanha_txt}</li>')
     o.append('<h2>Toimenpiteet</h2>')
     if toimet:
         o.append('<ul>' + "".join(toimet) + '</ul>')
-        puuttuu = sorted({saaja for _, saaja, _ in tasausmaksut(netto)
+        puuttuu = sorted({saaja for _, saaja, _, _ in siirrot
                           if saaja not in tili_map})
         if puuttuu:
             o.append(f'<p class="pieni">Lisää maksutili '
@@ -5337,17 +5389,19 @@ def olympos_osio(ledger, cfg=None):
         t = siisti(str(j.get("tili", "")))
         if t:
             tilit[j.get("nimi", "")] = t
-    maksut = tasausmaksut(netto)
     if maksut:
         mt = ['<p class="pikkuteksti">Näin saldot menevät nollaan ilman että rahaa '
-              'kierrätetään kenenkään kautta:</p><ul class="olmaksut">']
-        for maksaja, saaja, summa in maksut:
+              'kierrätetään kenenkään kautta. Aiemmilta laskuilta avoin osa menee '
+              'aina pankkiirille, jolle se on laskutettu:</p><ul class="olmaksut">']
+        for maksaja, saaja, summa, vanha in maksut:
             tili = tilit.get(saaja, "")
             mt.append(f'<li><b>{e(maksaja)}</b> maksaa <b>{eur2(summa)} €</b> '
                       f'{e(saaja)}lle'
                       + (f' <span class="pikkuteksti">{e(tili)}</span>' if tili else
                          ' <span class="pikkuteksti">(tili puuttuu: '
                          'data/yhteistalous.json → jasenet[].tili)</span>')
+                      + (f' <span class="pikkuteksti">(sis. {eur2(vanha)} € aiemmilta '
+                         f'laskuilta)</span>' if vanha > 0.005 else "")
                       + '</li>')
         mt.append("</ul>")
         st.append("".join(mt))
@@ -5525,8 +5579,11 @@ def olympos_osio(ledger, cfg=None):
             f'<input id="ol-vk-summa" placeholder="€/kk" size="6"> '
             f'<input id="ol-vk-kk" placeholder="kk (tyhjä = rajaton)" size="12"> '
             f'<button id="ol-vk-lisaa">lisää vakio</button></p>'
-            f'<h3>Kirjaukset</h3><p class="pikkuteksti">Yhteiskulut, jotka joku maksoi omasta pussistaan '
-            f'(esim. puutarhuri).</p>{"".join(kt)}'
+            f'<h3>Kirjaukset</h3><p class="pikkuteksti">Yhteiskulut ja hyvitykset tilien '
+            f'ulkopuolelta. Positiivinen summa on yhteiskulu, jonka maksaja maksoi omasta '
+            f'pussistaan (esim. puutarhuri); negatiivinen on yhteinen hyvitys, joka jäi '
+            f'maksajan haltuun (esim. käteisenä saatu palautus) — se hyvitetään jakajille '
+            f'ja veloitetaan maksajalta.</p>{"".join(kt)}'
             f'<h3>Poimitut rivit</h3><p class="pikkuteksti">Nämä rivit luetaan pääkirjasta jakoon. '
             f'Jos jokin kuuluu eri kaudelle (esim. tasauspäivän jälkeen veloittunut edellisen '
             f'kuun lasku), sulje se pois — se ei tuolloin vaikuta saldoihin.</p>{rivitaulu}'
@@ -5547,10 +5604,11 @@ def olympos_osio(ledger, cfg=None):
             f'<h3>Kauden sulkeminen</h3>'
             f'<p class="pikkuteksti">Kun lasku on lähetetty, sulje kausi. Päivät ovat '
             f'mukaan lukevia: kausi kattaa alkupäivän ja loppupäivän, ja seuraava '
-            f'kausi alkaa loppupäivää seuraavasta päivästä. Summat jäädytetään '
-            f'saataviksi, ja jäsenten myöhemmin maksamat suoritukset kuitataan niitä '
-            f'vastaan vanhimmasta laskusta alkaen — ne eivät enää sekoitu uuteen '
-            f'kauteen. Jos samalle kaudelle ilmestyy myöhemmin veloitus, se siirtyy '
+            f'kausi alkaa loppupäivää seuraavasta päivästä. Pankkiirille tulevat '
+            f'siirrot jäädytetään saataviksi, ja jäsenten myöhemmin maksamat suoritukset '
+            f'kuitataan niitä vastaan vanhimmasta laskusta alkaen — ne eivät enää sekoitu '
+            f'uuteen kauteen. Jäsenten keskinäisiä siirtoja ei seurata: ne näkyvät laskussa '
+            f'tiedoksi. Jos samalle kaudelle ilmestyy myöhemmin veloitus, se siirtyy '
             f'seuraavalle laskulle merkittynä.</p>'
             f'<p>Kausi <input type="date" id="ol-kausi-alku" '
             f'value="{e(kausi_alku_nayton(L["alku"]))}" '
@@ -5578,9 +5636,20 @@ def _oly_kaudet_html(L, eur2):
         vali = f'{kt["alkupaiva"]} → {kt["loppu"]}'
         linkki = (f'<br><a href="yhteistalous_lasku_{e(kt["loppu"])}.html" '
                   f'target="_blank" rel="noopener" class="pikkuteksti">🖨 avaa lasku</a>')
-        if not kt["saatavat"]:
+        # Pankkiirin kirjanpito näkee vain hänelle tulevat maksut. Jäsenten
+        # keskinäiset siirrot näytetään tiedoksi, ettei lasku näytä
+        # pienemmältä kuin lähetetty, mutta niitä ei odoteta eikä kuitata.
+        muut = [x for x in kt.get("siirrot", []) if x["saaja"] != L["pankkiiri"]]
+        muut_txt = ", ".join(f'{e(x["maksaja"])} → {e(x["saaja"])} {eur2(x["summa"])} €'
+                             for x in muut)
+        if not kt["saatavat"] and not muut:
             osat.append(f'<tr><td>{e(vali)}{linkki}</td><td colspan="6" '
                         f'class="pikkuteksti">suljettu ilman saatavia</td></tr>')
+            continue
+        if not kt["saatavat"]:
+            osat.append(f'<tr><td>{e(vali)}{linkki}</td><td colspan="6" '
+                        f'class="pikkuteksti">pankkiirille ei tule mitään; keskinäiset '
+                        f'siirrot, joita ei seurata: {muut_txt}</td></tr>')
             continue
         eka = True
         for nm in sorted(kt["saatavat"], key=lambda x: -kt["saatavat"][x]):
@@ -5595,11 +5664,15 @@ def _oly_kaudet_html(L, eur2):
                         f'<td class="num">{eur2(max(jaljella, 0.0))}</td>'
                         f'<td class="pikkuteksti">{mt}</td><td>{tila}</td></tr>')
             eka = False
+        if muut:
+            osat.append(f'<tr><td></td><td colspan="6" class="pikkuteksti">lisäksi '
+                        f'keskinäiset siirrot, joita ei seurata: {muut_txt}</td></tr>')
     osat.append("</table>")
     yli = sum(kt["auki"] for kt in L["kaudet"])
     osat.append(f'<p class="pikkuteksti">Avoinna yhteensä {eur2(yli)} €. '
-                f'Maksu kuitataan vanhimmasta laskusta alkaen; yli menevä osa '
-                f'siirtyy avoimen kauden saldoihin.</p>')
+                f'Lasku seuraa vain pankkiirille tulevaa osaa; maksu kuitataan '
+                f'vanhimmasta laskusta alkaen, ja yli menevä osa siirtyy avoimen '
+                f'kauden saldoihin.</p>')
     return "".join(osat)
 
 
@@ -7373,8 +7446,8 @@ document.addEventListener('click',function(ev){
     const b=document.getElementById('ol-kausi-loppu').value;
     if(!a||!b){alert('anna kauden alku- ja loppup\u00e4iv\u00e4');return;}
     if(!confirm('Suljetaanko kausi '+a+' \u2192 '+b+'?'+(laskuta?
-        ' Kauden summat j\u00e4\u00e4dytet\u00e4\u00e4n saataviksi ja tulevat maksut '+
-        'kuitataan niit\u00e4 vastaan.':' Kausi suljetaan ilman saatavia.'))){return;}
+        ' Pankkiirille tulevat siirrot j\u00e4\u00e4dytet\u00e4\u00e4n saataviksi ja tulevat '+
+        'maksut kuitataan niit\u00e4 vastaan.':' Kausi suljetaan ilman saatavia.'))){return;}
     fetch('api/olympos',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({sulje_kausi:{alku:a,loppu:b,laskuta:laskuta}})})
       .then(function(r){return r.json();}).then(function(v){
@@ -9700,9 +9773,9 @@ def cmd_selaa(args):
                             summa = float(str(k.get("summa", "")).replace(",", "."))
                         except ValueError:
                             return self._json({"ok": False, "virhe": "summa ei ole luku"})
-                        if not siisti(str(k.get("pvm", ""))) or summa <= 0:
+                        if not siisti(str(k.get("pvm", ""))) or summa == 0:
                             return self._json({"ok": False,
-                                               "virhe": "pvm ja positiivinen summa vaaditaan"})
+                                               "virhe": "pvm ja nollasta poikkeava summa vaaditaan"})
                         oly.setdefault("kirjaukset", []).append(
                             {"pvm": siisti(str(k.get("pvm", ""))),
                              "kuvaus": siisti(str(k.get("kuvaus", ""))),

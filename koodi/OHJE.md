@@ -488,7 +488,10 @@ viikot sekä ne viikot, joiden veloitus on maksettu kaudella), palautus-tarkente
 ovat jäsenten maksuja pankkiirille, ja kaikki muut tarkenteet (netti,
 sähkö, …) jaetaan tasan. Kuukausittaiset vakiohyvitykset (esim. auton
 lataussähkö) ja kertaluontoiset käsikirjaukset osallistujavalintoineen
-lisätään lomakkeilla. Tyypittömään poimittuun riviin — sellaiseen, jonka
+lisätään lomakkeilla. Kirjauksen positiivinen summa on yhteiskulu tilien
+ulkopuolelta (joku muu kuin pankkiiri maksoi puutarhurin), negatiivinen on
+yhteinen hyvitys tilien ulkopuolelta (käteisenä saatu palautus): se
+hyvitetään jakajille ja veloitetaan siltä, jonka haltuun raha jäi. Tyypittömään poimittuun riviin — sellaiseen, jonka
 tyyppi on `(muu)` — voi kirjoittaa oman kuvauksen (*lisää kuvaus* rivin nimen
 alla). Se tallentuu pääkirjaan ja näkyy myös tulostettavassa erittelyssä,
 jotta "K-rauta Lanterna 184,75" ei ole puolen vuoden päästä arvoitus
@@ -501,17 +504,21 @@ läsnäolot elävät tiedostossa `data/yhteistalous.json`.
 **Kuka maksaa kenelle.** Toimenpiteet-lista näyttää vähimmän määrän
 siirtoja, joilla saldot menevät nollaan: suurin velallinen maksaa suoraan
 suurimmalle saatavalle. Rahaa ei siis kierrätetä pankkiirin kautta eikä
-kenenkään tarvitse olla välikätenä. Lisää jäsenten tilinumerot tiedostoon
-`data/yhteistalous.json` → `jasenet[].tili`, niin ne näkyvät maksuohjeissa.
+kenenkään tarvitse olla välikätenä. Aiemmilta laskuilta avoin osa menee
+aina pankkiirille, jolle se on laskutettu. Lisää jäsenten tilinumerot
+tiedostoon `data/yhteistalous.json` → `jasenet[].tili`, niin ne näkyvät
+maksuohjeissa.
 
 **Kaudet ja laskut.** Kun lasku on lähetetty, sulje kausi: anna sen alku- ja
 loppupäivä ja paina *sulje kausi ja laskuta*. Päivät ovat mukaan lukevia —
 kausi 21.7.–20.10. kattaa molemmat päivät, ja seuraava kausi alkaa 21.10.
 Kauteen merkitty alkupäivä jää talteen sellaisena kuin se laskutettiin, joten
-lähetetyn laskun otsikko ei muutu jälkikäteen. Kauden summat jäädytetään
-saataviksi, ja jäsenten myöhemmin maksamat suoritukset kuitataan niitä
-vastaan vanhimmasta laskusta alkaen — vasta yli menevä osa vaikuttaa uuteen
-kauteen. Ilman sulkemista lähetetyn laskun maksu näyttäisi ennakkomaksulta
+lähetetyn laskun otsikko ei muutu jälkikäteen. Pankkiirille tulevat siirrot
+jäädytetään saataviksi, ja jäsenten myöhemmin maksamat suoritukset kuitataan
+niitä vastaan vanhimmasta laskusta alkaen — vasta yli menevä osa vaikuttaa
+uuteen kauteen. Jäsenten keskinäisiä siirtoja (Viivi maksaa Sarille) ei
+seurata: pankkiirin kirjanpito ei näe niitä, joten ne näkyvät laskussa vain
+tiedoksi eivätkä pidä sitä avoimena. Ilman sulkemista lähetetyn laskun maksu näyttäisi ennakkomaksulta
 kaudella, jolla maksajalle ei ole vielä ehtinyt kertyä kuluja.
 
 Jos samalle kaudelle ilmestyy pääkirjaan veloitus vasta laskun lähdettyä,
