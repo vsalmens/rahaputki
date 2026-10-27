@@ -282,7 +282,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.40"
+VERSIO = "v0.41"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila", "muistiinpano"]
@@ -4674,6 +4674,24 @@ def kausi_alku_rajaksi(nayton):
         return str(nayton)
 
 
+def sentteihin(netto):
+    """Saldot senteiksi niin, että ne summautuvat nollaan.
+
+    Erikseen pyöristetyt saldot eivät summaudu: -714,085 näkyy -714,09:nä ja
+    kaksi 357,0425:tä 357,04:nä, ja taulukko on sentin pielessä. Sama
+    pyöristys tehdään kerran täällä ja sitä käyttävät sekä tasausmaksut että
+    saldotaulukot, jotta taulukon luku on täsmälleen se jonka joku maksaa.
+    Pyöristysjäännös (korkeintaan muutama sentti) annetaan suurimman
+    saatavan kantajalle: maksajien ohjeet pysyvät siisteinä ja saaja kirjaa
+    sentin suuntaan tai toiseen."""
+    sentit = {nm: int(round(float(v) * 100)) for nm, v in netto.items()}
+    ero = sum(sentit.values())
+    if ero and sentit:
+        kantaja = min(sentit, key=lambda nm: (sentit[nm], nm))
+        sentit[kantaja] -= ero
+    return sentit
+
+
 def tasausmaksut(netto, kynnys=0.005):
     """Vähin määrä siirtoja, joilla saldot menevät nollaan.
 
@@ -4692,14 +4710,7 @@ def tasausmaksut(netto, kynnys=0.005):
 
     netto: {jäsen: euroa}, positiivinen = maksaa, negatiivinen = saa.
     Palauttaa listan (maksaja, saaja, summa)."""
-    sentit = {nm: int(round(float(v) * 100)) for nm, v in netto.items()}
-    ero = sum(sentit.values())
-    if ero and sentit:
-        # Pyöristysjäännös (korkeintaan muutama sentti) annetaan suurimman
-        # saatavan kantajalle: maksajien ohjeet pysyvät siisteinä ja saaja
-        # kirjaa sentin suuntaan tai toiseen.
-        kantaja = min(sentit, key=lambda nm: (sentit[nm], nm))
-        sentit[kantaja] -= ero
+    sentit = sentteihin(netto)
     raja = max(1, int(round(kynnys * 100)))
     velalliset = sorted(((nm, v) for nm, v in sentit.items() if v >= raja),
                         key=lambda x: (-x[1], x[0]))
@@ -5221,10 +5232,13 @@ def olympos_erittely_html(ledger, alku=None, loppu=None, alkupaiva=None):
          f'tulostettu {date.today().isoformat()}</p>']
     o.append('<h2>Saldot</h2><table><tr><th>jäsen</th><th class="num">osuus</th>'
              '<th class="num">maksanut</th><th class="num">saldo</th></tr>')
+    # Saldo samalla pyöristyksellä kuin toimenpiteet: muuten -714,085 näkyy
+    # -714,09:nä, vaikka maksajat maksavat yhteensä 714,08.
+    saldot = {nm: c / 100 for nm, c in sentteihin(L["velka"]).items()}
     for nm in L["nimet"]:
         o.append(f'<tr><td>{e(nm)}</td><td class="num">{eur2(L["osuus"][nm])}</td>'
                  f'<td class="num">{eur2(L["maksettu"][nm])}</td>'
-                 f'<td class="num"><b>{eur2(L["velka"][nm])}</b></td></tr>')
+                 f'<td class="num"><b>{eur2(saldot[nm])}</b></td></tr>')
     o.append('</table>')
     # Toimenpiteet: kuka maksaa pankkiirille ja mihin tiliin (tilit oly.jasenet[].tili)
     pankkiiri = L["pankkiiri"]
@@ -5390,8 +5404,9 @@ def olympos_osio(ledger, cfg=None):
     for maksaja, saaja, summa, _ in maksut:
         virta[maksaja] = virta.get(maksaja, 0.0) + summa
         virta[saaja] = virta.get(saaja, 0.0) - summa
+    saldot = {nm: c / 100 for nm, c in sentteihin(L["velka"]).items()}
     for nm in nimet:
-        v = L["velka"][nm]
+        v = saldot[nm]
         # Pankkiirin puolella sama saatava näkyy miinuksena, jotta sarake
         # summautuu nollaan eikä velka näytä katoavan matkalla.
         vanha = vanhat.get(nm, 0.0) - (vanhat_yht if nm == pankkiiri else 0.0)
