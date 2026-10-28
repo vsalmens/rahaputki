@@ -415,6 +415,129 @@ Vanhat komennot toimivat yhä: `hae --yhdista PANKKI` valtuuttaa yhden pankin,
 `hae --istunto SESSION_ID` listaa olemassa olevan istunnon tilit uid:einesi,
 `hae --raaka` tallentaa pankin täydet vastaukset diagnoosia varten.
 
+## Netto-omaisuus — snapshot Google Sheetsiin
+
+Kulutusseurannan rinnalla on toinen, harvempi rituaali: netto-omaisuuden
+snapshot. Se on yksi rivi Google Sheets -taulukon **Kirjanpito** välilehdelle
+**Netto** — päivämäärä, varat sarakkeittain, velat sarakkeittain ja niistä
+lasketut Plus, Miinus, Netto ja velkaantumisaste. Rahaputki täyttää rivin
+puolestasi siltä osin kuin luvut saa rajapinnoista, esitäyttää loput
+edellisen rivin arvoilla, näyttää rivin ja kirjoittaa sen vasta kun sanot
+niin. Koko välilehti peilataan tiedostoon `data/netto.csv`, josta raportin
+Netto-omaisuus-osio näyttää historian ja edellisen snapshotin päivämäärän.
+
+Kadenssi on tarkoituksella harva. Snapshot ei ole käyrä eikä päivittäinen
+ajo — se on tasekirjaus, jonka otat kun haluat, vaikka kerran vuodessa.
+
+**Käyttö.** Raportin napista **Netto-snapshot** avautuu lomake: haetut arvot
+ovat esitäytettyinä (vihreä pohja), osittain haetut keltaisella, käsin
+täytettävät edellisen rivin arvolla. Muokkaa mitä pitää, katso että Plus,
+Miinus ja Netto näyttävät oikeilta, ja paina **Kirjoita taulukkoon**.
+Komentoriviltä sama on `python3 koodi/kirjanpito.py netto`; `--kuiva` näyttää
+rivin kirjoittamatta, `--saldot` hakee ensin tilien saldot pankista (yksi haku
+per tili), `--aseta "Rahastot Seligson=1234,56"` antaa käsin täytettävän
+arvon ja `--testi` käyttää testitaulukkoa. **Ensimmäinen ajo on aina kuiva**:
+rivi näytetään ja peili luodaan, mutta taulukkoon ei kirjoiteta ennen kuin
+olet nähnyt, miltä rivi näyttää.
+
+**Rivin valinta.** Jos välilehden viimeinen rivi on jo tältä päivältä, se
+päivitetään (saman päivän snapshotin voi ottaa monta kertaa, taulukkoon ei
+synny kahta riviä). Jos viimeisellä rivillä on päivämäärä mutta ei lukuja
+(vajaa rivi: Netto-omaisuus tyhjä tai nolla), kysytään täydennetäänkö se vai
+lisätäänkö uusi; vajaalle riville jo kirjoitetut luvut ovat lomakkeen
+oletuksina. Muuten uusi rivi menee heti viimeisen päivätyn rivin alle.
+Snapshot-rivit ovat ne, joiden Pvm-sarakkeessa on päivämäärä; niiden alla
+saa olla muistiinpanoja (indeksejä, linkkejä, oppeja), eikä niihin kosketa —
+jos muistiinpanot alkavat heti datan perässä, väliin lisätään rivi, jolloin
+ne siirtyvät yhden alemmas. Muistiinpanoja ei myöskään peilata
+`netto.csv`:hen. Laskentasolut (B, X, Y, Z, AA) toistetaan edellisen täyden
+rivin kaavoina uudelle riville; jos edellisellä rivillä on arvot kaavojen
+sijaan, arvot lasketaan tässä. Numerot kirjoitetaan numeroina, ei tekstinä.
+Jos olet eritellyt jonkin summan kaavana (`=12000+999+350`) ja täydennät
+tai päivität samaa riviä, kaava säilyy niin kauan kuin luku ei muutu; uusi
+luku korvaa sen numerona.
+
+**Mikään ei mene läpi varmistamatta.** Otsikkorivi A1:AA1 tarkistetaan joka
+ajolla ja ajo keskeytyy, jos se ei täsmää. Samoin keskeytetään, jos
+taulukossa on kaksi riviä tälle päivälle, jos rajapinta ei vastaa tai jos
+taulukko on muuttunut sen jälkeen kun rivi näytettiin lomakkeella. Rivejä ei
+poisteta eikä muihin välilehtiin kosketa.
+
+### Käyttöönotto: palvelutili
+
+Rahaputki kirjoittaa taulukkoon Googlen *palvelutilillä* (service account)
+— se on erillinen tekninen käyttäjä, jolle jaat taulukon kuin kenelle tahansa.
+Omaa Google-salasanaasi ei anneta ohjelmalle koskaan.
+
+1. Avaa [Google Cloud Console](https://console.cloud.google.com/) ja tee
+   projekti (nimi vapaa, esim. *Rahaputki*).
+2. *APIs & Services → Library*: ota käyttöön **Google Sheets API**.
+3. *IAM & Admin → Service Accounts → Create service account*. Nimi vapaa,
+   rooleja ei tarvita. Avaa luotu tili, välilehti *Keys → Add key → Create
+   new key → JSON*. Selain lataa avaintiedoston.
+4. Siirrä ladattu tiedosto nimelle **`asetukset/google-palvelutili.json`**.
+   Se on salaisuus siinä missä pankkihaun avain: `.gitignore` kattaa sen,
+   äläkä jaa sitä.
+5. Avaa Kirjanpito-taulukko Sheetsissä, **Jaa** → liitä palvelutilin
+   sähköposti (muotoa `nimi@projekti.iam.gserviceaccount.com`, löytyy
+   avaintiedoston kentästä `client_email`) → oikeus **Muokkaaja**.
+6. Tee taulukosta kopio nimellä *Kirjanpito (testi)* ja jaa sekin samalle
+   osoitteelle. Taulukon tunnus on osoitteen keskiosa:
+   `docs.google.com/spreadsheets/d/`**`<tunnus>`**`/edit`.
+7. `asetukset/config.json`:
+
+   ```json
+   "netto": {
+     "sheet_id": "<oikean taulukon tunnus>",
+     "sheet_id_testi": "<testikopion tunnus>",
+     "otsikot": ["Pvm", "Netto-omaisuus", "Pankkitili", "…", "Net gearing = nettovelkaantumisaste"],
+     "otsikkoaliakset": {"E": ["Krypto (vanha nimi)"]},
+     "tilit": {"Pankkitili": ["OP-tili", "S-Pankki"], "Revolut": ["Revolut"],
+               "Luottokortti 2": ["OP-kortti"], "Luottokortti 3": ["S-Pankki Visa"]},
+     "vihjesarakkeet": {"Revolut": "sijoitukset eivät tule rajapinnasta — katso sovelluksesta"},
+     "lompakot": [
+       {"nimi": "Kraken Wallet", "verkko": "ethereum", "osoite": "0x…",
+        "tokenit": [{"symboli": "wstETH", "sopimus": "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0", "desimaalit": 18}]},
+       {"nimi": "Kraken Wallet BTC", "verkko": "bitcoin", "osoite": "bc1…"}
+     ],
+     "lainat": {"valilehti": "Lainat", "paivitetty": "Tilanne päivitetty",
+                "sarakkeet": {"Yrityksen luotot": "Yhteensä yrityksen nettovelkaa ulos",
+                              "Omat luotot": "Yhteensä omaa nettovelkaa ulos"}},
+     "seligson": {"Rahastot": [{"rahasto": "suomi", "nimi": "Suomi", "osuudet": "123,4567"}],
+                  "Yritys rahastot": []}
+    }
+   ```
+
+   **Otsikkorivi on sinun.** `netto.otsikot` on taulukon rivi A1:AA1
+   täsmälleen kuten se on kirjoitettu, 27 nimeä. Sarakkeiden roolit ovat
+   paikan mukaan — C–K varat, L–W velat, E krypto, I välittäjän salkku, B ja
+   X–AA laskentasolut — mutta nimet ovat omasi, ja muut asetukset (`tilit`,
+   `lainat`, `seligson`, `vihjesarakkeet`) viittaavat sarakkeisiin juuri
+   niillä nimillä. Jos jätät listan pois, odotetaan `config.esimerkki.json`:n
+   yleisnimiä. Kun nimeät sarakkeen uudelleen taulukossa, vaihda nimi tänne
+   ja pane vanha nimi `otsikkoaliakset`-kohtaan sarakekirjaimen alle, niin
+   toinen kone vanhalla asetuksella ei pysähdy.
+
+   Aja ensin `netto --testi --kuiva` testikopiota vasten ja katso että rivi
+   näyttää oikealta. Kirjastot ovat samat kuin pankkihaussa (`pyjwt`,
+   `cryptography`); ilman niitä ohjelma kertoo mitä puuttuu.
+
+### Mistä kukin sarake tulee
+
+| Sarake | Lähde |
+|---|---|
+| C Pankkitili, S–U luottokortit | pankkihaun saldot (`data/pankkitila.json`). `netto.tilit` kertoo, mitkä pankkihaun tilit lasketaan mihinkin sarakkeeseen; velkasarakkeissa saldo käännetään velaksi. Yli 3 päivää vanhaa saldoa tai virhetilassa olevaa tiliä ei käytetä hiljaa: kenttä jää käsin täytettäväksi ja lomake kertoo syyn. Lomakkeen **Hae saldot pankista** hakee tuoreet (yksi haku per tili). |
+| G Revolut | käsin. Olennaista ovat sijoitukset (osakkeet, rahastot), eikä Revolutilla ole henkilöasiakkaalle rajapintaa niihin; pankkihaku näkee vain maksutilin, jonka saldo näytetään vihjeenä kentän vieressä. Kokonaissumma katsotaan Revolut-sovelluksesta. |
+| E Krypto | Kraken-tilin saldot (Balance-kutsu luku-oikeuksin) + omat lompakot julkisista rajapinnoista, euroiksi Krakenin julkisella tickerillä. Avaimet `asetukset/netto.env`: `KRAKEN_API_KEY=…` ja `KRAKEN_API_SECRET=…` (luo Krakenissa avain, jolla on vain *Query Funds*). Lompakot `netto.lompakot`-listaan: `"verkko"` on `ethereum` (eth_getBalance + ERC-20-tokenit `tokenit`-listasta), `zksync` (zkSync Era, sama tapa), `bitcoin` (saldo Blockstream-explorerista, osoite `bc1…`/`1…`/`3…`) tai `starknet`. wstETH-token arvostetaan ETH:n kautta Lidon stEthPerToken-suhteella, koska sille ei ole euro-paria. Oma RPC- tai explorer-osoite kenttään `"rpc"`, jos julkinen ei kelpaa. Ilman avaimia ja osoitteita kenttä on käsin. |
+| Q Yrityksen luotot, R Omat luotot | Lainat-välilehdeltä: luku otsikkosolun alta; `netto.lainat.sarakkeet` kertoo, minkä otsikon alta kukin sarake luetaan (esim. *Yhteensä yrityksen nettovelkaa ulos*). Negatiivinen luku tarkoittaa nettosaatavaa ja pienentää velkoja; lomake näyttää myös välilehden *Tilanne päivitetty* -päivän. |
+| I Yritys osakesalkku | IBKR Flex Web Service (LYNX käyttää IBKR:n alustaa). Luo Client Portalissa *Performance & Reports → Flex Queries* → Activity Flex Query, muoto **XML**, osioksi *Equity Summary in Base* (tai *Net Asset Value (NAV) in Base*) ja siihen kentät *Report Date*, *Currency* ja *Total*; ota *Flex Web Service* käyttöön ja kopioi token. Osio listaa arvon raporttipäivittäin, yhden päivän jaksollakin kaksi riviä (edellisen päivän päätös ja jakson päätös) — tuorein otetaan. `asetukset/netto.env`: `IBKR_FLEX_TOKEN=…` ja `IBKR_FLEX_QUERY_ID=…`. Jos LYNXin osoite eroaa IBKR:n oletuksesta, `netto.ibkr_flex_url`. Jos ei toimi, kenttä on käsin. |
+| F Rahastot, J Yritys rahastot | osuudet × rahaston päiväarvo. Seligsonilla ei ole rajapintaa omistuksiin, mutta rahastojen päiväarvot ovat julkisia CSV-tiedostoja. `netto.seligson` listaa sarakkeen rahastot: `"rahasto"` on arvotiedoston tunnus (`suomi`, `eurooppa`, `pohjoisamerikka`, `aasia`, `global-brands`, `global-pharma`, `phoebus`, `phoenix`, `pharos`, `rahamarkkina`, `euroobligaatio`, `eurocorporate`, `omxh25`; Seligsonin hallinnoimat LähiTapiola-rahastot samasta paikasta, esim. `kehittyva` on LähiTapiola Kehittyvät Markkinat — tunnus on sama kuin osoitteessa `seligson.fi/graafit/<tunnus>_exc.csv`, ja kaikki löytyvät seligson.fi:n sivuilta *Rahastojen arvojen historia*), `"osuudet"` omistettujen osuuksien määrä Oma salkun raportista *Salkku rahastoittain* ja `"nimi"` vapaa. Osuusmäärä on käsin ylläpidetty, joten kenttä on *osittain* haettu: päivitä osuudet aina kun ostat tai myyt. Lomake näyttää rahastokohtaisen erittelyn ja arvon päivän; yli viikon vanhasta arvosta huomautetaan. Jos jonkin rahaston arvo ei tule, koko sarake jää käsin, ettei osasumma näytä kokonaisarvolta. Tyhjä lista = käsin. |
+| H, K sekä D ja velat L–P, S, V, W | käsin: esitäytetään edellisen täyden rivin arvolla, jonka vahvistat tai muutat lomakkeessa. Velkasarakkeiden nollat ovat nollia, ei puuttuvia arvoja. |
+
+Tunnukset `asetukset/netto.env`-tiedostossa eivät kuulu versionhallintaan
+eivätkä pilvikansioon sen enempää kuin pankkihaun tunnukset. Pohja on
+`koodi/netto.esimerkki.env`: kopioi se nimelle `asetukset/netto.env` ja täytä.
+
 ## Muokkaus suoraan raportista
 
 Kaksi tapaa, sama näkymä:
@@ -543,6 +666,7 @@ päivään painettu sulkeminen perutaan napista *avaa viimeisin kausi*.
 | `Aloita.command` / `Aloita.bat` | kaksoisklikattava käynnistin (macOS / Windows) — tynkä, joka avaa Rahaputken selaimeen; kaikki toiminnot löytyvät sivulta |
 | `asetukset/config.json` | lähteiden sarakekartat, kategoriat, omat IBANit |
 | `koodi/config.esimerkki.json`, `koodi/saannot.esimerkki.csv` | riisutut aloituspohjat, joista ensikäynnistys tekee omasi juureen |
+| `koodi/netto.esimerkki.env` | pohja netto-snapshotin tunnuksille (Kraken, IBKR Flex); kopioi nimelle `asetukset/netto.env` |
 | `asetukset/budjetti.csv` | kk-raamit, kuukausipoikkeukset ja kertyvät erät (täytetään vasta kun toteumaa on) |
 | `raportit/raportti.html` | kuukausigraafi + budjettivertailu + matriisi |
 | `raportit/yhteenveto_kk.csv` | sama matriisi Sheets-liitosta varten |
@@ -551,6 +675,9 @@ päivään painettu sulkeminen perutaan napista *avaa viimeisin kausi*.
 | `koneen-asetukset.txt` | koneen omat asetukset (mm. `tietokansio`), koodin juuressa; syntyy vain jos jotain on asetettavaa (ks. Kustomointi) |
 | `data/.lukko.<kone>.json` | ajonaikainen lukko, vain jaetussa tilassa (`"lukitus": "jaettu"`); katoaa itsestään |
 | `data/pankkitila.json` | pankkiyhteyksien tila: saldo, milloin tililtä viimeksi saatiin tapahtumia ja mihin asti valtuutus on voimassa |
+| `data/netto.csv` | peili Google Sheets -taulukon Netto-välilehdestä; syntyy `netto`-ajossa ja päivittyy joka kerta |
+| `asetukset/google-palvelutili.json` | Google-palvelutilin avain netto-snapshotia varten — **ei jaeta, ei versioida** |
+| `asetukset/netto.env` | Krakenin ja IBKR Flexin tunnukset — **ei jaeta, ei versioida** |
 | `~/.rahaputki/tietokansio-<tiiviste>.txt` | asennuskohtainen muisti viimeksi toimineesta tietokansiosta; palauttaa osoittimen, jos koko kansio korvataan päivityksessä |
 | `data/pankkiloki.csv` | rajapintakutsujen loki: aika, kohde, tulos, kesto. Ei tunnuksia eikä tilinumeroita; tilin tunnus on tiivisteenä |
 | `data/varaukset.json` | odottavat korttivaraukset — `hae` kirjoittaa, `aja` täsmäyttää; poistettavissa milloin vain |

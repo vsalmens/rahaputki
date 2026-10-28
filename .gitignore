@@ -1,7 +1,9 @@
-# Salaisuudet — pankkitunnukset eivät kuulu versionhallintaan
+# Salaisuudet — pankkitunnukset ja palvelutilin avain eivät kuulu versionhallintaan
 .env
 *.env
+!koodi/netto.esimerkki.env
 *.pem
+google-palvelutili.json
 
 # Käyttäjän oma kansio: asetukset, kirjanpito ja aineisto.
 # Nämä syntyvät myös koodin viereen, jos RAHAPUTKI_DATA ei ole asetettu.

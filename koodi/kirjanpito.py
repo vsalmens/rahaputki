@@ -13,6 +13,7 @@ Komennot:
   python3 kirjanpito.py budjetti-ehdotus  # ehdota raamit toteuman mediaanista
   python3 kirjanpito.py kurkista TIEDOSTO # näytä miten tiedosto tulkittaisiin
   python3 kirjanpito.py pankkihaku        # ohjattu käyttöönotto: automaattinen pankkihaku
+  python3 kirjanpito.py netto [--kuiva]   # netto-omaisuuden snapshot Google Sheetsiin
 """
 
 import argparse
@@ -282,7 +283,7 @@ TARKISTETTAVAT = RAPORTIT / "tarkistettavat.csv"
 # .githooks/pre-commit hoitaa sen, jottei versio jää jälkeen koodista niin kuin
 # kävi v125:n kohdalla: kolmisenkymmentä committia samalla numerolla, eikä
 # toisella koneella voinut päätellä kumpi koodi siellä ajaa.
-VERSIO = "v0.41"
+VERSIO = "v0.50"
 
 LEDGER_KENTAT = ["id", "pvm", "tili", "summa", "saaja", "selite", "kategoria",
                  "tarkenne", "peruste", "lahde", "tila", "muistiinpano"]
@@ -1335,7 +1336,7 @@ def parsi_tiedosto(polku: Path, cfg):
 # katselu (raportti, kurkista, budjetti-ehdotus) ei lukitse mitään: pääkirjan
 # lukeminen toiselta koneelta on aina sallittua.
 KIRJOITTAVAT = {"aja", "hae", "opi", "luokittele", "siivoa-kopiot", "selaa",
-                "tarkista-kortit", "pankkihaku"}
+                "tarkista-kortit", "pankkihaku", "netto"}
 LUKKO_VANHENEE_MIN = 30
 LUKKO_TUNNISTE = None
 LUKKO_KOMENTO = None
@@ -6394,6 +6395,7 @@ def tee_html(cfg, kuukaudet, taulu, tulot, menot, menokat, tulokat, raamit, ledg
     huomio = (f'<p class="huomio">⚠ {avoimia} tapahtumaa luokittelematta (kategoria TARKISTA) — '
               f'luvut tarkentuvat kun täytät tarkistettavat.csv ja ajat <code>opi</code>.</p>') if avoimia else ""
     yhteydet_html, yhteysvaroitus = pankkiyhteydet_html(cfg)
+    netto_html = netto_osio_html(cfg)
     # Ilman pankkiyhteyttä haku ei voi tehdä mitään järkevää, joten nappi on
     # pois käytöstä ja kertoo miksi. Vaihtoehto olisi nappi, joka näyttää
     # toimivalta ja tulostaa sitten kuivaharjoittelun.
@@ -8053,6 +8055,7 @@ window.addEventListener('DOMContentLoaded',function(){
       document.querySelectorAll('.bud-muokkaa,.bud-lisaa').forEach(function(b){
         b.hidden=false;});
       document.querySelectorAll('.tasmnappi').forEach(function(b){b.hidden=false;});
+      var nn=document.getElementById('nappi-netto');if(nn)nn.hidden=false;
       valvoPalvelinta();}
   }).catch(function(){
     document.getElementById('tila').textContent=
@@ -8284,7 +8287,7 @@ code {{ font-family:ui-monospace,Menlo,monospace }}
 <p class="meta">Rahaputki {VERSIO} · päivitetty {date.today().strftime('%d.%m.%Y')} · {len(ledger)} tapahtumaa ·
 kategorian nimeä, matriisin solua tai kaavion palkkia klikkaamalla pääset katsomaan ja muokkaamaan rivejä</p>
 {huomio}
-<div class="tyokalut"><input id="haku" type="search" placeholder="hae tapahtumia… (Esc tyhjentää)" size="26"><span id="tila" class="pikkuteksti"></span><span id="ajonapit" hidden> <button type="button" id="nappi-hae"{hae_pois}>Hae pankkitapahtumat</button> <a href="velho" id="nappi-velho">Yhdistä pankkeihin</a> <button type="button" id="nappi-aja">Lue tiliotteet</button></span></div>
+<div class="tyokalut"><input id="haku" type="search" placeholder="hae tapahtumia… (Esc tyhjentää)" size="26"><span id="tila" class="pikkuteksti"></span><span id="ajonapit" hidden> <button type="button" id="nappi-hae"{hae_pois}>Hae pankkitapahtumat</button> <a href="velho" id="nappi-velho">Yhdistä pankkeihin</a> <button type="button" id="nappi-aja">Lue tiliotteet</button> <a href="netto" id="nappi-netto-tyokalu">Netto-snapshot</a></span></div>
 <div id="ajoloki" hidden><div id="ajoloki-otsikko" class="pikkuteksti"></div><pre id="ajoloki-teksti"></pre><button type="button" id="ajoloki-nappi" hidden>Päivitä raportti</button> <button type="button" id="ajoloki-piilota">Piilota</button></div>
 <div id="paneeli"></div>
 {budjetti_html}
@@ -8325,6 +8328,7 @@ asetukset/budjetti.csv.</p></details>
 <div style="overflow-x:auto"><table>{''.join(matriisi)}</table></div>
 {olympos_html}
 {yhteydet_html}
+{netto_html}
 <details id="saannot"><summary><h2 style="display:inline">Säännöt ({saanto_n} kpl)</h2></summary>
 <p class="pikkuteksti">Poisto arvioi säännön luokittelemat rivit uudelleen (voivat palata avoimiksi tai siirtyä toiselle säännölle); käsin luokiteltuja ei kosketa.
 Uudet säännöt tehdään porautumisnäkymän lomakkeella.</p>
@@ -8605,6 +8609,1417 @@ def cmd_tarkista_kortit(args):
             print("  ✓ maksut ja tuodut rivit täsmäävät (±5 €).")
     print("\nHuom: laskutuskausi ei ole kalenterikuukausi, joten kuukausirivit ovat "
           "suuntaa-antavia — YHTEENSÄ-rivin erotus on luotettava mittari.")
+
+
+# ------------------------------------------------------ netto-omaisuus
+#
+# Netto-snapshot: yksi rivi Google Sheets -taulukon Netto-välilehdelle ja sama
+# välilehti peilattuna tiedostoon data/netto.csv. Kadenssi on tarkoituksella
+# harva — kuukausia, ei päiviä — joten tässä ei ole ajastusta eikä käyrää,
+# vain rivi kerrallaan ja aina niin, että rivi näytetään ennen kirjoitusta.
+#
+# Taulukon rakenne on käyttäjän oma eikä sitä muuteta täältä: otsikot
+# tarkistetaan joka ajolla, rivejä ei poisteta, muihin välilehtiin ei kosketa.
+
+NETTO_CSV = DATA / "netto.csv"
+NETTO_VALILEHTI = "Netto"
+NETTO_SARAKKEITA = 27
+# Otsikkorivi on käyttäjän oma, ja siinä on hänen lainanantajiaan ja
+# työnantajiaan nimeltä. Oikeat nimet ovat siksi asetuksissa (netto.otsikot),
+# eivät tässä julkisessa koodissa; tämä lista on rakenne ja yleisnimet.
+# Sarakkeiden roolit ovat paikan mukaan: A=0 … K=10 ovat varat C–K (2–10),
+# velat L–W (11–22), laskentasarakkeet B (1) sekä X, Y, Z, AA (23–26).
+# E (4) on krypto ja I (8) välittäjän salkku (IBKR Flex); muut lähteet
+# kohdistetaan sarakkeen nimellä asetuksissa.
+NETTO_OTSIKOT = ["Pvm", "Netto-omaisuus", "Pankkitili", "Muut sijoitukset",
+                 "Krypto", "Rahastot", "Revolut",
+                 "Yritys kassa", "Yritys osakesalkku", "Yritys rahastot",
+                 "Yritys muut", "Asuntolaina", "Yhtiölaina", "Opintolainat",
+                 "Sukulaislaina", "Muu laina", "Yrityksen luotot", "Omat luotot",
+                 "Luottokortti 1", "Luottokortti 2", "Luottokortti 3", "Autolaina",
+                 "Muu velka", "Plus", "Miinus",
+                 "Asunto/autopaikka koko omaisuudesta",
+                 "Net gearing = nettovelkaantumisaste"]
+NETTO_VARAT = range(2, 11)
+NETTO_VELAT = range(11, 23)
+NETTO_LASKETUT = (1, 23, 24, 25, 26)
+NETTO_SYOTETTAVAT = range(2, 23)
+# Pankkihaun tilit → taulukon sarake. Velkasarakkeissa (L–W) pankin saldo
+# käännetään velaksi: kortin -512,30 on taulukossa 512,30.
+NETTO_TILIKARTTA = {"Pankkitili": ["OP-tili", "S-Pankki"], "Revolut": ["Revolut"],
+                    "Luottokortti 2": ["OP-kortti"], "Luottokortti 3": ["S-Pankki Visa"]}
+# Sarakkeet, joihin pankkihaku antaa vain vihjeen eikä arvoa: Revolutissa
+# olennaista ovat sijoitukset (osakkeet, rahastot), joita PSD2-rajapinta ei
+# näe — se näkee vain maksutilin. Saldo näytetään, kenttä täytetään käsin.
+# Omat sarakkeet ja tekstit: netto.vihjesarakkeet.
+NETTO_VIHJESARAKKEET = {"Revolut": "sijoitukset (osakkeet, rahastot) eivät "
+                                   "tule rajapinnasta — katso Revolut-sovelluksesta"}
+# Lainat-välilehti: velkasummat luetaan otsikkosolun alta, ei kiinteästä
+# solusta, jotta rivin lisäys välilehdelle ei siirrä lukua vääräksi.
+NETTO_LAINAT = {"valilehti": "Lainat", "paivitetty": "Tilanne päivitetty",
+                "sarakkeet": {"Yrityksen luotot": "Yhteensä yrityksen nettovelkaa ulos",
+                              "Omat luotot": "Yhteensä omaa nettovelkaa ulos"}}
+# Pankin saldo kelpaa snapshotiin vain tuoreena. Vanhaa lukua ei käytetä
+# hiljaa: silloin taulukkoon menisi kuukauden takainen saldo tämän päivän
+# päivämäärällä, eikä kukaan huomaisi.
+NETTO_SALDO_VANHENEE_PV = 3
+PALVELUTILI = ASETUKSET / "google-palvelutili.json"
+NETTO_ENV = ASETUKSET / "netto.env"
+# Osoitteet voi ohittaa ympäristömuuttujalla vain testausta varten: kehitys
+# ajetaan hiekkalaatikossa paikallista valetaulukkoa vasten, jotta oikeaan
+# taulukkoon ei kirjoiteta riviäkään ennen kuin koodi on nähty toimivaksi.
+SHEETS_API = (os.environ.get("RAHAPUTKI_SHEETS_API")
+              or "https://sheets.googleapis.com/v4/spreadsheets")
+GOOGLE_TOKEN_URL = (os.environ.get("RAHAPUTKI_GOOGLE_TOKEN")
+                    or "https://oauth2.googleapis.com/token")
+KRAKEN_API = os.environ.get("RAHAPUTKI_KRAKEN_API") or "https://api.kraken.com"
+IBKR_FLEX = (os.environ.get("RAHAPUTKI_IBKR_FLEX")
+             or "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService")
+# cloudflare-eth.com vastasi eth_getBalanceen "Internal error" 28.10.2026;
+# publicnode on toiminut. Oman RPC:n voi antaa lompakon "rpc"-kentässä.
+ETH_RPC = "https://ethereum-rpc.publicnode.com"
+ZKSYNC_RPC = "https://mainnet.era.zksync.io"
+BTC_API = os.environ.get("RAHAPUTKI_BTC_API") or "https://blockstream.info/api"
+# Seligsonin rahastojen päiväarvot ovat julkisia CSV-tiedostoja, yksi per
+# rahasto ("28.10.2026;16,9050"). Omia omistuksia ei saa mistään rajapinnasta,
+# joten osuusmäärät pidetään asetuksissa ja arvo lasketaan tässä.
+SELIGSON_ARVOT = os.environ.get("RAHAPUTKI_SELIGSON") or "https://www.seligson.fi/graafit"
+NETTO_RAHASTOARVO_VANHENEE_PV = 7
+# wstETH on Lidon kääritty stETH: yksi wstETH vastaa stEthPerToken() ETH:tä,
+# eikä sille ole omaa euro-paria Krakenissa. Arvo lasketaan ETH:n kautta.
+WSTETH_STETH_PER_TOKEN = "0x035faf82"
+STARKNET_RPC = "https://starknet-mainnet.public.blastapi.io/rpc/v0_7"
+# Starknetin ETH-token ja balanceOf-funktion valitsin (starknet_keccak("balanceOf")).
+STARKNET_ETH = "0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7"
+STARKNET_BALANCEOF = "0x2e4263afad30923c891518314c3c95dbe830a16874e8abc5777a9a20b54c76e"
+
+
+class NettoVirhe(ValueError):
+    """Netto-snapshotin keskeytys: syy on käyttäjälle sellaisenaan kerrottava."""
+
+
+def netto_otsikot(cfg):
+    """Taulukon odotettu otsikkorivi: käyttäjän oma (netto.otsikot) tai
+    yleisnimet. Pituuden on oltava 27 — muuten rakenne ei ole tämä."""
+    omat = _netto_cfg(cfg).get("otsikot")
+    if not omat:
+        return list(NETTO_OTSIKOT)
+    if not isinstance(omat, list) or len(omat) != NETTO_SARAKKEITA:
+        raise NettoVirhe(f"netto.otsikot: pitää olla {NETTO_SARAKKEITA} nimeä (A–AA), "
+                         f"on {len(omat) if isinstance(omat, list) else '?'}")
+    return [siisti(str(o)) for o in omat]
+
+
+def netto_otsikkoaliakset(cfg):
+    """Vanhat sarakenimet, jotka kelpaavat vielä: {"E": ["Krypto (vanha)"]}.
+    Nimenvaihto taulukossa ei saa kaataa konetta, jolla on vanha asetus."""
+    tulos = {}
+    for kirjain, nimet in (_netto_cfg(cfg).get("otsikkoaliakset") or {}).items():
+        n = 0
+        for c in str(kirjain).strip().upper():
+            n = n * 26 + (ord(c) - 64)
+        if nimet:
+            tulos[n - 1] = tuple(siisti(str(x)) for x in
+                                 (nimet if isinstance(nimet, list) else [nimet]))
+    return tulos
+
+
+def _netto_cfg(cfg):
+    return (cfg or {}).get("netto") or {}
+
+
+def _sarakekirjain(i):
+    """0 -> A, 25 -> Z, 26 -> AA."""
+    s = ""
+    i += 1
+    while i:
+        i, j = divmod(i - 1, 26)
+        s = chr(65 + j) + s
+    return s
+
+
+def _netto_env():
+    """Krakenin ja IBKR:n tunnukset ympäristöstä tai asetukset/netto.env:stä."""
+    arvot = {k: os.environ.get(k, "") for k in
+             ("KRAKEN_API_KEY", "KRAKEN_API_SECRET", "IBKR_FLEX_TOKEN",
+              "IBKR_FLEX_QUERY_ID")}
+    if NETTO_ENV.is_file():
+        for rv in NETTO_ENV.read_text(encoding="utf-8").splitlines():
+            if "=" in rv and not rv.lstrip().startswith("#"):
+                k, _, v = rv.partition("=")
+                if k.strip() in arvot and not arvot[k.strip()]:
+                    arvot[k.strip()] = v.strip()
+    return arvot
+
+
+def _netto_luku(arvo):
+    """Solun tai lomakkeen arvo luvuksi; None jos tyhjä."""
+    if arvo is None or isinstance(arvo, bool):
+        return None
+    if isinstance(arvo, (int, float)):
+        return round(float(arvo), 2)
+    s = str(arvo).strip()
+    if not s or s.startswith("="):
+        return None
+    try:
+        return parsi_summa(s)
+    except ValueError:
+        return None
+
+
+def _netto_tyhja(arvo):
+    return arvo is None or (isinstance(arvo, str) and not arvo.strip())
+
+
+def _netto_pvm(solu):
+    """Pvm-solu päivämääräksi: 'd.M.yyyy' tai Sheetsin sarjanumero."""
+    if isinstance(solu, (int, float)) and not isinstance(solu, bool):
+        return date(1899, 12, 30) + timedelta(days=int(solu))
+    try:
+        return parsi_pvm(str(solu or ""))
+    except ValueError:
+        return None
+
+
+def _netto_pvm_teksti(d):
+    return f"{d.day}.{d.month}.{d.year}"
+
+
+# --- Google Sheets palvelutilillä ---------------------------------------
+
+_GOOGLE_TOKEN = {"token": "", "vanhenee": 0.0}
+
+
+def google_token(scope="https://www.googleapis.com/auth/spreadsheets"):
+    """Palvelutilin pääsytunnus: RS256-JWT allekirjoitetaan avaintiedoston
+    yksityisavaimella ja vaihdetaan tunnukseen. Sama pyjwt + cryptography
+    kuin Enable Bankingissa, ei Googlen omaa kirjastoa."""
+    if _GOOGLE_TOKEN["token"] and time.time() < _GOOGLE_TOKEN["vanhenee"]:
+        return _GOOGLE_TOKEN["token"]
+    if not PALVELUTILI.is_file():
+        raise NettoVirhe(f"palvelutilin avainta ei ole: {PALVELUTILI} "
+                         "(ks. OHJE.md, Netto-omaisuus)")
+    try:
+        import jwt
+    except ImportError:
+        raise NettoVirhe("asenna ensin: pip install pyjwt cryptography")
+    import urllib.parse
+    import urllib.request
+    import urllib.error
+    with open(PALVELUTILI, encoding="utf-8") as f:
+        tili = json.load(f)
+    if not tili.get("client_email") or not tili.get("private_key"):
+        raise NettoVirhe(f"{PALVELUTILI.name} ei näytä palvelutilin avaimelta "
+                         "(client_email / private_key puuttuu)")
+    nyt = int(time.time())
+    vaite = jwt.encode({"iss": tili["client_email"], "scope": scope,
+                        "aud": GOOGLE_TOKEN_URL, "iat": nyt, "exp": nyt + 3600},
+                       tili["private_key"], algorithm="RS256")
+    runko = urllib.parse.urlencode(
+        {"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+         "assertion": vaite}).encode()
+    req = urllib.request.Request(GOOGLE_TOKEN_URL, data=runko, headers={
+        "Content-Type": "application/x-www-form-urlencoded"})
+    alku = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=30, context=_ssl_konteksti()) as v:
+            vastaus = json.loads(v.read().decode())
+    except urllib.error.HTTPError as e:
+        teksti = ""
+        try:
+            teksti = e.read().decode()[:300]
+        except OSError:
+            pass
+        pankkiloki("POST google-token", "google", "virhe", e.code, time.time() - alku,
+                   len(teksti), teksti)
+        raise NettoVirhe(f"Google ei antanut pääsytunnusta ({e.code}): {teksti}") from e
+    except OSError as e:
+        pankkiloki("POST google-token", "google", "katkos", "", time.time() - alku,
+                   None, str(e))
+        raise _verkkovirhe(e) from e
+    pankkiloki("POST google-token", "google", "ok", 200, time.time() - alku)
+    _GOOGLE_TOKEN.update(token=vastaus.get("access_token", ""),
+                         vanhenee=time.time() + int(vastaus.get("expires_in", 3600)) - 60)
+    if not _GOOGLE_TOKEN["token"]:
+        raise NettoVirhe("Google vastasi ilman access_tokenia")
+    return _GOOGLE_TOKEN["token"]
+
+
+def _sheets_kutsu(menetelma, polku, runko=None):
+    import urllib.request
+    import urllib.error
+    data = json.dumps(runko).encode() if runko is not None else None
+    req = urllib.request.Request(SHEETS_API + polku, data=data, method=menetelma,
+                                 headers={"Authorization": f"Bearer {google_token()}",
+                                          "Content-Type": "application/json"})
+    import urllib.parse
+    kohde = "sheets " + urllib.parse.unquote(polku.partition("?")[0].rpartition("/")[2])[:40]
+    toiminto = f"{menetelma} sheets"
+    alku = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=30, context=_ssl_konteksti()) as v:
+            vastaus = v.read()
+            pankkiloki(toiminto, kohde, "ok", v.status, time.time() - alku, len(vastaus))
+            return json.loads(vastaus.decode() or "{}")
+    except urllib.error.HTTPError as e:
+        teksti = ""
+        try:
+            teksti = e.read().decode()[:300]
+        except OSError:
+            pass
+        pankkiloki(toiminto, kohde, "virhe", e.code, time.time() - alku, len(teksti), teksti)
+        vihje = ""
+        if e.code == 403:
+            vihje = (" — onko taulukko jaettu palvelutilin sähköpostille "
+                     "muokkausoikeuksin?")
+        elif e.code == 404:
+            vihje = " — tarkista sheet_id asetuksissa"
+        raise NettoVirhe(f"Google Sheets vastasi {e.code}{vihje}: {teksti}") from e
+    except OSError as e:
+        pankkiloki(toiminto, kohde, "katkos", "", time.time() - alku, None, str(e))
+        raise _verkkovirhe(e) from e
+
+
+def _sheets_alue(rivi_alku=1, rivi_loppu=None):
+    loppu = f"AA{rivi_loppu}" if rivi_loppu else "AA"
+    return f"{NETTO_VALILEHTI}!A{rivi_alku}:{loppu}"
+
+
+def _netto_tasaa(rivit):
+    """Sheets jättää tyhjät loppusolut ja -rivit pois; täytetään 27 soluun."""
+    tasatut = []
+    for r in rivit or []:
+        r = list(r)[:NETTO_SARAKKEITA]
+        r += [""] * (NETTO_SARAKKEITA - len(r))
+        tasatut.append(r)
+    while tasatut and all(_netto_tyhja(x) for x in tasatut[-1]):
+        tasatut.pop()
+    return tasatut
+
+
+def lue_netto_taulukko(cfg, sheet_id):
+    """Netto-välilehti kahdesti: arvot laskettuina ja kaavat sellaisinaan.
+
+    Otsikkorivin on täsmättävä merkilleen — jos ei täsmää, taulukko ei ole
+    se, jota tämä koodi luulee, eikä siihen kirjoiteta mitään."""
+    import urllib.parse
+    odotetut, aliakset = netto_otsikot(cfg), netto_otsikkoaliakset(cfg)
+    if not sheet_id:
+        raise NettoVirhe("taulukon tunnus (netto.sheet_id) puuttuu asetuksista")
+    alue = urllib.parse.quote(_sheets_alue())
+    arvot = _netto_tasaa(_sheets_kutsu(
+        "GET", f"/{sheet_id}/values/{alue}?valueRenderOption=UNFORMATTED_VALUE"
+               "&dateTimeRenderOption=FORMATTED_STRING").get("values"))
+    kaavat = _netto_tasaa(_sheets_kutsu(
+        "GET", f"/{sheet_id}/values/{alue}?valueRenderOption=FORMULA"
+               "&dateTimeRenderOption=FORMATTED_STRING").get("values"))
+    if not arvot:
+        raise NettoVirhe(f"välilehti {NETTO_VALILEHTI} on tyhjä")
+    otsikot = [siisti(str(x)) for x in arvot[0]]
+    erot = [f"{_sarakekirjain(i)}1: odotettiin {o!r}, oli {t!r}"
+            for i, (o, t) in enumerate(zip(odotetut, otsikot))
+            if t != o and t not in aliakset.get(i, ())]
+    if erot or len(otsikot) != NETTO_SARAKKEITA:
+        raise NettoVirhe("otsikkorivi ei täsmää, keskeytetään: " + "; ".join(erot[:4]))
+    # Snapshot-rivit loppuvat viimeiseen riviin, jonka Pvm on päivämäärä.
+    # Niiden alla on muistiinpanoja (indeksit, linkit, oppeja), jotka eivät ole
+    # rivejä tässä mielessä: niitä ei lueta, ei peilata eikä siirretä — paitsi
+    # että uusi rivi työnnetään niiden edelle, ei perään.
+    paivatyt = [i for i, r in enumerate(arvot[1:]) if _netto_pvm(r[0])]
+    if not paivatyt:
+        raise NettoVirhe("välilehdellä ei ole yhtään päivättyä riviä otsikon alla")
+    loppu = paivatyt[-1] + 1
+    seuraava = arvot[loppu + 1] if loppu + 1 < len(arvot) else []
+    return {"arvot": arvot[1:loppu + 1], "kaavat": kaavat[1:loppu + 1],
+            "otsikot": odotetut,
+            "seuraava_tyhja": all(_netto_tyhja(x) for x in seuraava)}
+
+
+def peilaa_netto(rivit, otsikot):
+    """Koko välilehti tiedostoon data/netto.csv Rahaputken omia raportteja varten."""
+    puskuri = io.StringIO()
+    w = csv.writer(puskuri, delimiter=";")
+    w.writerow(otsikot)
+    for r in rivit:
+        w.writerow([("" if _netto_tyhja(x) else
+                     (f"{x:.6f}".rstrip("0").rstrip(".") if isinstance(x, float)
+                      else str(x))) for x in r])
+    turvakirjoita(NETTO_CSV, puskuri.getvalue())
+
+
+def lue_netto_csv():
+    if not NETTO_CSV.is_file():
+        return []
+    with open(NETTO_CSV, encoding="utf-8", newline="") as f:
+        rivit = list(csv.reader(f, delimiter=";"))
+    # Otsikot peilistä itsestään: ne ovat käyttäjän omat, eivät koodin.
+    otsikot = rivit[0] if rivit else []
+    return [dict(zip(otsikot, r)) for r in rivit[1:]]
+
+
+# --- rivin valinta ja kaavat ---------------------------------------------
+
+def _netto_vajaa(rivi):
+    """Rivi, jolta puuttuu tulos: B tyhjä tai nolla, tai kaikki varat tyhjiä.
+    Nolla lasketaan puuttuvaksi, koska oikea netto-omaisuus ei ole koskaan
+    tasan nolla — se on kaava, jonka lähtösolut ovat vielä tyhjiä."""
+    return (not _netto_luku(rivi[1])
+            or all(_netto_tyhja(rivi[i]) for i in NETTO_VARAT))
+
+
+def _netto_viimeinen_taysi(arvot):
+    for i in range(len(arvot) - 1, -1, -1):
+        if not _netto_vajaa(arvot[i]):
+            return i
+    return None
+
+
+def netto_rivitilanne(arvot, tanaan=None):
+    """Mihin riviin snapshot menee: päivitys, vajaan täydennys vai uusi.
+
+    Rivinumerot ovat taulukon numeroita (otsikko on rivi 1)."""
+    tanaan = tanaan or date.today()
+    if not arvot:
+        raise NettoVirhe("välilehdellä ei ole yhtään riviä otsikon alla")
+    viimeinen = len(arvot) - 1
+    rivinro = viimeinen + 2
+    samat = [i + 2 for i, r in enumerate(arvot) if _netto_pvm(r[0]) == tanaan]
+    if len(samat) > 1:
+        raise NettoVirhe(f"taulukossa on jo kaksi riviä tälle päivälle "
+                         f"(rivit {samat[0]} ja {samat[1]}) — selvitä käsin")
+    if samat and samat[0] != rivinro:
+        raise NettoVirhe(f"tämän päivän rivi {samat[0]} ei ole viimeinen rivi "
+                         f"({rivinro}) — selvitä käsin")
+    pvm = str(arvot[viimeinen][0])
+    if samat:
+        return {"tapa": "paivita", "rivinro": rivinro, "pvm": pvm}
+    if _netto_vajaa(arvot[viimeinen]):
+        return {"tapa": "vajaa", "rivinro": rivinro, "pvm": pvm}
+    return {"tapa": "uusi", "rivinro": rivinro + 1, "pvm": pvm}
+
+
+# Soluviite kaavassa: C87, $C$87, AA87. Kirjainta edeltävä kirjain sulkee
+# pois funktionimet (LOG10, ATAN2), joissa on sattumalta numero.
+_SOLUVIITE = re.compile(r"(?<![A-Za-z])(\$?)([A-Z]{1,3})(\$?)(\d+)")
+
+
+def _siirra_kaava(kaava, vanha, uusi):
+    """Kaava riviltä `vanha` riville `uusi`: vain oman rivin viitteet siirtyvät."""
+    def korvaa(m):
+        if int(m.group(4)) == vanha:
+            return f"{m.group(1)}{m.group(2)}{m.group(3)}{uusi}"
+        return m.group(0)
+    return _SOLUVIITE.sub(korvaa, kaava)
+
+
+def netto_laskennat(luvut):
+    """Plus, Miinus, Netto, Z ja AA syötettävistä luvuista (None = tyhjä)."""
+    plus = round(sum(luvut.get(i) or 0 for i in NETTO_VARAT), 2)
+    miinus = round(sum(luvut.get(i) or 0 for i in NETTO_VELAT), 2)
+    return {1: round(plus - miinus, 2), 23: plus, 24: miinus,
+            25: round((luvut.get(3) or 0) / plus, 6) if plus else None,
+            26: round(miinus / plus, 6) if plus else None}
+
+
+def netto_kirjoitusrivi(luvut, pvm_teksti, kaavarivi, kaavan_rivinro, rivinro):
+    """Taulukkoon kirjoitettava rivi: luvut numeroina, laskentasolut kaavoina
+    jos edellinen täysi rivi käyttää kaavoja, muuten laskettuina arvoina."""
+    rivi = [""] * NETTO_SARAKKEITA
+    rivi[0] = pvm_teksti
+    for i in NETTO_SYOTETTAVAT:
+        rivi[i] = "" if luvut.get(i) is None else luvut[i]
+    lasketut = netto_laskennat(luvut)
+    for i in NETTO_LASKETUT:
+        kaava = kaavarivi[i] if kaavarivi and i < len(kaavarivi) else None
+        if isinstance(kaava, str) and kaava.startswith("="):
+            rivi[i] = _siirra_kaava(kaava, kaavan_rivinro, rivinro)
+        else:
+            rivi[i] = "" if lasketut[i] is None else lasketut[i]
+    return rivi
+
+
+def _netto_valilehden_gid(sheet_id):
+    """Välilehden numeerinen tunnus rivin lisäystä varten."""
+    tiedot = _sheets_kutsu("GET", f"/{sheet_id}?fields=sheets.properties")
+    for s in tiedot.get("sheets") or []:
+        o = s.get("properties") or {}
+        if o.get("title") == NETTO_VALILEHTI:
+            return o.get("sheetId")
+    raise NettoVirhe(f"välilehteä {NETTO_VALILEHTI} ei löydy taulukosta")
+
+
+def kirjoita_netto_rivi(sheet_id, rivinro, rivi, lisaa, seuraava_tyhja=True):
+    """Yksi rivi taulukkoon USER_ENTERED-tilassa: numerot numeroina, kaavat
+    kaavoina, päivämäärä tekstinä jonka taulukko tulkitsee omalla
+    paikallisasetuksellaan.
+
+    Uusi rivi menee heti viimeisen päivätyn rivin alle. Jos siinä on jo
+    jotain (muistiinpanot alkavat heti), väliin lisätään tyhjä rivi ensin —
+    append-päätepiste veisi rivin muistiinpanojen perään, jossa se ei ole
+    enää osa sarjaa."""
+    import urllib.parse
+    if lisaa and not seuraava_tyhja:
+        gid = _netto_valilehden_gid(sheet_id)
+        _sheets_kutsu("POST", f"/{sheet_id}:batchUpdate", {"requests": [{"insertDimension": {
+            "range": {"sheetId": gid, "dimension": "ROWS",
+                      "startIndex": rivinro - 1, "endIndex": rivinro},
+            "inheritFromBefore": True}}]})
+    alue = urllib.parse.quote(_sheets_alue(rivinro, rivinro))
+    runko = {"range": _sheets_alue(rivinro, rivinro), "majorDimension": "ROWS",
+             "values": [rivi]}
+    _sheets_kutsu("PUT", f"/{sheet_id}/values/{alue}?valueInputOption=USER_ENTERED", runko)
+    return rivinro
+
+
+# --- lähteet -------------------------------------------------------------
+
+def _netto_pankkisaldot(cfg):
+    """Pankkihaun saldot taulukon sarakkeiksi; vain tuore ja virheetön kelpaa."""
+    kartta = dict(NETTO_TILIKARTTA)
+    kartta.update(_netto_cfg(cfg).get("tilit") or {})
+    otsikot = netto_otsikot(cfg)
+    vihjeet = dict(NETTO_VIHJESARAKKEET)
+    vihjeet.update(_netto_cfg(cfg).get("vihjesarakkeet") or {})
+    tilit = {siisti(str(t.get("tili", ""))).lower(): t
+             for t in ((cfg.get("pankkihaku") or {}).get("tilit") or [])
+             if not _on_paikanpitaja(t.get("account_id"))}
+    tila = lue_pankkitila()
+    tulos = {}
+    for sarake, nimet in kartta.items():
+        if not nimet or sarake not in otsikot:
+            continue
+        idx = otsikot.index(sarake)
+        summa, huomiot, ok = 0.0, [], True
+        for nimi in nimet:
+            t = tilit.get(siisti(str(nimi)).lower())
+            if not t:
+                huomiot.append(f"{nimi}: ei ole pankkihaun tileissä")
+                ok = False
+                continue
+            tt = tila.get(str(t.get("account_id", "")), {})
+            if tt.get("virhekoodi") in (401, 403):
+                huomiot.append(f"{nimi}: valtuutus ei kelpaa ({tt['virhekoodi']}) — "
+                               "uusi pankkiyhteys ensin")
+                ok = False
+                continue
+            saldo, haettu = tt.get("saldo"), str(tt.get("saldo_haettu", ""))[:10]
+            if not isinstance(saldo, (int, float)) or not haettu:
+                huomiot.append(f"{nimi}: saldoa ei ole haettu")
+                ok = False
+                continue
+            try:
+                ika = (date.today() - date.fromisoformat(haettu)).days
+            except ValueError:
+                ika = 10 ** 6
+            if ika > NETTO_SALDO_VANHENEE_PV:
+                huomiot.append(f"{nimi}: saldo on {ika} pv vanha ({haettu}) — "
+                               "hae saldot uudelleen")
+                ok = False
+                continue
+            summa += -float(saldo) if idx in NETTO_VELAT else float(saldo)
+            huomiot.append(f"{nimi}: {fmt_eur(saldo)} € ({haettu})")
+        if sarake in vihjeet:
+            tulos[idx] = {"arvo": None, "tila": "kasin", "lahde": "pankki",
+                          "huomio": "; ".join(huomiot + [vihjeet[sarake]])}
+            continue
+        tulos[idx] = {"arvo": round(summa, 2) if ok else None,
+                      "tila": "ok" if ok else "kasin",
+                      "lahde": "pankki", "huomio": "; ".join(huomiot)}
+    return tulos
+
+
+def netto_hae_saldot(cfg):
+    """Saldot pankista snapshotia varten — vain käyttäjän pyynnöstä, koska
+    jokainen haku kuluttaa pankin neljästä vuorokausihausta yhden."""
+    kartta = dict(NETTO_TILIKARTTA)
+    kartta.update(_netto_cfg(cfg).get("tilit") or {})
+    vihjeet = dict(NETTO_VIHJESARAKKEET)
+    vihjeet.update(_netto_cfg(cfg).get("vihjesarakkeet") or {})
+    halutut = {siisti(str(n)).lower() for sarake, nimet in kartta.items()
+               if sarake not in vihjeet for n in nimet}
+    viestit = []
+    for t in ((cfg.get("pankkihaku") or {}).get("tilit") or []):
+        nimi, aid = str(t.get("tili", "")), str(t.get("account_id", ""))
+        if _on_paikanpitaja(aid) or siisti(nimi).lower() not in halutut:
+            continue
+        try:
+            virhe = _hae_saldo(aid, nimi)
+        except (EBVirhe, OSError, ValueError) as e:
+            virhe = str(e)
+        viestit.append(f"{nimi}: " + (f"ei saatu — {virhe}" if virhe else "saldo haettu"))
+    return viestit
+
+
+def _json_kutsu(url, runko=None, otsakkeet=None, menetelma=None, aikaraja=30):
+    """Pieni JSON-kutsu julkisiin rajapintoihin (Kraken, RPC, Flex)."""
+    import urllib.request
+    import urllib.error
+    data = None
+    if runko is not None:
+        data = runko if isinstance(runko, bytes) else json.dumps(runko).encode()
+    # Cloudflaren takana olevat julkiset RPC:t (mm. cloudflare-eth.com)
+    # torjuvat Pythonin oletus-User-Agentin virheellä 1010. Esittäydytään
+    # omalla nimellä.
+    otsakkeet = {"User-Agent": f"Rahaputki/{VERSIO}", **(otsakkeet or {})}
+    req = urllib.request.Request(url, data=data, method=menetelma, headers=otsakkeet)
+    try:
+        with urllib.request.urlopen(req, timeout=aikaraja, context=_ssl_konteksti()) as v:
+            return v.read().decode()
+    except urllib.error.HTTPError as e:
+        teksti = ""
+        try:
+            teksti = e.read().decode()[:200]
+        except OSError:
+            pass
+        raise NettoVirhe(f"{url.split('/')[2]} vastasi {e.code}: {teksti}") from e
+    except OSError as e:
+        raise _verkkovirhe(e) from e
+
+
+def _kraken_symboli(omaisuus):
+    """Krakenin sisäinen nimi tickerin tunnukseksi: XXBT→XBT, ZEUR→EUR,
+    ETH2.S→ETH, DOT.S→DOT."""
+    s = str(omaisuus).split(".")[0]
+    if s == "ETH2":
+        s = "ETH"
+    if len(s) == 4 and s[0] in "XZ" and s not in ("XRP", "XTZ", "ZEC", "XLM", "XMR"):
+        s = s[1:]
+    return s
+
+
+def kraken_hinta_eur(symboli):
+    """Viimeisin kauppahinta euroina julkisesta tickeristä."""
+    if symboli == "EUR":
+        return 1.0
+    vastaus = json.loads(_json_kutsu(f"{KRAKEN_API}/0/public/Ticker?pair={symboli}EUR"))
+    if vastaus.get("error"):
+        raise NettoVirhe(f"Kraken: {symboli}EUR — {'; '.join(vastaus['error'])}")
+    for tiedot in (vastaus.get("result") or {}).values():
+        return float(tiedot["c"][0])
+    raise NettoVirhe(f"Kraken ei palauttanut hintaa parille {symboli}EUR")
+
+
+def kraken_saldot(avain, salaisuus):
+    """Balance-kutsu: nonce + POST-data tiivistetään, polku eteen, HMAC-SHA512
+    base64-puretulla salaisuudella — Krakenin oma allekirjoitusmalli."""
+    import base64
+    import hmac
+    import urllib.parse
+    polku = "/0/private/Balance"
+    # Nonce on avainkohtainen ja sen on aina kasvettava. Jos samaa avainta on
+    # käytetty muualla nanosekuntinoncella, millisekunnit jäisivät sen alle
+    # ja Kraken vastaisi "Invalid nonce" ikuisesti. Nanosekunnit ovat suurin
+    # yksikkö, joka mahtuu Krakenin 64-bittiseen nonceen.
+    nonce = str(time.time_ns())
+    data = urllib.parse.urlencode({"nonce": nonce})
+    viesti = polku.encode() + hashlib.sha256((nonce + data).encode()).digest()
+    try:
+        allekirjoitus = hmac.new(base64.b64decode(salaisuus), viesti, hashlib.sha512)
+    except (ValueError, TypeError) as e:
+        raise NettoVirhe(f"KRAKEN_API_SECRET ei ole base64-muodossa: {e}") from e
+    vastaus = json.loads(_json_kutsu(
+        KRAKEN_API + polku, data.encode(),
+        {"API-Key": avain, "API-Sign": base64.b64encode(allekirjoitus.digest()).decode(),
+         "Content-Type": "application/x-www-form-urlencoded"}))
+    if vastaus.get("error"):
+        raise NettoVirhe("Kraken: " + "; ".join(vastaus["error"]))
+    return vastaus.get("result") or {}
+
+
+def _hex_luku(teksti):
+    return int(str(teksti), 16) if str(teksti).startswith("0x") else int(str(teksti))
+
+
+def lompakon_saldot(lompakko):
+    """Argent-lompakon saldot julkisesta JSON-RPC:stä: [(symboli, määrä)].
+
+    Ethereum (ja muut EVM-verkot): eth_getBalance natiivitokenille ja
+    balanceOf(address) ERC-20-tokeneille. Starknet: balanceOf ETH-sopimuksesta
+    ja muista tokeneista, vastaus u256 (low, high)."""
+    verkko = siisti(str(lompakko.get("verkko", "ethereum"))).lower()
+    osoite = siisti(str(lompakko.get("osoite", "")))
+    if not osoite:
+        raise NettoVirhe("lompakolta puuttuu osoite")
+    tokenit = lompakko.get("tokenit") or []
+    saldot = []
+
+    if verkko == "bitcoin":
+        # Blockstream/mempool-tyylinen explorer: saldo = saadut − lähetetyt.
+        url = (lompakko.get("rpc") or BTC_API).rstrip("/")
+        tiedot = json.loads(_json_kutsu(f"{url}/address/{osoite}"))
+        sat = 0
+        for osa in ("chain_stats", "mempool_stats"):
+            s = tiedot.get(osa) or {}
+            sat += int(s.get("funded_txo_sum", 0)) - int(s.get("spent_txo_sum", 0))
+        return [("XBT", sat / 10 ** 8)]
+
+    def rpc(method, params, url):
+        v = json.loads(_json_kutsu(url, {"jsonrpc": "2.0", "id": 1, "method": method,
+                                         "params": params},
+                                   {"Content-Type": "application/json"}))
+        if v.get("error"):
+            raise NettoVirhe(f"{verkko}: {v['error'].get('message', v['error'])}")
+        return v.get("result")
+
+    if verkko == "starknet":
+        url = lompakko.get("rpc") or STARKNET_RPC
+        kohteet = [{"symboli": "ETH", "sopimus": STARKNET_ETH, "desimaalit": 18}] + tokenit
+        for t in kohteet:
+            tulos = rpc("starknet_call", {
+                "request": {"contract_address": t["sopimus"],
+                            "entry_point_selector": STARKNET_BALANCEOF,
+                            "calldata": [osoite]},
+                "block_id": "latest"}, url)
+            raaka = _hex_luku(tulos[0]) + (_hex_luku(tulos[1]) << 128 if len(tulos) > 1 else 0)
+            saldot.append((t["symboli"], raaka / 10 ** int(t.get("desimaalit", 18))))
+        return saldot
+    url = lompakko.get("rpc") or (ZKSYNC_RPC if verkko == "zksync" else ETH_RPC)
+    wei = _hex_luku(rpc("eth_getBalance", [osoite, "latest"], url))
+    saldot.append((siisti(str(lompakko.get("symboli", "ETH"))) or "ETH", wei / 10 ** 18))
+    for t in tokenit:
+        data = "0x70a08231" + osoite.lower().replace("0x", "").rjust(64, "0")
+        tulos = rpc("eth_call", [{"to": t["sopimus"], "data": data}, "latest"], url)
+        maara = _hex_luku(tulos) / 10 ** int(t.get("desimaalit", 18))
+        if str(t.get("symboli", "")).upper() == "WSTETH" and maara:
+            suhde = rpc("eth_call", [{"to": t["sopimus"], "data": WSTETH_STETH_PER_TOKEN},
+                                     "latest"], url)
+            saldot.append(("ETH", maara * _hex_luku(suhde) / 10 ** 18,
+                           f"{maara:g} wstETH"))
+            continue
+        saldot.append((t["symboli"], maara))
+    return saldot
+
+
+def netto_krypto(cfg):
+    """Sarake E: Kraken-tili + Argent-lompakot euroina. Palauttaa kentän
+    samassa muodossa kuin pankkisaldot."""
+    env = _netto_env()
+    lompakot = _netto_cfg(cfg).get("lompakot") or []
+    if not (env["KRAKEN_API_KEY"] and env["KRAKEN_API_SECRET"]) and not lompakot:
+        return {"arvo": None, "tila": "kasin", "lahde": "krypto",
+                "huomio": "Kraken-avaimia (asetukset/netto.env) tai lompakoita "
+                          "(netto.lompakot) ei ole asetettu"}
+    yhteensa, erittely, puutteet, hinnat = 0.0, [], [], {}
+
+    def eurona(symboli, maara, nimi, selite=""):
+        nonlocal yhteensa
+        if abs(maara) < 1e-9:
+            return
+        if selite:
+            nimi = f"{nimi} {selite} ≈"
+        try:
+            if symboli not in hinnat:
+                hinnat[symboli] = kraken_hinta_eur(symboli)
+        except (NettoVirhe, OSError, ValueError, KeyError) as e:
+            puutteet.append(f"{nimi} {symboli}: ei hintaa ({e})")
+            return
+        eur = round(maara * hinnat[symboli], 2)
+        yhteensa += eur
+        erittely.append(f"{nimi} {maara:g} {symboli} = {fmt_eur(eur)} €")
+
+    if env["KRAKEN_API_KEY"] and env["KRAKEN_API_SECRET"]:
+        try:
+            for omaisuus, maara in kraken_saldot(env["KRAKEN_API_KEY"],
+                                                 env["KRAKEN_API_SECRET"]).items():
+                eurona(_kraken_symboli(omaisuus), float(maara), "Kraken")
+        except (NettoVirhe, OSError, ValueError) as e:
+            puutteet.append(f"Kraken: {e}")
+    for lompakko in lompakot:
+        nimi = siisti(str(lompakko.get("nimi", ""))) or "lompakko"
+        if not siisti(str(lompakko.get("osoite", ""))):
+            # Paikanpitäjä ilman osoitetta ei ole virhe: se on muistutus, ja
+            # muut lähteet kelpaavat silti.
+            erittely.append(f"{nimi}: osoite puuttuu asetuksista, ohitettu")
+            continue
+        try:
+            for saldo in lompakon_saldot(lompakko):
+                eurona(saldo[0], saldo[1], nimi, saldo[2] if len(saldo) > 2 else "")
+        except (NettoVirhe, OSError, ValueError, KeyError, IndexError, TypeError) as e:
+            puutteet.append(f"{nimi}: {e}")
+    ok = not puutteet
+    return {"arvo": round(yhteensa, 2) if (erittely and ok) else None,
+            "tila": "ok" if ok else "kasin", "lahde": "krypto",
+            "huomio": "; ".join(erittely + puutteet) or "ei saldoja"}
+
+
+def ibkr_flex_nav(token, kysely, perusosoite=None):
+    """Salkun arvo IBKR:n Flex Web Servicestä: ensin pyyntö, sitten raportin
+    nouto viitekoodilla. Raportti valmistuu sekunneissa, joten noutoa
+    yritetään muutaman kerran. Kysely on tehtävä XML-muotoon ja siinä on
+    oltava Net Asset Value- tai Equity Summary -osio."""
+    import xml.etree.ElementTree as ET
+    import urllib.parse
+    perus = perusosoite or IBKR_FLEX
+    q = urllib.parse.urlencode({"t": token, "q": kysely, "v": "3"})
+    vastaus = ET.fromstring(_json_kutsu(f"{perus}/SendRequest?{q}"))
+    if (vastaus.findtext("Status") or "").lower() != "success":
+        raise NettoVirhe(f"IBKR Flex: {vastaus.findtext('ErrorCode')} "
+                         f"{vastaus.findtext('ErrorMessage')}")
+    viite = vastaus.findtext("ReferenceCode")
+    osoite = vastaus.findtext("Url") or f"{perus}/GetStatement"
+    raportti = None
+    for yritys in range(8):
+        q2 = urllib.parse.urlencode({"t": token, "q": viite, "v": "3"})
+        teksti = _json_kutsu(f"{osoite}?{q2}")
+        juuri = ET.fromstring(teksti)
+        if juuri.tag == "FlexStatementResponse":
+            koodi = juuri.findtext("ErrorCode") or ""
+            # 1019 = raportti on vielä generoitavana
+            if koodi in ("1019", "1021") and yritys < 7:
+                time.sleep(2 + yritys)
+                continue
+            raise NettoVirhe(f"IBKR Flex: {koodi} {juuri.findtext('ErrorMessage')}")
+        raportti = juuri
+        break
+    if raportti is None:
+        raise NettoVirhe("IBKR Flex: raportti ei valmistunut")
+    # Osio listaa arvon raporttipäivittäin, yhden päivän jaksollakin kaksi
+    # riviä: edellisen pankkipäivän päätös ja jakson päätös. Jos kyselyssä
+    # ei ole Report Date -kenttää, rivit ovat ilman päivää mutta
+    # aikajärjestyksessä — silloin viimeinen on tuorein.
+    paras = None
+    for e in raportti.iter("EquitySummaryByReportDateInBase"):
+        pvm, arvo = e.get("reportDate", ""), e.get("total")
+        if arvo and (paras is None or pvm >= paras[0]):
+            paras = (pvm, float(arvo), e.get("currency", ""))
+    if paras is None:
+        for e in raportti.iter("ChangeInNAV"):
+            if e.get("endingValue"):
+                paras = (e.get("toDate", ""), float(e["endingValue"]), e.get("currency", ""))
+    if paras is None:
+        raise NettoVirhe("IBKR Flex: kyselyssä ei ole Net Asset Value- tai "
+                         "Equity Summary in Base -osiota")
+    return {"arvo": round(paras[1], 2), "pvm": paras[0], "valuutta": paras[2]}
+
+
+def netto_lynx(cfg):
+    """Sarake I: välittäjän salkku IBKR:n Flex-rajapinnasta (LYNX käyttää
+    IBKR:n alustaa), jos tunnukset on."""
+    env = _netto_env()
+    if not (env["IBKR_FLEX_TOKEN"] and env["IBKR_FLEX_QUERY_ID"]):
+        return {"arvo": None, "tila": "kasin", "lahde": "ibkr",
+                "huomio": "IBKR_FLEX_TOKEN / IBKR_FLEX_QUERY_ID ei ole asetettu "
+                          "(asetukset/netto.env)"}
+    try:
+        nav = ibkr_flex_nav(env["IBKR_FLEX_TOKEN"], env["IBKR_FLEX_QUERY_ID"],
+                            _netto_cfg(cfg).get("ibkr_flex_url"))
+    except (NettoVirhe, OSError, ValueError) as e:
+        return {"arvo": None, "tila": "kasin", "lahde": "ibkr", "huomio": f"IBKR Flex: {e}"}
+    huomio = f"NAV {nav['pvm']} {nav['valuutta']}".strip()
+    if nav["valuutta"] and nav["valuutta"] != "EUR":
+        return {"arvo": None, "tila": "kasin", "lahde": "ibkr",
+                "huomio": huomio + " — perusvaluutta ei ole euro, syötä käsin"}
+    return {"arvo": nav["arvo"], "tila": "ok", "lahde": "ibkr", "huomio": huomio}
+
+
+def netto_lainat(cfg, sheet_id):
+    """Velkasarakkeet Lainat-välilehdeltä: luku otsikkosolun alta. Palauttaa
+    kentät samassa muodossa kuin pankkisaldot; virhe on huomio, ei keskeytys."""
+    import urllib.parse
+    asetus = dict(NETTO_LAINAT)
+    asetus.update(_netto_cfg(cfg).get("lainat") or {})
+    sarakkeet = asetus.get("sarakkeet") or {}
+    otsikot = netto_otsikot(cfg)
+    kohteet = {s: otsikot.index(s) for s in sarakkeet if s in otsikot}
+    if not kohteet or not asetus.get("valilehti"):
+        return {}
+    tulos = {}
+    try:
+        alue = urllib.parse.quote(f"{asetus['valilehti']}!A1:Z30")
+        rivit = _netto_tasaa(_sheets_kutsu(
+            "GET", f"/{sheet_id}/values/{alue}?valueRenderOption=UNFORMATTED_VALUE"
+                   "&dateTimeRenderOption=FORMATTED_STRING").get("values"))
+    except (NettoVirhe, OSError, ValueError) as e:
+        for s, idx in kohteet.items():
+            tulos[idx] = {"arvo": None, "tila": "kasin", "lahde": "lainat",
+                          "huomio": f"{asetus['valilehti']}-välilehteä ei saatu: {e}"}
+        return tulos
+
+    def etsi(teksti):
+        haku = siisti(str(teksti)).lower()
+        for r, rivi in enumerate(rivit):
+            for c, solu in enumerate(rivi):
+                if siisti(str(solu)).lower() == haku:
+                    return r, c
+        return None
+
+    paivitetty = ""
+    osuma = etsi(asetus.get("paivitetty", ""))
+    if osuma and osuma[1] + 1 < len(rivit[osuma[0]]):
+        paivitetty = str(rivit[osuma[0]][osuma[1] + 1])
+    for sarake, idx in kohteet.items():
+        osuma = etsi(sarakkeet[sarake])
+        arvo = None
+        if osuma and osuma[0] + 1 < len(rivit):
+            arvo = _netto_luku(rivit[osuma[0] + 1][osuma[1]])
+        if osuma is None:
+            huomio = f"otsikkoa {sarakkeet[sarake]!r} ei löydy välilehdeltä {asetus['valilehti']}"
+        elif arvo is None:
+            huomio = f"{asetus['valilehti']}!{_sarakekirjain(osuma[1])}{osuma[0] + 2} on tyhjä"
+        else:
+            huomio = (f"{asetus['valilehti']}!{_sarakekirjain(osuma[1])}{osuma[0] + 2}"
+                      + (f", tilanne päivitetty {paivitetty}" if paivitetty else "")
+                      + ("; negatiivinen = nettosaatava" if arvo < 0 else ""))
+        tulos[idx] = {"arvo": arvo, "tila": "ok" if arvo is not None else "kasin",
+                      "lahde": "lainat", "huomio": huomio}
+    return tulos
+
+
+def _tarkka_luku(arvo):
+    """Osuusmäärä tai rahaston arvo ilman pyöristystä: neljä desimaalia on
+    merkitsevää, ja parsi_summa pyöristää sentteihin."""
+    if arvo is None or isinstance(arvo, bool):
+        return None
+    if isinstance(arvo, (int, float)):
+        return float(arvo)
+    s = str(arvo).replace("\u00a0", " ").replace(" ", "").strip()
+    if not s:
+        return None
+    if "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def seligson_arvo(rahasto):
+    """Rahaston tuorein päiväarvo ja sen päivä Seligsonin CSV-historiasta.
+    Tiedosto on vanhimmasta uusimpaan, joten luetaan lopusta."""
+    tunnus = re.sub(r"[^a-z0-9-]", "", str(rahasto).lower())
+    if not tunnus:
+        raise NettoVirhe(f"rahaston tunnus {rahasto!r} ei kelpaa")
+    teksti = _json_kutsu(f"{SELIGSON_ARVOT}/{tunnus}_exc.csv")
+    for rivi in reversed(teksti.splitlines()):
+        rivi = rivi.strip()
+        if not rivi:
+            continue
+        pvm_teksti, _, arvo_teksti = rivi.partition(";")
+        pvm, arvo = _netto_pvm(pvm_teksti), _tarkka_luku(arvo_teksti)
+        if pvm is None or arvo is None:
+            raise NettoVirhe(f"Seligson {tunnus}: odottamaton rivi {rivi!r}")
+        return pvm, arvo
+    raise NettoVirhe(f"Seligson {tunnus}: arvotiedosto on tyhjä")
+
+
+def _fmt_osuudet(x):
+    """1234.5 -> '1 234,5'; 16.905 -> '16,905' (neljä desimaalia, nollat pois)."""
+    return f"{x:,.4f}".replace(",", " ").replace(".", ",").rstrip("0").rstrip(",")
+
+
+def netto_seligson(cfg):
+    """Seligson-sarakkeet: osuudet asetuksista × rahaston julkinen päiväarvo.
+    Tila on 'osittain', koska osuusmäärä on käsin ylläpidetty: se vanhenee
+    hiljaa, jos ostaa tai myy eikä päivitä asetuksia. Erittely näytetään,
+    jotta sen huomaa."""
+    asetus = _netto_cfg(cfg).get("seligson") or {}
+    otsikot = netto_otsikot(cfg)
+    tulos = {}
+    for sarake, rahastot in asetus.items():
+        if sarake not in otsikot:
+            raise NettoVirhe(f"netto.seligson: saraketta {sarake!r} ei ole taulukossa")
+        if not rahastot:
+            continue
+        idx = otsikot.index(sarake)
+        summa, osat, ongelmat, vanhin = 0.0, [], [], None
+        for r in rahastot:
+            r = r if isinstance(r, dict) else {}
+            tunnus = r.get("rahasto")
+            nimi = r.get("nimi") or tunnus or "?"
+            osuudet = _tarkka_luku(r.get("osuudet"))
+            if not tunnus or osuudet is None:
+                ongelmat.append(f"{nimi}: rahasto tai osuudet puuttuu asetuksista")
+                continue
+            try:
+                pvm, arvo = seligson_arvo(tunnus)
+            except (NettoVirhe, OSError, ValueError) as e:
+                ongelmat.append(f"{nimi}: {e}")
+                continue
+            summa += osuudet * arvo
+            vanhin = pvm if vanhin is None or pvm < vanhin else vanhin
+            osat.append(f"{nimi} {_fmt_osuudet(osuudet)} os × {_fmt_osuudet(arvo)} € "
+                        f"= {fmt_eur(osuudet * arvo)} € ({_netto_pvm_teksti(pvm)})")
+        if ongelmat:
+            # Osasumma olisi väärä luku oikean näköisenä: koko sarake jää käsin.
+            tulos[idx] = {"arvo": None, "tila": "kasin", "lahde": "seligson",
+                          "huomio": "; ".join(ongelmat + osat)}
+            continue
+        huomio = "osuudet asetuksista (netto.seligson); " + "; ".join(osat)
+        if vanhin and (date.today() - vanhin).days > NETTO_RAHASTOARVO_VANHENEE_PV:
+            huomio += f"; arvo on {(date.today() - vanhin).days} pv vanha"
+        tulos[idx] = {"arvo": round(summa, 2), "tila": "osittain", "lahde": "seligson",
+                      "huomio": huomio}
+    return tulos
+
+
+# --- esitäyttö ja kirjoitus ----------------------------------------------
+
+def netto_esitaytto(cfg, sheet_id, lahteet=True):
+    """Kaikki mitä lomake tai komentorivi tarvitsee: taulukon tila, edellisen
+    täyden rivin arvot oletuksina ja rajapinnoista haetut päälle."""
+    taulukko = lue_netto_taulukko(cfg, sheet_id)
+    arvot, kaavat, otsikot = taulukko["arvot"], taulukko["kaavat"], taulukko["otsikot"]
+    peilaa_netto(arvot, otsikot)
+    tilanne = netto_rivitilanne(arvot)
+    i_taysi = _netto_viimeinen_taysi(arvot)
+    if i_taysi is None:
+        raise NettoVirhe("taulukossa ei ole yhtään täyttä riviä, josta ottaa oletukset")
+    edellinen = arvot[i_taysi]
+    kaavarivi = kaavat[i_taysi] if i_taysi < len(kaavat) else None
+    kentat = {}
+    for i in NETTO_SYOTETTAVAT:
+        ed = _netto_luku(edellinen[i])
+        kentat[i] = {"sarake": _sarakekirjain(i), "otsikko": otsikot[i],
+                     "arvo": ed, "edellinen": ed, "tila": "kasin",
+                     "lahde": "edellinen rivi", "huomio": ""}
+    vajaa = {}
+    if tilanne["tapa"] == "vajaa":
+        # Vajaalle riville jo kirjoitetut luvut ovat tuoreempia kuin edellisen
+        # täyden rivin: ne ovat se, mitä käyttäjä ehti täyttää.
+        vajaa = {i: _netto_luku(arvot[-1][i]) for i in NETTO_SYOTETTAVAT
+                 if _netto_luku(arvot[-1][i]) is not None}
+        for i, v in vajaa.items():
+            kentat[i].update(arvo=v, lahde=f"vajaa rivi {arvot[-1][0]}")
+    if lahteet:
+        haetut = _netto_pankkisaldot(cfg)
+        haetut[4] = netto_krypto(cfg)
+        haetut[8] = netto_lynx(cfg)
+        haetut.update(netto_lainat(cfg, sheet_id))
+        haetut.update(netto_seligson(cfg))
+        for i, h in haetut.items():
+            if h["arvo"] is not None:
+                kentat[i].update(arvo=h["arvo"], lahde=h["lahde"], tila=h["tila"],
+                                 huomio=h["huomio"])
+            else:
+                # Lähde ei antanut lukua: oletus jää, mutta syy näytetään.
+                kentat[i].update(tila="kasin", huomio=h["huomio"])
+    kaavoja = bool(kaavarivi) and any(isinstance(kaavarivi[i], str)
+                                      and kaavarivi[i].startswith("=")
+                                      for i in NETTO_LASKETUT)
+    return {"pvm": _netto_pvm_teksti(date.today()), "tilanne": tilanne,
+            "kentat": kentat, "edellinen_pvm": str(edellinen[0]),
+            "edellinen_rivinro": i_taysi + 2, "kaavoja": kaavoja,
+            "vajaa_arvot": vajaa, "rivit": len(arvot),
+            "viimeinen_pvm": str(arvot[-1][0]),
+            "ensimmainen": not NETTO_CSV.exists()}
+
+
+def netto_kirjoita(cfg, sheet_id, luvut, tapa, nahty_rivit, nahty_viimeinen_pvm):
+    """Rivi taulukkoon. Taulukko luetaan uudelleen juuri ennen kirjoitusta:
+    jos se on muuttunut sen jälkeen kun rivi näytettiin, keskeytetään."""
+    taulukko = lue_netto_taulukko(cfg, sheet_id)
+    arvot, kaavat = taulukko["arvot"], taulukko["kaavat"]
+    if len(arvot) != int(nahty_rivit) or str(arvot[-1][0]) != str(nahty_viimeinen_pvm):
+        raise NettoVirhe("taulukko on muuttunut sen jälkeen kun rivi näytettiin — "
+                         "lataa esitäyttö uudelleen")
+    tilanne = netto_rivitilanne(arvot)
+    if tapa == "paivita" and tilanne["tapa"] != "paivita":
+        raise NettoVirhe("tälle päivälle ei ole riviä päivitettäväksi")
+    if tapa == "taydenna" and tilanne["tapa"] != "vajaa":
+        raise NettoVirhe("viimeinen rivi ei ole vajaa — täydennettävää ei ole")
+    if tapa == "uusi" and tilanne["tapa"] == "paivita":
+        raise NettoVirhe(f"tälle päivälle on jo rivi {tilanne['rivinro']} — "
+                         "päivitä se, älä lisää toista")
+    if tapa not in ("uusi", "paivita", "taydenna"):
+        raise NettoVirhe(f"tuntematon rivivalinta {tapa!r}")
+    rivinro = len(arvot) + 2 if tapa == "uusi" else tilanne["rivinro"]
+    i_taysi = _netto_viimeinen_taysi(arvot)
+    kaavarivi = kaavat[i_taysi] if i_taysi is not None and i_taysi < len(kaavat) else None
+    rivi = netto_kirjoitusrivi(luvut, _netto_pvm_teksti(date.today()), kaavarivi,
+                               (i_taysi or 0) + 2, rivinro)
+    if tapa != "uusi":
+        # Samalle riville kirjoitettaessa käyttäjän omat erittelykaavat
+        # ("=12000+999+350") säilyvät, jos luku ei muuttunut: kaava on hänen
+        # muistiinpanonsa siitä, mistä summa koostuu.
+        vanha_kaava = kaavat[rivinro - 2] if rivinro - 2 < len(kaavat) else []
+        vanha_arvo = arvot[rivinro - 2]
+        for i in NETTO_SYOTETTAVAT:
+            k = vanha_kaava[i] if i < len(vanha_kaava) else None
+            if (isinstance(k, str) and k.startswith("=") and luvut.get(i) is not None
+                    and _netto_luku(vanha_arvo[i]) is not None
+                    and abs(_netto_luku(vanha_arvo[i]) - luvut[i]) < 0.005):
+                rivi[i] = k
+    kirjoitettu = kirjoita_netto_rivi(sheet_id, rivinro, rivi, lisaa=(tapa == "uusi"),
+                                      seuraava_tyhja=taulukko["seuraava_tyhja"])
+    uusi = lue_netto_taulukko(cfg, sheet_id)
+    peilaa_netto(uusi["arvot"], uusi["otsikot"])
+    tulos = uusi["arvot"][kirjoitettu - 2] if kirjoitettu - 2 < len(uusi["arvot"]) else None
+    if not tulos or _netto_pvm(tulos[0]) != date.today():
+        raise NettoVirhe(f"rivi {kirjoitettu} kirjoitettiin, mutta sen päivämäärä ei "
+                         "luettaessa ole tämä päivä — tarkista taulukko käsin")
+    return {"rivinro": kirjoitettu, "rivi": tulos,
+            "netto": _netto_luku(tulos[1]), "plus": _netto_luku(tulos[23]),
+            "miinus": _netto_luku(tulos[24])}
+
+
+def _netto_sheet_id(cfg, testi=False):
+    nk = _netto_cfg(cfg)
+    return siisti(str(nk.get("sheet_id_testi" if testi else "sheet_id") or ""))
+
+
+def netto_valmius(cfg, testi=False):
+    """Mikä käyttöönotosta puuttuu; tyhjä lista = valmis."""
+    puutteet = []
+    if not _netto_sheet_id(cfg, testi):
+        puutteet.append("taulukon tunnus asetuksissa: netto.sheet_id"
+                        + ("_testi" if testi else "") + " (asetukset/config.json)")
+    if not PALVELUTILI.is_file():
+        puutteet.append(f"palvelutilin avain: {PALVELUTILI}")
+    try:
+        import jwt  # noqa: F401
+        import cryptography  # noqa: F401
+    except ImportError:
+        puutteet.append("kirjastot pyjwt ja cryptography (samat kuin pankkihaussa)")
+    return puutteet
+
+
+def _netto_tulosta(e):
+    """Esitäytön rivi konsoliin: sarake, arvo, mistä se tuli."""
+    luvut = {i: k["arvo"] for i, k in e["kentat"].items()}
+    lask = netto_laskennat(luvut)
+    print(f"\nNetto-snapshot {e['pvm']} — oletukset riviltä {e['edellinen_rivinro']} "
+          f"({e['edellinen_pvm']})")
+    for i in NETTO_SYOTETTAVAT:
+        k = e["kentat"][i]
+        arvo = "—" if k["arvo"] is None else fmt_eur(k["arvo"])
+        merkki = {"ok": "✓", "osittain": "~", "kasin": "✎"}.get(k["tila"], " ")
+        lisa = f"  ({k['huomio']})" if k["huomio"] else ""
+        print(f"  {merkki} {k['sarake']:>2} {k['otsikko']:<34} {arvo:>14}  "
+              f"[{k['lahde']}]{lisa}")
+    print(f"     X  Plus                               {fmt_eur(lask[23]):>14}")
+    print(f"     Y  Miinus                             {fmt_eur(lask[24]):>14}")
+    print(f"     B  Netto-omaisuus                     {fmt_eur(lask[1]):>14}")
+    if lask[25] is not None:
+        print(f"     Z  Asunto/autopaikka omaisuudesta    {fmt_eur(lask[25] * 100):>13} %")
+        print(f"    AA  Net gearing                        {fmt_eur(lask[26] * 100):>13} %")
+    print("  ✓ haettu rajapinnasta   ~ osittain   ✎ käsin (oletuksena edellinen rivi)")
+    print("  Laskentasolut: " + ("kaavat toistetaan edelliseltä riviltä"
+                                 if e["kaavoja"] else "arvot lasketaan tässä"))
+    t = e["tilanne"]
+    if t["tapa"] == "paivita":
+        print(f"  Rivi: viimeinen rivi {t['rivinro']} on jo tältä päivältä → päivitetään se")
+    elif t["tapa"] == "vajaa":
+        print(f"  Rivi: viimeinen rivi {t['rivinro']} ({t['pvm']}) on vajaa → "
+              "täydennetään se tai lisätään uusi")
+        if e["vajaa_arvot"]:
+            print("        vajaalla rivillä jo: " + ", ".join(
+                f"{e['kentat'][i]['otsikko']} {fmt_eur(v)}" for i, v in e["vajaa_arvot"].items()))
+    else:
+        print(f"  Rivi: lisätään uusi rivi {t['rivinro']} (edellinen {t['pvm']})")
+
+
+def cmd_netto(args):
+    cfg = lue_config()
+    testi = getattr(args, "testi", False)
+    puutteet = netto_valmius(cfg, testi)
+    if puutteet:
+        print("Netto-snapshotia ei ole otettu käyttöön. Puuttuu:")
+        for p in puutteet:
+            print(f"  · {p}")
+        print("Ohje: koodi/OHJE.md, luku Netto-omaisuus.")
+        return
+    sheet_id = _netto_sheet_id(cfg, testi)
+    if testi:
+        print("Testitaulukko (netto.sheet_id_testi).")
+    if getattr(args, "saldot", False):
+        print("Haetaan saldot pankista (kuluttaa pankkihakuja):")
+        for v in netto_hae_saldot(cfg):
+            print(f"  · {v}")
+    try:
+        e = netto_esitaytto(cfg, sheet_id)
+    except (NettoVirhe, OSError, ValueError) as err:
+        print(f"⚠ Keskeytetty ennen kirjoitusta: {err}")
+        sys.exit(1)
+    for asetus in getattr(args, "aseta", None) or []:
+        nimi, _, arvo = str(asetus).partition("=")
+        osumat = [i for i in NETTO_SYOTETTAVAT
+                  if e["kentat"][i]["otsikko"].lower().startswith(siisti(nimi).lower())
+                  or _sarakekirjain(i) == siisti(nimi).upper()]
+        if len(osumat) != 1:
+            print(f"⚠ --aseta {asetus!r}: sarake ei ole yksiselitteinen")
+            sys.exit(1)
+        e["kentat"][osumat[0]].update(arvo=_netto_luku(arvo), lahde="komentorivi",
+                                      tila="ok", huomio="")
+    _netto_tulosta(e)
+    print(f"  Peili: data/{NETTO_CSV.name} ({e['rivit']} riviä)")
+    if getattr(args, "kuiva", False):
+        print("\nKuiva ajo — taulukkoon ei kirjoitettu mitään.")
+        return
+    if e["ensimmainen"]:
+        print("\nEnsimmäinen ajo on aina kuiva: rivi näytettiin, mutta sitä ei "
+              "kirjoitettu. Aja uudelleen, niin kirjoitus kysytään.")
+        return
+    if not sys.stdin.isatty():
+        print("\nKirjoitus vaatii vahvistuksen päätteessä — ei kirjoitettu.")
+        return
+    t = e["tilanne"]
+    tapa = {"paivita": "paivita", "uusi": "uusi"}.get(t["tapa"])
+    if t["tapa"] == "vajaa":
+        tapa = _valikko(f"Viimeinen rivi {t['rivinro']} ({t['pvm']}) on vajaa.",
+                        [("taydenna", f"Täydennä rivi {t['rivinro']} tämän päivän luvuilla "
+                                      f"(päivämääräksi tulee {e['pvm']})"),
+                         ("uusi", f"Lisää uusi rivi {t['rivinro'] + 1}")], oletus=1)
+    rivinro = t["rivinro"] if tapa != "uusi" or t["tapa"] == "uusi" else t["rivinro"] + 1
+    kasin = [k["otsikko"] for i, k in e["kentat"].items()
+             if k["tila"] == "kasin" and k["lahde"] != "komentorivi"]
+    if kasin:
+        print(f"\nKäsin täytettävät sarakkeet saavat edellisen rivin arvon: {', '.join(kasin)}")
+        print("  (muuta: --aseta \"Rahastot Seligson=1234,56\" tai käytä selaimen lomaketta)")
+    if not _kylla(f"\nKirjoitetaanko rivi {rivinro} taulukkoon?", oletus=False):
+        print("Ei kirjoitettu.")
+        return
+    try:
+        tulos = netto_kirjoita(cfg, sheet_id, {i: k["arvo"] for i, k in e["kentat"].items()},
+                               tapa, e["rivit"], e["viimeinen_pvm"])
+    except (NettoVirhe, OSError, ValueError) as err:
+        print(f"⚠ Kirjoitus epäonnistui: {err}")
+        sys.exit(1)
+    netto = tulos["netto"]
+    print(f"✓ Rivi {tulos['rivinro']} kirjoitettu — netto-omaisuus "
+          f"{fmt_eur(netto) if netto is not None else '?'} €. Peili päivitetty.")
+
+
+def netto_osio_html(cfg):
+    """Raportin Netto-omaisuus-osio: edellinen snapshot ja historiataulukko
+    paikallisesta peilistä. Nappi vie lomakkeelle; ilman peiliä vain nappi."""
+    rivit = lue_netto_csv()
+    nappi = ('<a href="netto" class="nettonappi" id="nappi-netto" hidden>'
+             'Netto-snapshot</a>')
+    if not rivit:
+        return ""
+    taydet = [r for r in rivit if (r.get("Netto-omaisuus") or "").strip()]
+    viimeisin = taydet[-1]["Pvm"] if taydet else "—"
+
+    def luku(r, nimi, prosentti=False):
+        try:
+            x = float(r.get(nimi) or "")
+        except ValueError:
+            return "—"
+        return f"{fmt_eur(x * 100)} %" if prosentti else fmt_eur(x)
+
+    taulu = "".join(
+        f'<tr><td>{html.escape(r["Pvm"])}</td>'
+        f'<td class="num">{luku(r, "Netto-omaisuus")}</td>'
+        f'<td class="num">{luku(r, "Plus")}</td>'
+        f'<td class="num">{luku(r, "Miinus")}</td>'
+        f'<td class="num">{luku(r, "Net gearing = nettovelkaantumisaste", True)}</td></tr>'
+        for r in reversed(rivit[-12:]))
+    return (f'<h2>Netto-omaisuus <span class="pikkuteksti">— edellinen snapshot '
+            f'{html.escape(viimeisin)}</span></h2>\n'
+            f'<p>{nappi}</p>'
+            f'<div style="overflow-x:auto"><table><tr><th>Pvm</th>'
+            f'<th class="num">Netto</th><th class="num">Varat</th>'
+            f'<th class="num">Velat</th><th class="num">Net gearing</th></tr>'
+            f'{taulu}</table></div>\n'
+            f'<p class="pikkuteksti">Peili Google Sheets -taulukon Netto-välilehdestä '
+            f'(data/{NETTO_CSV.name}, {len(rivit)} riviä). Snapshot otetaan harvakseltaan '
+            f'napista; se näyttää rivin ennen kuin kirjoittaa sen.</p>')
+
+
+NETTO_SIVU = r"""<!doctype html>
+<html lang="fi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rahaputki — netto-snapshot</title>
+<style>
+:root { --muste:#26241f; --paperi:#f7f5f0; --vaalea:#eae6dd; --raja:#c9c3b8;
+        --hyva:#2e7d5b; --huono:#b3502d; }
+* { box-sizing:border-box }
+body { font:15px/1.5 "Iowan Old Style","Palatino Linotype",Georgia,serif;
+       color:var(--muste); background:var(--paperi); margin:0; padding:1.5rem 1rem 5rem }
+main { max-width:1040px; margin:0 auto }
+h1 { font-size:1.45rem; margin:0 0 .2rem }
+h2 { font-size:1.05rem; margin:1.4rem 0 .4rem }
+.johdanto { color:#6b665c; margin:0 0 1rem; max-width:70ch }
+.paneeli { background:#fff; border:1px solid var(--raja); border-radius:10px;
+           padding:1.2rem 1.4rem; margin:0 0 1rem }
+table { width:100%; border-collapse:collapse }
+th, td { text-align:left; padding:.3rem .5rem .3rem 0; border-bottom:1px solid var(--vaalea);
+         vertical-align:top }
+th { font-weight:normal; color:#6b665c; font-size:.85em }
+td.num, th.num { text-align:right; white-space:nowrap }
+td.sar { color:#8a8578; font:12px ui-monospace,Menlo,Consolas,monospace; width:2.2rem }
+input.luku { font:inherit; width:9.5rem; text-align:right; padding:.3rem .5rem;
+             border:1px solid var(--raja); border-radius:6px; background:#fff }
+input.luku.haettu { background:#eef5f0 }
+input.luku.osittain { background:#f6efdc }
+.lahde { font-size:.82em; color:#6b665c; max-width:40ch }
+.merkki { display:inline-block; width:1.1em }
+.ok .merkki { color:var(--hyva) } .osittain .merkki { color:#a37a1c } .kasin .merkki { color:#8a8578 }
+tr.velka td.sar { color:var(--huono) }
+tr.lask td { color:#6b665c } tr.lask td.num { font-weight:bold; color:var(--muste) }
+button { font:inherit; padding:.4rem .9rem; border:1px solid var(--raja); border-radius:6px;
+         background:#fff; cursor:pointer }
+button:hover:enabled { background:var(--vaalea) }
+button:disabled { opacity:.45; cursor:not-allowed }
+button.paa { background:var(--muste); color:var(--paperi); border-color:var(--muste) }
+button.paa:hover:enabled { background:#3d3a33 }
+.rivi { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; margin:.8rem 0 0 }
+.viesti, .virhe, .varo { padding:.6rem .8rem; border-radius:6px; margin:0 0 1rem }
+.viesti { background:#e6f0e9; border:1px solid #b7d4c3 }
+.varo { background:#f3e3c8; border:1px solid #ddc79a }
+.virhe { background:#f6e3dc; border:1px solid #dcae98 }
+.pikku { font-size:.85em; color:#6b665c }
+a.paluu { color:#6b665c; font-size:.9em }
+label.valinta { display:block; margin:.3rem 0 }
+@media (max-width:720px) { input.luku { width:7.5rem } .lahde { max-width:none } }
+</style></head><body><main>
+<h1>Netto-snapshot</h1>
+<p class="johdanto">Yksi rivi Google Sheets -taulukon Netto-välilehdelle. Haetut arvot
+on esitäytetty, käsin täytettävät saavat oletuksena edellisen rivin arvon. Mitään ei
+kirjoiteta ennen kuin painat <em>Kirjoita taulukkoon</em>.
+<a class="paluu" href="/">← raporttiin</a></p>
+<div id="tila" class="pikku">Luetaan taulukkoa ja lähteitä…</div>
+<div id="sisalto"></div>
+<script>
+var T = null, kesken = false;
+function h(s){ var d=document.createElement('div'); d.textContent=String(s==null?'':s); return d.innerHTML; }
+function el(id){ return document.getElementById(id); }
+function eur(n){ if(n===null||n===undefined||isNaN(n)) return '—';
+  var s=Math.abs(n).toFixed(2).replace('.',','); s=s.replace(/\B(?=(\d{3})+(?!\d))/g,' ');
+  return (n<0?'−':'')+s; }
+function luku(s){ s=String(s||'').replace(/−/g,'-').replace(/[\s €]/g,'').replace(',','.');
+  if(!s) return null; var x=parseFloat(s); return isNaN(x)?null:Math.round(x*100)/100; }
+function api(data){
+  return fetch('api/netto',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(data)}).then(function(r){return r.json();});
+}
+function lue(){
+  var luvut={};
+  document.querySelectorAll('input.luku').forEach(function(i){ luvut[i.dataset.idx]=luku(i.value); });
+  return luvut;
+}
+function laske(){
+  var l=lue(), plus=0, miinus=0;
+  for(var i=2;i<=10;i++) plus+=(l[i]||0);
+  for(var j=11;j<=22;j++) miinus+=(l[j]||0);
+  el('l-plus').textContent=eur(plus); el('l-miinus').textContent=eur(miinus);
+  el('l-netto').textContent=eur(plus-miinus);
+  el('l-z').textContent=plus?((l[3]||0)/plus*100).toFixed(2).replace('.',',')+' %':'—';
+  el('l-aa').textContent=plus?(miinus/plus*100).toFixed(2).replace('.',',')+' %':'—';
+}
+function piirra(){
+  var s=el('sisalto'), out='';
+  if(!T){ s.innerHTML=''; return; }
+  if(T.virhe) out+='<div class="virhe">⚠ '+h(T.virhe)+'</div>';
+  if(T.viesti) out+='<div class="viesti">'+h(T.viesti)+'</div>';
+  if(T.valmis){
+    out+='<div class="paneeli"><h2>Rivi '+T.valmis.rivinro+' kirjoitettu</h2>'+
+      '<p>Netto-omaisuus <strong>'+eur(T.valmis.netto)+' €</strong> (varat '+eur(T.valmis.plus)+
+      ' €, velat '+eur(T.valmis.miinus)+' €). Peili data/netto.csv päivitetty.</p>'+
+      '<p><a href="/">← raporttiin</a></p></div>';
+    s.innerHTML=out; return;
+  }
+  if(!T.kentat){ s.innerHTML=out; return; }
+  if(T.ensimmainen) out+='<div class="varo">Ensimmäinen ajo: peili data/netto.csv luotiin nyt. '+
+    'Tarkista rivi rauhassa — kirjoitus on sinun napin takana.</div>';
+  var t=T.tilanne;
+  out+='<div class="paneeli"><h2>Rivi</h2>';
+  if(t.tapa==='paivita'){
+    out+='<p>Viimeinen rivi '+t.rivinro+' on jo tältä päivältä ('+h(t.pvm)+') → se päivitetään.</p>'+
+      '<input type="hidden" name="tapa" value="paivita">';
+  } else if(t.tapa==='vajaa'){
+    out+='<p>Viimeinen rivi '+t.rivinro+' ('+h(t.pvm)+') on vajaa: päivämäärä on, luvut puuttuvat.</p>'+
+      '<label class="valinta"><input type="radio" name="tapa" value="taydenna" checked> Täydennä rivi '+
+      t.rivinro+' tämän päivän luvuilla (päivämääräksi '+h(T.pvm)+')</label>'+
+      '<label class="valinta"><input type="radio" name="tapa" value="uusi"> Lisää uusi rivi '+(t.rivinro+1)+
+      ', jätä vajaa rivi paikalleen</label>';
+    var va=Object.keys(T.vajaa_arvot||{});
+    if(va.length) out+='<p class="pikku">Vajaalla rivillä on jo: '+va.map(function(i){
+      return h(T.otsikot[i])+' '+eur(T.vajaa_arvot[i]);}).join(', ')+'</p>';
+  } else {
+    out+='<p>Lisätään uusi rivi '+t.rivinro+' (edellinen rivi '+h(t.pvm)+').</p>'+
+      '<input type="hidden" name="tapa" value="uusi">';
+  }
+  out+='<p class="pikku">Oletukset riviltä '+T.edellinen_rivinro+' ('+h(T.edellinen_pvm)+'). '+
+    (T.kaavoja?'Laskentasolut toistetaan kaavoina edelliseltä riviltä.':'Laskentasolut kirjoitetaan arvoina.')+
+    '</p></div>';
+  out+='<div class="paneeli"><h2>'+h(T.pvm)+'</h2><table>'+
+    '<tr><th></th><th>Sarake</th><th class="num">Arvo €</th><th>Lähde</th><th class="num">Edellinen</th></tr>';
+  Object.keys(T.kentat).map(Number).sort(function(a,b){return a-b;}).forEach(function(i){
+    var k=T.kentat[i], velka=i>=11&&i<=22;
+    var merkki={ok:'✓',osittain:'~',kasin:'✎'}[k.tila]||'';
+    out+='<tr class="'+k.tila+(velka?' velka':'')+'"><td class="sar">'+k.sarake+'</td>'+
+      '<td>'+h(k.otsikko)+(velka?' <span class="pikku">(velka)</span>':'')+'</td>'+
+      '<td class="num"><input class="luku '+(k.tila==='ok'?'haettu':k.tila==='osittain'?'osittain':'')+
+      '" data-idx="'+i+'" value="'+(k.arvo===null?'':eur(k.arvo))+'"></td>'+
+      '<td class="lahde"><span class="merkki">'+merkki+'</span>'+h(k.lahde)+
+      (k.huomio?' — '+h(k.huomio):'')+'</td>'+
+      '<td class="num pikku">'+(k.edellinen===null?'—':eur(k.edellinen))+'</td></tr>';
+  });
+  out+='<tr class="lask"><td class="sar">X</td><td>Plus (varat)</td><td class="num" id="l-plus"></td><td colspan="2"></td></tr>'+
+    '<tr class="lask"><td class="sar">Y</td><td>Miinus (velat)</td><td class="num" id="l-miinus"></td><td colspan="2"></td></tr>'+
+    '<tr class="lask"><td class="sar">B</td><td>Netto-omaisuus</td><td class="num" id="l-netto"></td><td colspan="2"></td></tr>'+
+    '<tr class="lask"><td class="sar">Z</td><td>Asunto/autopaikka omaisuudesta</td><td class="num" id="l-z"></td><td colspan="2"></td></tr>'+
+    '<tr class="lask"><td class="sar">AA</td><td>Net gearing</td><td class="num" id="l-aa"></td><td colspan="2"></td></tr>'+
+    '</table><p class="pikku">✓ haettu rajapinnasta · ~ osittain, täydennä · ✎ käsin, oletuksena edellinen rivi. '+
+    'Velat positiivisina lukuina.</p>'+
+    '<div class="rivi"><button id="nappi-saldot" '+(kesken?'disabled':'')+'>Hae saldot pankista</button>'+
+    '<span class="pikku">yksi haku per tili pankin neljästä vuorokausihausta</span></div>'+
+    '<div class="rivi"><button class="paa" id="nappi-kirjoita" '+(kesken?'disabled':'')+'>Kirjoita taulukkoon</button>'+
+    '<button id="nappi-uudelleen" '+(kesken?'disabled':'')+'>Lue uudelleen</button></div></div>';
+  s.innerHTML=out;
+  laske();
+  document.querySelectorAll('input.luku').forEach(function(i){ i.addEventListener('input',laske); });
+  el('nappi-saldot').addEventListener('click',function(){
+    if(!confirm('Haetaanko saldot pankista? Kuluttaa yhden haun per tili.')) return;
+    toiminto({toiminto:'saldot'},'Haetaan saldot pankista…');});
+  el('nappi-uudelleen').addEventListener('click',function(){ toiminto({toiminto:'esitaytto'},'Luetaan taulukkoa…'); });
+  el('nappi-kirjoita').addEventListener('click',function(){
+    var tapa=(document.querySelector('input[name=tapa]:checked')||document.querySelector('input[name=tapa]')).value;
+    var l=lue(), puuttuu=[];
+    Object.keys(T.kentat).forEach(function(i){ if(l[i]===null&&T.kentat[i].edellinen!==null) puuttuu.push(T.kentat[i].otsikko); });
+    if(puuttuu.length&&!confirm('Tyhjiä sarakkeita: '+puuttuu.join(', ')+'. Kirjoitetaanko silti?')) return;
+    toiminto({toiminto:'kirjoita',luvut:l,tapa:tapa,rivit:T.rivit,viimeinen_pvm:T.viimeinen_pvm},'Kirjoitetaan…');
+  });
+}
+function toiminto(data,teksti){
+  if(kesken) return; kesken=true; el('tila').textContent=teksti||'…';
+  api(data).then(function(v){ kesken=false; el('tila').textContent='';
+      if(v.kentat||v.valmis||!T) T=v; else { T.virhe=v.virhe||''; T.viesti=v.viesti||''; }
+      piirra(); })
+    .catch(function(e){ kesken=false; el('tila').textContent='Yhteys palvelimeen katkesi: '+e; });
+}
+toiminto({toiminto:'esitaytto'},'Luetaan taulukkoa ja lähteitä…');
+</script></main></body></html>
+"""
+
+NETTO_LUKKO = threading.Lock()
+
+
+def netto_toiminto(nimi, p):
+    """Selaimen lomakkeen toiminnot. Esitäyttö lukee, saldot hakee pankista
+    käyttäjän pyynnöstä, kirjoita vie rivin — kaikki yhden lukon takana, jottei
+    kaksi välilehteä kirjoita samaa riviä kahdesti."""
+    cfg = lue_config()
+    puutteet = netto_valmius(cfg)
+    if puutteet:
+        return {"ok": False, "virhe": "Netto-snapshotia ei ole otettu käyttöön. Puuttuu: "
+                                      + "; ".join(puutteet) + ". Ohje: OHJE.md, Netto-omaisuus."}
+    sheet_id = _netto_sheet_id(cfg)
+    with NETTO_LUKKO:
+        if nimi in ("esitaytto", "saldot"):
+            viesti = ""
+            if nimi == "saldot":
+                viesti = "Saldot: " + "; ".join(netto_hae_saldot(cfg) or ["ei haettavia tilejä"])
+            try:
+                e = netto_esitaytto(cfg, sheet_id)
+            except (NettoVirhe, OSError, ValueError) as err:
+                return {"ok": False, "virhe": f"Keskeytetty: {err}", "viesti": viesti}
+            e["otsikot"] = {str(i): e["kentat"][i]["otsikko"] for i in NETTO_SYOTETTAVAT}
+            e["kentat"] = {str(i): k for i, k in e["kentat"].items()}
+            e["vajaa_arvot"] = {str(i): v for i, v in e["vajaa_arvot"].items()}
+            return {"ok": True, "viesti": viesti, **e}
+        if nimi == "kirjoita":
+            luvut = {}
+            for i in NETTO_SYOTETTAVAT:
+                luvut[i] = _netto_luku((p.get("luvut") or {}).get(str(i)))
+            try:
+                tulos = netto_kirjoita(cfg, sheet_id, luvut, siisti(str(p.get("tapa", ""))),
+                                       p.get("rivit"), p.get("viimeinen_pvm"))
+            except (NettoVirhe, OSError, ValueError, TypeError) as err:
+                return {"ok": False, "virhe": f"Ei kirjoitettu: {err}"}
+            return {"ok": True, "valmis": tulos}
+    return {"ok": False, "virhe": f"tuntematon toiminto {nimi!r}"}
 
 
 def _kysely_luku(polku, nimi):
@@ -9637,6 +11052,14 @@ def cmd_selaa(args):
                 return self._json({"ok": True})
             # Osoitteessa voi olla ?pankki=… (valtuutuksen uusinta), joten
             # kyselyosa pudotetaan ennen vertailua.
+            if self.path.partition("?")[0].rstrip("/") == "/netto":
+                sivu = NETTO_SIVU.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(sivu)))
+                self.end_headers()
+                self.wfile.write(sivu)
+                return
             if self.path.partition("?")[0].rstrip("/") == "/velho":
                 sivu = VELHO_SIVU.encode("utf-8")
                 self.send_response(200)
@@ -9973,6 +11396,9 @@ def cmd_selaa(args):
                         except Exception as e:
                             VELHO["virhe"] = f"Toiminto epäonnistui: {e}"
                             return self._json(velho_julkinen())
+                if self.path == "/api/netto":
+                    return self._json(netto_toiminto(
+                        siisti(str(pyynto.get("toiminto", ""))), pyynto))
                 if self.path == "/api/komento":
                     komento = siisti(pyynto.get("komento", ""))
                     if komento not in ("hae", "aja"):
@@ -10105,6 +11531,15 @@ def main():
                    help="kumpi sivu avataan selaimeen (oletus: raportti)")
     k = ala.add_parser("kurkista", help="näytä miten CSV tulkittaisiin")
     k.add_argument("tiedosto")
+    n = ala.add_parser("netto", help="netto-omaisuuden snapshot Google Sheets -taulukkoon "
+                                     "(näyttää rivin ja kysyy ennen kirjoitusta)")
+    n.add_argument("--kuiva", action="store_true", help="näytä rivi, älä kirjoita")
+    n.add_argument("--testi", action="store_true",
+                   help="käytä testitaulukkoa (netto.sheet_id_testi)")
+    n.add_argument("--saldot", action="store_true",
+                   help="hae ensin tilien saldot pankista (yksi haku per tili)")
+    n.add_argument("--aseta", action="append", metavar="SARAKE=ARVO",
+                   help='käsin täytettävä arvo, esim. --aseta "Rahastot Seligson=1234,56"')
     args = p.parse_args()
     # Käynnistys koskee tietokansiota ensimmäistä kertaa: kansiot, config ja
     # lukko. Pilvikansiossa juuri se on hitain hetki, ja siihen asti ruudulla
@@ -10121,7 +11556,7 @@ def main():
          "pankkihaku": cmd_pankkihaku,
          "budjetti-ehdotus": cmd_budjetti, "kurkista": cmd_kurkista,
          "selaa": cmd_selaa, "tarkista-kortit": cmd_tarkista_kortit,
-         "siivoa-kopiot": cmd_siivoa_kopiot,
+         "siivoa-kopiot": cmd_siivoa_kopiot, "netto": cmd_netto,
          "luokittele": cmd_luokittele}[args.komento](args)
 
 

@@ -204,5 +204,65 @@
         "alkaen": "YYYY-MM-DD"
       }
     ]
+  },
+  "netto": {
+    "sheet_id": "",
+    "sheet_id_testi": "",
+    "otsikot": ["Pvm", "Netto-omaisuus", "Pankkitili", "Muut sijoitukset", "Krypto",
+                "Rahastot", "Revolut", "Yritys kassa", "Yritys osakesalkku",
+                "Yritys rahastot", "Yritys muut", "Asuntolaina", "Yhtiölaina",
+                "Opintolainat", "Sukulaislaina", "Muu laina", "Yrityksen luotot",
+                "Omat luotot", "Luottokortti 1", "Luottokortti 2", "Luottokortti 3",
+                "Autolaina", "Muu velka", "Plus", "Miinus",
+                "Asunto/autopaikka koko omaisuudesta",
+                "Net gearing = nettovelkaantumisaste"],
+    "otsikkoaliakset": {},
+    "tilit": {
+      "Pankkitili": ["OP-tili", "S-Pankki"],
+      "Revolut": ["Revolut"],
+      "Luottokortti 2": ["OP-kortti"],
+      "Luottokortti 3": ["S-Pankki Visa"]
+    },
+    "vihjesarakkeet": {
+      "Revolut": "sijoitukset (osakkeet, rahastot) eivät tule rajapinnasta — katso Revolut-sovelluksesta"
+    },
+    "lompakot": [
+      {
+        "nimi": "Argent",
+        "verkko": "ethereum",
+        "osoite": "0xOSOITE"
+      },
+      {
+        "nimi": "Kraken Wallet",
+        "verkko": "ethereum",
+        "osoite": "0xOSOITE",
+        "tokenit": [
+          {
+            "symboli": "wstETH",
+            "sopimus": "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0",
+            "desimaalit": 18
+          }
+        ]
+      },
+      {
+        "nimi": "Kraken Wallet BTC",
+        "verkko": "bitcoin",
+        "osoite": "bc1OSOITE"
+      }
+    ],
+    "lainat": {
+      "valilehti": "Lainat",
+      "paivitetty": "Tilanne päivitetty",
+      "sarakkeet": {
+        "Yrityksen luotot": "Yhteensä yrityksen nettovelkaa ulos",
+        "Omat luotot": "Yhteensä omaa nettovelkaa ulos"
+      }
+    },
+    "seligson": {
+      "Rahastot": [
+        {"rahasto": "suomi", "nimi": "Suomi", "osuudet": "123,4567"}
+      ],
+      "Yritys rahastot": []
+    }
   }
 }
